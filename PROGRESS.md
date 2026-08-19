@@ -16,5 +16,33 @@
 - Rhai: sandbox execute/validate
 - Проверки: cargo check ✅, svelte-check 0 errors ✅, vite build ✅
 
+## Этап 2: MongoDB + Компании, Пользователи, Роли ✅
+**Дата:** 19.08.2026
+
+### Что сделано
+- MongoDB Replica Set rs0 на Docker (192.168.31.31:27017)
+- База `2c_platform` с 24 коллекциями и индексами
+- Rust модули CRUD: CompanyService, UserService, RoleService
+- Tauri IPC команды: list/get/create/update/delete для компаний, пользователей, ролей
+- Авторизация: authenticate + JWT token + first-boot auto-creation (admin/admin)
+- Password hashing: Argon2id через Rust argon2 crate
+- Frontend:
+  - Страница подключения к MongoDB (URI + database name)
+  - Страница логина
+  - Страница компаний (таблица + create/edit/delete)
+  - Страница пользователей (таблица + create/delete)
+  - Страница ролей (таблица + create/delete)
+  - Навигация: компании, пользователи, роли в sidebar
+- Проверки: cargo check ✅ (0 errors), svelte-check 0 errors ✅, vite build ✅
+
+### Технические детали
+- `tokio::sync::Mutex` для AppState (async Tauri commands)
+- `futures::StreamExt` для Cursor итерации (mongodb 3.x)
+- UUID хранятся как строки в MongoDB (Bson совместимость)
+- First-boot: при первом `authenticate("admin", "admin")` создаётся:
+  - Компания "Основная компания" (код MAIN)
+  - Роль "Суперадминистратор" (код SUPERADMIN)
+  - Пользователь admin/admin
+
 ### Следующий этап
-- Этап 2: Подключение к MongoDB, диагностика, компании, пользователи, роли
+- Этап 3: Метаданные (EntityType, EntityField, EntityState, EntityTransition, EntityAction)

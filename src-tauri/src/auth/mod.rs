@@ -1,5 +1,5 @@
 use crate::core::*;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
@@ -10,29 +10,6 @@ pub struct Claims {
     pub role_id: String,
     pub exp: usize,
     pub iat: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub _id: Id,
-    pub company_id: CompanyId,
-    pub username: String,
-    pub display_name: String,
-    pub password_hash: String,
-    pub role_id: RoleId,
-    pub active: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Role {
-    pub _id: Id,
-    pub company_id: CompanyId,
-    pub code: String,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 pub struct AuthService {
@@ -84,7 +61,7 @@ impl AuthService {
     }
 
     pub fn hash_password(&self, password: &str) -> PlatformResult<String> {
-        use argon2::password_hash::{SaltString, PasswordHasher};
+        use argon2::password_hash::{PasswordHasher, SaltString};
         use argon2::Argon2;
 
         let salt = SaltString::generate(&mut rand::rngs::OsRng);
@@ -94,16 +71,12 @@ impl AuthService {
             .map_err(|e| PlatformError::Auth(format!("Ошибка хеширования: {e}")))
     }
 
-    pub fn verify_password(
-        &self,
-        password: &str,
-        hash: &str,
-    ) -> PlatformResult<bool> {
+    pub fn verify_password(&self, password: &str, hash: &str) -> PlatformResult<bool> {
         use argon2::password_hash::{PasswordHash, PasswordVerifier};
         use argon2::Argon2;
 
-        let parsed = PasswordHash::new(hash)
-            .map_err(|e| PlatformError::Auth(format!("Невалидный хеш: {e}")))?;
+        let parsed =
+            PasswordHash::new(hash).map_err(|e| PlatformError::Auth(format!("Невалидный хеш: {e}")))?;
 
         Ok(Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
