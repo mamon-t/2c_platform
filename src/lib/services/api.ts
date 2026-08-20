@@ -445,6 +445,26 @@ export interface ObjectFilters {
   offset?: number;
 }
 
+export interface WasmModuleInfo {
+  id: string;
+  name: string;
+  version: string;
+  path: string;
+  formats: string[];
+}
+
+export interface ImportResult {
+  created: number;
+  total: number;
+  errors: string[];
+}
+
+export interface ExportResult {
+  data: number[];
+  filename: string;
+  content_type: string;
+}
+
 export const OBJECT_STATE_META: Record<ObjectStateTS, { label: string; icon: string; color: string }> = {
   draft:     { label: 'Черновик', icon: 'fa-solid fa-pencil', color: 'bg-surface-400' },
   active:    { label: 'Активный', icon: 'fa-solid fa-check', color: 'bg-primary-500' },
@@ -715,5 +735,22 @@ export const api = {
   },
   async listObjectVersions(id: string): Promise<ObjectSnapshot[]> {
     return getAdapter().invoke<ObjectSnapshot[]>('list_object_versions', { id });
+  },
+
+  // ── Конвертация (WASM-модули) ──
+  async loadWasmModule(path: string): Promise<WasmModuleInfo> {
+    return getAdapter().invoke<WasmModuleInfo>('load_wasm_module', { path });
+  },
+  async unloadWasmModule(moduleId: string): Promise<void> {
+    return getAdapter().invoke<void>('unload_wasm_module', { module_id: moduleId });
+  },
+  async listWasmModules(): Promise<WasmModuleInfo[]> {
+    return getAdapter().invoke<WasmModuleInfo[]>('list_wasm_modules');
+  },
+  async importObjectsViaWasm(params: { module_id: string; file: number[]; filename: string; entity_type_id: string; format: string; mapping?: Record<string, string> }): Promise<ImportResult> {
+    return getAdapter().invoke<ImportResult>('import_objects_via_wasm', params);
+  },
+  async exportObjectsViaWasm(params: { module_id: string; entity_type_id: string; format: string }): Promise<ExportResult> {
+    return getAdapter().invoke<ExportResult>('export_objects_via_wasm', params);
   },
 };

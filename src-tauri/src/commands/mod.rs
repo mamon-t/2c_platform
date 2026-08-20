@@ -13,7 +13,9 @@ use crate::audit::{AuditEntry, AuditEntryView, AuditFilters, AuditableAction, Mo
 use crate::audit::service::AuditService as AuditServiceTrait;
 use crate::permission_policy::{PermissionPolicy, PermissionPolicyService, CreatePermissionPolicyInput};
 use crate::core::CompanyId;
+use crate::convert::plugin::ConvertPlugin;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -66,6 +68,7 @@ pub struct AppState {
     pub current_user: Option<UserPublic>,
     pub current_company_id: Option<String>,
     pub current_role_id: Option<String>,
+    pub wasm_modules: Option<HashMap<String, ConvertPlugin>>,
 }
 
 impl AppState {
@@ -80,6 +83,7 @@ impl AppState {
             current_user: None,
             current_company_id: None,
             current_role_id: None,
+            wasm_modules: None,
         }
     }
 }

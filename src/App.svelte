@@ -11,6 +11,7 @@
   import EventsPage from '$lib/components/EventsPage.svelte';
   import MetadataPage from '$lib/components/MetadataPage.svelte';
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
+  import ConvertPage from '$lib/components/ConvertPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -884,6 +885,9 @@
 
       {:else if currentNav === 'audit'}
         <AuditPage />
+
+      {:else if currentNav === 'convert'}
+        <ConvertPage />
 
       {:else if currentNav === 'settings'}
         <SettingsPage />

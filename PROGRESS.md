@@ -202,3 +202,37 @@
 ### Проверки
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
+
+## Этап 8: Конвертация данных (WASM-модуль на Extism) ✅
+**Дата:** 20.08.2026
+
+### Что сделано
+- **WASM Plugin** (wasm-modules/convert/) — Extism PDK на Rust:
+  - CSV парсинг (header → field codes, маппинг колонок)
+  - JSON парсинг (массив объектов или single object)
+  - YAML парсинг (sequence/mapping → JSON)
+  - XML парсинг (quick-xml: `<object><field>...`)
+  - Обратный экспорт во все 4 формата
+  - Host function: `create_object` для создания объектов в ядре
+  - Компиляция: `cargo build --target wasm32-unknown-unknown --release` (620KB)
+- **Host** (src-tauri/src/convert/):
+  - `mod.rs` — типы (ImportRequest, ImportResult, ExportRequest, ExportResult, ModuleInfo)
+  - `plugin.rs` — ConvertPlugin: загрузка .wasm, host functions через extism::host_fn!, import/export через Extism API
+  - `commands.rs` — IPC: load_wasm_module, unload_wasm_module, list_wasm_modules, import_objects_via_wasm, export_objects_via_wasm
+- **AppState** расширен полем `wasm_modules: Option<HashMap<String, ConvertPlugin>>`
+- **Frontend** — ConvertPage.svelte:
+  - Левая панель: список WASM-модулей, загрузка .wasm файла
+  - Вкладки Импорт/Экспорт: выбор модуля, формата, типа объекта
+  - Drag-and-drop для файлов импорта
+  - Автоматическое скачивание при экспорте
+  - Журнал операций
+- **Навигация**: «Конвертация» (settings/manage permission)
+
+### Зависимости
+- Host: `extism = "1.4"` (wasmtime под капотом)
+- Plugin: `extism-pdk = "1"`, `csv = "1"`, `serde_yaml = "0.9"`, `quick-xml = "0.36"`
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
+- WASM plugin: компилируется (620KB) ✅

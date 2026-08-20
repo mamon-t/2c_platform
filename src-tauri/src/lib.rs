@@ -2,6 +2,7 @@ mod auth;
 mod audit;
 mod commands;
 mod company;
+mod convert;
 mod core;
 mod crypto;
 mod db;
@@ -110,6 +111,11 @@ pub fn run() {
             commands::cancel_object,
             commands::restore_object_version,
             commands::list_object_versions,
+            convert::commands::load_wasm_module,
+            convert::commands::unload_wasm_module,
+            convert::commands::list_wasm_modules,
+            convert::commands::import_objects_via_wasm,
+            convert::commands::export_objects_via_wasm,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");
