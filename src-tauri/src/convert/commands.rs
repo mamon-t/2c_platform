@@ -1,63 +1,11 @@
-use super::{ImportRequest, ImportResult, ExportRequest, ExportResult, ModuleInfo, plugin::ConvertPlugin};
+use super::{ImportRequest, ImportResult, ExportRequest, ExportResult};
 use crate::commands::AppState;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
 #[tauri::command]
-pub async fn load_wasm_module(
-    wasm_bytes: Vec<u8>,
-    name: String,
-    state: State<'_, Mutex<AppState>>,
-) -> Result<ModuleInfo, String> {
-    let state_arc = Arc::new(tokio::sync::Mutex::new({
-        let s = state.lock().await;
-        AppState {
-            db: s.db.clone(),
-            auth: crate::auth::AuthService::new("2c-platform-dev-secret-key-change-in-production"),
-            config: s.config.clone(),
-            current_user: s.current_user.clone(),
-            current_company_id: s.current_company_id.clone(),
-            current_role_id: s.current_role_id.clone(),
-            wasm_modules: None,
-        }
-    }));
-
-    let convert_plugin = ConvertPlugin::load(wasm_bytes, name, state_arc)?;
-    let info = convert_plugin.info.clone();
-
-    let mut s = state.lock().await;
-    if s.wasm_modules.is_none() {
-        s.wasm_modules = Some(HashMap::new());
-    }
-    s.wasm_modules.as_mut().unwrap().insert(info.id.clone(), convert_plugin);
-
-    Ok(info)
-}
-
-#[tauri::command]
-pub async fn unload_wasm_module(
-    module_id: String,
-    state: State<'_, Mutex<AppState>>,
-) -> Result<(), String> {
-    let mut s = state.lock().await;
-    if let Some(ref mut modules) = s.wasm_modules {
-        modules.remove(&module_id).ok_or_else(|| format!("Module {} not found", module_id))?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn list_wasm_modules(
-    state: State<'_, Mutex<AppState>>,
-) -> Result<Vec<ModuleInfo>, String> {
-    let s = state.lock().await;
-    Ok(s.wasm_modules.as_ref().map(|m| m.values().map(|p| p.info.clone()).collect()).unwrap_or_default())
-}
-
-#[tauri::command]
-pub async fn import_objects_via_wasm(
+pub async fn convert_import(
     module_id: String,
     file: Vec<u8>,
     filename: String,
@@ -66,23 +14,26 @@ pub async fn import_objects_via_wasm(
     mapping: Option<HashMap<String, String>>,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<ImportResult, String> {
-    let mut s = state.lock().await;
-    let modules = s.wasm_modules.as_mut().ok_or("No WASM modules loaded")?;
-    let plugin = modules.get_mut(&module_id).ok_or_else(|| format!("Module {} not found", module_id))?;
-
-    let _ = filename;
     let req = ImportRequest {
         format,
         file_data: file,
         entity_type_id,
         mapping,
     };
+    let input = serde_json::to_vec(&req).map_err(|e| format!("Serialize error: {}", e))?;
+    let _ = filename;
 
-    plugin.import_data(&req)
+    let mut s = state.lock().await;
+    let modules = s.wasm_modules.as_mut().ok_or("No WASM modules loaded")?;
+    let plugin = modules.get_mut(&module_id)
+        .ok_or_else(|| format!("Module {} not found", module_id))?;
+
+    let output = plugin.call("import_data", &input)?;
+    serde_json::from_slice(&output).map_err(|e| format!("Deserialize error: {}", e))
 }
 
 #[tauri::command]
-pub async fn export_objects_via_wasm(
+pub async fn convert_export(
     module_id: String,
     entity_type_id: String,
     format: String,
@@ -124,9 +75,13 @@ pub async fn export_objects_via_wasm(
             })
         }).collect(),
     };
+    let input = serde_json::to_vec(&req).map_err(|e| format!("Serialize error: {}", e))?;
 
     let mut s = state.lock().await;
     let modules = s.wasm_modules.as_mut().ok_or("No WASM modules loaded")?;
-    let plugin = modules.get_mut(&module_id).ok_or_else(|| format!("Module {} not found", module_id))?;
-    plugin.export_data(&req)
+    let plugin = modules.get_mut(&module_id)
+        .ok_or_else(|| format!("Module {} not found", module_id))?;
+
+    let output = plugin.call("export_data", &input)?;
+    serde_json::from_slice(&output).map_err(|e| format!("Deserialize error: {}", e))
 }

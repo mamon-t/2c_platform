@@ -13,6 +13,7 @@ mod notify;
 mod objects;
 mod permission_policy;
 mod person;
+mod plugin_manager;
 mod rhai;
 mod role;
 mod settings;
@@ -111,11 +112,11 @@ pub fn run() {
             commands::cancel_object,
             commands::restore_object_version,
             commands::list_object_versions,
-            convert::commands::load_wasm_module,
-            convert::commands::unload_wasm_module,
-            convert::commands::list_wasm_modules,
-            convert::commands::import_objects_via_wasm,
-            convert::commands::export_objects_via_wasm,
+            plugin_manager::commands::wasm_load,
+            plugin_manager::commands::wasm_unload,
+            plugin_manager::commands::wasm_list,
+            convert::commands::convert_import,
+            convert::commands::convert_export,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

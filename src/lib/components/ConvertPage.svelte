@@ -84,7 +84,7 @@
     try {
       const arrayBuffer = await importFile.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuffer));
-      const result = await api.importObjectsViaWasm({
+      const result = await api.importObjects({
         module_id: importModuleId,
         file: bytes,
         filename: importFile.name,
@@ -105,7 +105,7 @@
     exporting = true;
     exportResult = null;
     try {
-      const result = await api.exportObjectsViaWasm({
+      const result = await api.exportObjects({
         module_id: exportModuleId,
         entity_type_id: exportEntityTypeId,
         format: exportFormat,

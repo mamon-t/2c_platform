@@ -1,8 +1,19 @@
-use extism::*;
-use super::{ImportRequest, ImportResult, ExportRequest, ExportResult, ModuleInfo};
-use std::sync::{Arc, Mutex};
+pub mod commands;
 
-pub struct ConvertPlugin {
+use extism::*;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub functions: Vec<String>,
+}
+
+pub struct WasmPlugin {
     plugin: Plugin,
     pub info: ModuleInfo,
 }
@@ -72,7 +83,7 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
     Ok(result)
 });
 
-impl ConvertPlugin {
+impl WasmPlugin {
     pub fn load(wasm_bytes: Vec<u8>, wasm_name: String, app_state: Arc<tokio::sync::Mutex<crate::commands::AppState>>) -> Result<Self, String> {
         let hd = {
             let state = tokio::runtime::Handle::current().block_on(async { app_state.lock().await });
@@ -97,33 +108,15 @@ impl ConvertPlugin {
             id: uuid::Uuid::new_v4().to_string(),
             name: wasm_name,
             version: "0.1.0".into(),
-            path: "bytes".into(),
-            formats: vec!["csv".into(), "json".into(), "yaml".into(), "xml".into()],
+            source: "bytes".into(),
+            functions: vec![],
         };
 
         Ok(Self { plugin, info })
     }
 
-    pub fn import_data(&mut self, req: &ImportRequest) -> Result<ImportResult, String> {
-        let input = serde_json::to_vec(req).map_err(|e| format!("Serialize error: {}", e))?;
-        let output = self.plugin.call::<&[u8], Vec<u8>>("import_data", &input)
-            .map_err(|e| format!("Plugin call error: {}", e))?;
-        serde_json::from_slice(&output)
-            .map_err(|e| format!("Deserialize error: {}", e))
-    }
-
-    pub fn export_data(&mut self, req: &ExportRequest) -> Result<ExportResult, String> {
-        let input = serde_json::to_vec(req).map_err(|e| format!("Serialize error: {}", e))?;
-        let output = self.plugin.call::<&[u8], Vec<u8>>("export_data", &input)
-            .map_err(|e| format!("Plugin call error: {}", e))?;
-        serde_json::from_slice(&output)
-            .map_err(|e| format!("Deserialize error: {}", e))
-    }
-
-    pub fn get_info(&mut self) -> Result<serde_json::Value, String> {
-        let output = self.plugin.call::<&[u8], Vec<u8>>("get_info", b"")
-            .map_err(|e| format!("Plugin call error: {}", e))?;
-        serde_json::from_slice(&output)
-            .map_err(|e| format!("Deserialize error: {}", e))
+    pub fn call(&mut self, function: &str, input: &[u8]) -> Result<Vec<u8>, String> {
+        self.plugin.call::<&[u8], Vec<u8>>(function, input)
+            .map_err(|e| format!("Plugin call '{}' error: {}", function, e))
     }
 }

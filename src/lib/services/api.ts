@@ -737,20 +737,22 @@ export const api = {
     return getAdapter().invoke<ObjectSnapshot[]>('list_object_versions', { id });
   },
 
-  // ── Конвертация (WASM-модули) ──
+  // ── WASM Runtime (плагины) ──
   async loadWasmModule(wasmBytes: number[], name: string): Promise<WasmModuleInfo> {
-    return getAdapter().invoke<WasmModuleInfo>('load_wasm_module', { wasmBytes, name });
+    return getAdapter().invoke<WasmModuleInfo>('wasm_load', { wasmBytes, name });
   },
   async unloadWasmModule(moduleId: string): Promise<void> {
-    return getAdapter().invoke<void>('unload_wasm_module', { module_id: moduleId });
+    return getAdapter().invoke<void>('wasm_unload', { module_id: moduleId });
   },
   async listWasmModules(): Promise<WasmModuleInfo[]> {
-    return getAdapter().invoke<WasmModuleInfo[]>('list_wasm_modules');
+    return getAdapter().invoke<WasmModuleInfo[]>('wasm_list');
   },
-  async importObjectsViaWasm(params: { module_id: string; file: number[]; filename: string; entity_type_id: string; format: string; mapping?: Record<string, string> }): Promise<ImportResult> {
-    return getAdapter().invoke<ImportResult>('import_objects_via_wasm', params);
+
+  // ── Конвертация ──
+  async importObjects(params: { module_id: string; file: number[]; filename: string; entity_type_id: string; format: string; mapping?: Record<string, string> }): Promise<ImportResult> {
+    return getAdapter().invoke<ImportResult>('convert_import', params);
   },
-  async exportObjectsViaWasm(params: { module_id: string; entity_type_id: string; format: string }): Promise<ExportResult> {
-    return getAdapter().invoke<ExportResult>('export_objects_via_wasm', params);
+  async exportObjects(params: { module_id: string; entity_type_id: string; format: string }): Promise<ExportResult> {
+    return getAdapter().invoke<ExportResult>('convert_export', params);
   },
 };

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub mod plugin;
 pub mod commands;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,13 +30,4 @@ pub struct ExportResult {
     pub data: Vec<u8>,
     pub filename: String,
     pub content_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModuleInfo {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub path: String,
-    pub formats: Vec<String>,
 }
