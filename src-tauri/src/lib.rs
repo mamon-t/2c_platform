@@ -73,6 +73,9 @@ pub fn run() {
             commands::delete_permission_policy,
             commands::update_role,
             commands::get_my_permissions,
+            commands::list_events,
+            commands::get_event,
+            commands::list_stream_events,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

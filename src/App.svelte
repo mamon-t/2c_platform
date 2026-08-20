@@ -8,6 +8,7 @@
   import { onMount } from 'svelte';
   import AuditPage from '$lib/components/AuditPage.svelte';
   import SettingsPage from '$lib/components/SettingsPage.svelte';
+  import EventsPage from '$lib/components/EventsPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -869,6 +870,9 @@
             </table>
           </div>
         </div>
+
+      {:else if currentNav === 'events'}
+        <EventsPage />
 
       {:else if currentNav === 'audit'}
         <AuditPage />

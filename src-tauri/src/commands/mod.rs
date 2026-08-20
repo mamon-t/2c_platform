@@ -112,7 +112,10 @@ pub async fn get_diagnostics(state: State<'_, Mutex<AppState>>) -> Result<Diagno
 pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) -> Result<DiagnosticsInfo, String> {
     let client = MongoClient::connect(&input.uri, &input.db_name).await.map_err(|e| e.to_string())?;
     let info = client.diagnostics().await;
-    { let mut state = state.lock().await; state.db = Some(client); state.config.mongodb_uri = Some(input.uri); state.config.mongodb_database = Some(input.db_name); }
+    { let mut state = state.lock().await; state.db = Some(client.clone()); state.config.mongodb_uri = Some(input.uri); state.config.mongodb_database = Some(input.db_name); }
+    // Создаём индексы при подключении
+    crate::audit::indexes::ensure_audit_indexes(&client).await.map_err(|e| e.to_string())?;
+    crate::events::indexes::ensure_event_indexes(&client).await.map_err(|e| e.to_string())?;
     Ok(info)
 }
 
@@ -920,4 +923,42 @@ pub async fn get_my_permissions(state: State<'_, Mutex<AppState>>) -> Result<MyP
         role_name: role.name,
         permissions: policies,
     })
+}
+
+// ── Event Store ────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_events(
+    filters: crate::events::EventFilters,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<crate::events::EventPage, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let svc = crate::events::EventService::new();
+    svc.list(db, crate::core::CompanyId(cid), filters).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_event(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::events::Event, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let eid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let svc = crate::events::EventService::new();
+    svc.get(db, eid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_stream_events(
+    stream_type: String,
+    stream_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<crate::events::Event>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let st: crate::events::StreamType = stream_type.parse().map_err(|e: crate::core::PlatformError| e.to_string())?;
+    let svc = crate::events::EventService::new();
+    svc.list_stream(db, st, &stream_id).await.map_err(|e| e.to_string())
 }

@@ -240,6 +240,59 @@ export interface AuditLogFilters {
   after?: string;
 }
 
+// ── Event Store types ──────────────────────────────────────
+
+export interface ActorSnapshot {
+  user_id: string;
+  login: string;
+  full_name: string | null;
+  position: string | null;
+  company_id: string;
+}
+
+export interface Event {
+  _id: string;
+  stream_type: string;
+  stream_id: string;
+  event_type: string;
+  version: number;
+  payload: Record<string, unknown>;
+  metadata: ActorSnapshot;
+  company_id: string;
+  correlation_id: string | null;
+  causation_id: string | null;
+  signature_ref: string | null;
+  occurred_at: string;
+}
+
+export interface EventPage {
+  events: Event[];
+  total_count: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export interface EventFilters {
+  stream_type?: string;
+  stream_id?: string;
+  event_type?: string;
+  correlation_id?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  after?: string;
+}
+
+export const EVENT_TYPE_META: Record<string, { label: string; icon: string }> = {
+  'object.created':   { label: 'Создан объект',     icon: 'fa-solid fa-plus text-success-500' },
+  'object.updated':   { label: 'Обновлён объект',   icon: 'fa-solid fa-pen text-primary-500' },
+  'object.posted':    { label: 'Проведён объект',   icon: 'fa-solid fa-check-double text-success-500' },
+  'object.cancelled': { label: 'Отменён объект',    icon: 'fa-solid fa-xmark text-error-500' },
+  'object.restored':  { label: 'Восстановлена версия', icon: 'fa-solid fa-rotate-left text-warning-500' },
+  'user.created':     { label: 'Создан пользователь', icon: 'fa-solid fa-user-plus text-success-500' },
+  'user.updated':     { label: 'Обновлён пользователь', icon: 'fa-solid fa-user-pen text-primary-500' },
+};
+
 export const api = {
   async getDiagnostics(): Promise<DiagnosticsReport> {
     return getAdapter().invoke<DiagnosticsReport>('get_diagnostics');
@@ -404,5 +457,16 @@ export const api = {
   },
   async executeRhaiScript(source: string, context: string): Promise<unknown> {
     return getAdapter().invoke<unknown>('execute_rhai_script', { source, context });
+  },
+
+  // Event Store
+  async listEvents(filters?: EventFilters): Promise<EventPage> {
+    return getAdapter().invoke<EventPage>('list_events', { filters: filters ?? {} });
+  },
+  async getEvent(id: string): Promise<Event> {
+    return getAdapter().invoke<Event>('get_event', { id });
+  },
+  async listStreamEvents(streamType: string, streamId: string): Promise<Event[]> {
+    return getAdapter().invoke<Event[]>('list_stream_events', { stream_type: streamType, stream_id: streamId });
   },
 };

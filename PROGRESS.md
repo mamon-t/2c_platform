@@ -99,5 +99,33 @@
 - Async-trait добавлен в Cargo.toml для AuditService trait
 
 ### Требуется
-- Сброс БД для RBAC: `db.getSiblingDB("2c_platform").dropDatabase()` (SSH в Docker-хост)
-- После сброса: first-boot пересоздаст всё с permission_policy_ids в ролях
+- ~~Сброс БД для RBAC~~ ✅ Сброшена 20.08.2026
+
+## Этап 4: Event Store (ядро «Труба и Доски») ✅
+**Дата:** 20.08.2026
+**Коммит:** (текущий)
+
+### Что сделано
+- **Event модель** — полная структура Event (append-only):
+  - stream_type (Object/User/Module), stream_id, event_type, version (auto-increment в потоке)
+  - payload (JSON), metadata (ActorSnapshot: user_id, login, full_name, position, company_id)
+  - company_id, correlation_id, causation_id, signature_ref, occurred_at
+- **ActorSnapshot** — снимок исполнителя для читаемой истории
+- **EventService** —append-only запись с атомарной инкрементацией version:
+  - `append()` — запись события с version++ (MAX(stream)+1)
+  - `list_stream()` — чтение всего потока (version history объекта)
+  - `list()` — список с фильтрами (stream_type, event_type, date_from/to, correlation_id) + пагинация
+  - `get()` — чтение по ID
+  - `last_version()` — последний version в потоке (для оптимистичной блокировки)
+- **MongoDB индексы** — 4 составных: stream, event_type+time, company+time, correlation_id
+- **IPC команды** — list_events, get_event, list_stream_events
+- **Index creation** — индексы audit_log + events создаются при connect_db
+- **Frontend** — EventsPage.svelte (таблица с фильтрами, раскрытие payload, пагинация)
+- **Navigation** — вкладка «События» в sidebar
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
+
+### Следующий шаг
+- F2: Метаданные (entity_types, entity_fields, entity_states, entity_transitions, entity_forms, entity_actions)
