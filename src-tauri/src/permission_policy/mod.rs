@@ -1,0 +1,189 @@
+use chrono::{DateTime, Utc};
+use futures::StreamExt;
+use mongodb::bson::{doc, Document};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::core::{CompanyId, Id, PlatformError, PlatformResult};
+use crate::db::MongoClient;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionPolicy {
+    pub _id: Id,
+    pub code: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope_type: String,
+    pub subsystem_code: String,
+    pub entity_type: Option<String>,
+    pub actions: Vec<String>,
+    pub record_scope: String,
+    pub deny: bool,
+    pub priority: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePermissionPolicyInput {
+    pub code: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub scope_type: String,
+    pub subsystem_code: String,
+    pub entity_type: Option<String>,
+    pub actions: Vec<String>,
+    pub record_scope: String,
+    pub deny: Option<bool>,
+    pub priority: Option<i32>,
+}
+
+pub struct PermissionPolicyService;
+
+impl PermissionPolicyService {
+    pub fn new() -> Self { Self }
+
+    pub async fn list(db: &MongoClient) -> PlatformResult<Vec<PermissionPolicy>> {
+        let col = db.collection::<Document>("permission_policies");
+        let mut cursor = col.find(doc! {}).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        let mut result = Vec::new();
+        while let Some(doc) = cursor.next().await {
+            let doc = doc.map_err(|e| PlatformError::Database(e.to_string()))?;
+            let entry: PermissionPolicy = mongodb::bson::from_document(doc)
+                .map_err(|e| PlatformError::Database(e.to_string()))?;
+            result.push(entry);
+        }
+        Ok(result)
+    }
+
+    pub async fn get(db: &MongoClient, id: Id) -> PlatformResult<PermissionPolicy> {
+        let col = db.collection::<Document>("permission_policies");
+        let doc = col.find_one(doc! { "_id": id.to_string() }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?
+            .ok_or_else(|| PlatformError::NotFound(format!("PermissionPolicy {id} не найдена")))?;
+        mongodb::bson::from_document(doc).map_err(|e| PlatformError::Database(e.to_string()))
+    }
+
+    pub async fn get_by_ids(db: &MongoClient, ids: &[Id]) -> PlatformResult<Vec<PermissionPolicy>> {
+        if ids.is_empty() { return Ok(Vec::new()); }
+        let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let col = db.collection::<Document>("permission_policies");
+        let mut cursor = col.find(doc! { "_id": { "$in": &id_strs } }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        let mut result = Vec::new();
+        while let Some(doc) = cursor.next().await {
+            let doc = doc.map_err(|e| PlatformError::Database(e.to_string()))?;
+            if let Ok(entry) = mongodb::bson::from_document::<PermissionPolicy>(doc) {
+                result.push(entry);
+            }
+        }
+        Ok(result)
+    }
+
+    pub async fn get_by_codes(db: &MongoClient, codes: &[String]) -> PlatformResult<Vec<PermissionPolicy>> {
+        if codes.is_empty() { return Ok(Vec::new()); }
+        let col = db.collection::<Document>("permission_policies");
+        let mut cursor = col.find(doc! { "code": { "$in": codes } }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        let mut result = Vec::new();
+        while let Some(doc) = cursor.next().await {
+            let doc = doc.map_err(|e| PlatformError::Database(e.to_string()))?;
+            if let Ok(entry) = mongodb::bson::from_document::<PermissionPolicy>(doc) {
+                result.push(entry);
+            }
+        }
+        Ok(result)
+    }
+
+    pub async fn create(db: &MongoClient, input: CreatePermissionPolicyInput) -> PlatformResult<PermissionPolicy> {
+        let now = Utc::now();
+        let policy = PermissionPolicy {
+            _id: Uuid::new_v4(),
+            code: input.code,
+            name: input.name,
+            description: input.description,
+            scope_type: input.scope_type,
+            subsystem_code: input.subsystem_code,
+            entity_type: input.entity_type,
+            actions: input.actions,
+            record_scope: input.record_scope,
+            deny: input.deny.unwrap_or(false),
+            priority: input.priority.unwrap_or(0),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut doc = mongodb::bson::to_document(&policy).unwrap_or_default();
+        doc.insert("_id", policy._id.to_string());
+        let col = db.collection::<Document>("permission_policies");
+        col.insert_one(doc).await.map_err(|e| PlatformError::Database(e.to_string()))?;
+        Ok(policy)
+    }
+
+    pub async fn delete(db: &MongoClient, id: Id) -> PlatformResult<()> {
+        let col = db.collection::<Document>("permission_policies");
+        let result = col.delete_one(doc! { "_id": id.to_string() }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        if result.deleted_count == 0 {
+            return Err(PlatformError::NotFound(format!("PermissionPolicy {id} не найдена")));
+        }
+        Ok(())
+    }
+
+    pub fn default_policies() -> Vec<(String, String, String, Vec<String>, String)> {
+        vec![
+            ("platform.access".into(), "Доступ к платформе".into(), "platform".into(), vec!["access".into()], "company".into()),
+            ("companies.read".into(), "Просмотр компаний".into(), "companies".into(), vec!["read".into()], "company".into()),
+            ("companies.create".into(), "Создание компаний".into(), "companies".into(), vec!["create".into()], "company".into()),
+            ("companies.update".into(), "Изменение компаний".into(), "companies".into(), vec!["update".into()], "company".into()),
+            ("companies.delete".into(), "Удаление компаний".into(), "companies".into(), vec!["delete".into()], "company".into()),
+            ("users.read".into(), "Просмотр пользователей".into(), "users".into(), vec!["read".into()], "company".into()),
+            ("users.create".into(), "Создание пользователей".into(), "users".into(), vec!["create".into()], "company".into()),
+            ("users.update".into(), "Изменение пользователей".into(), "users".into(), vec!["update".into()], "company".into()),
+            ("users.delete".into(), "Удаление пользователей".into(), "users".into(), vec!["delete".into()], "company".into()),
+            ("roles.read".into(), "Просмотр ролей".into(), "roles".into(), vec!["read".into()], "company".into()),
+            ("roles.create".into(), "Создание ролей".into(), "roles".into(), vec!["create".into()], "company".into()),
+            ("roles.update".into(), "Изменение ролей".into(), "roles".into(), vec!["update".into()], "company".into()),
+            ("roles.delete".into(), "Удаление ролей".into(), "roles".into(), vec!["delete".into()], "company".into()),
+            ("contacts.read".into(), "Просмотр контактов".into(), "contacts".into(), vec!["read".into()], "company".into()),
+            ("contacts.create".into(), "Создание контактов".into(), "contacts".into(), vec!["create".into()], "company".into()),
+            ("contacts.update".into(), "Изменение контактов".into(), "contacts".into(), vec!["update".into()], "company".into()),
+            ("contacts.delete".into(), "Удаление контактов".into(), "contacts".into(), vec!["delete".into()], "company".into()),
+            ("documents.read".into(), "Просмотр документов".into(), "documents".into(), vec!["read".into()], "company".into()),
+            ("documents.create".into(), "Создание документов".into(), "documents".into(), vec!["create".into()], "company".into()),
+            ("documents.update".into(), "Изменение документов".into(), "documents".into(), vec!["update".into()], "company".into()),
+            ("documents.delete".into(), "Удаление документов".into(), "documents".into(), vec!["delete".into()], "company".into()),
+            ("documents.approve".into(), "Проведение документов".into(), "documents".into(), vec!["approve".into()], "company".into()),
+            ("documents.cancel".into(), "Отмена документов".into(), "documents".into(), vec!["cancel".into()], "company".into()),
+            ("catalogs.read".into(), "Просмотр справочников".into(), "catalogs".into(), vec!["read".into()], "company".into()),
+            ("catalogs.create".into(), "Создание справочников".into(), "catalogs".into(), vec!["create".into()], "company".into()),
+            ("catalogs.update".into(), "Изменение справочников".into(), "catalogs".into(), vec!["update".into()], "company".into()),
+            ("catalogs.delete".into(), "Удаление справочников".into(), "catalogs".into(), vec!["delete".into()], "company".into()),
+            ("reports.read".into(), "Просмотр отчётов".into(), "reports".into(), vec!["read".into()], "company".into()),
+            ("reports.create".into(), "Создание отчётов".into(), "reports".into(), vec!["create".into()], "company".into()),
+            ("reports.export".into(), "Экспорт отчётов".into(), "reports".into(), vec!["export".into()], "company".into()),
+            ("scripts.read".into(), "Просмотр скриптов".into(), "scripts".into(), vec!["read".into()], "company".into()),
+            ("scripts.create".into(), "Создание скриптов".into(), "scripts".into(), vec!["create".into()], "company".into()),
+            ("scripts.execute".into(), "Выполнение скриптов".into(), "scripts".into(), vec!["execute".into()], "company".into()),
+            ("audit.read".into(), "Просмотр журнала".into(), "audit".into(), vec!["read".into()], "company".into()),
+            ("settings.read".into(), "Просмотр настроек".into(), "settings".into(), vec!["read".into()], "company".into()),
+            ("settings.manage".into(), "Управление настройками".into(), "settings".into(), vec!["manage".into()], "company".into()),
+        ]
+    }
+
+    pub async fn ensure_seed_policies(db: &MongoClient) -> PlatformResult<()> {
+        let existing = Self::list(db).await?;
+        if !existing.is_empty() { return Ok(()); }
+        let defaults = Self::default_policies();
+        for (code, name, subsystem, actions, record_scope) in defaults {
+            let _ = Self::create(db, CreatePermissionPolicyInput {
+                code, name, description: None,
+                scope_type: "subsystem".into(),
+                subsystem_code: subsystem,
+                entity_type: None, actions, record_scope,
+                deny: Some(false), priority: Some(0),
+            }).await;
+        }
+        Ok(())
+    }
+}

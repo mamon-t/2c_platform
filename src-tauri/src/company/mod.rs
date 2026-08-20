@@ -25,7 +25,7 @@ pub struct CreateCompanyInput {
     pub inn: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct UpdateCompanyInput {
     pub name: Option<String>,
     pub inn: Option<String>,
@@ -45,6 +45,12 @@ impl Company {
             updated_at: now,
         }
     }
+
+    pub fn to_document(&self) -> Document {
+        let mut doc = mongodb::bson::to_document(self).unwrap_or_default();
+        doc.insert("_id", self._id.to_string());
+        doc
+    }
 }
 
 pub struct CompanyService;
@@ -63,8 +69,8 @@ impl CompanyService {
         let mut companies = Vec::new();
         while let Some(result) = cursor.next().await {
             let doc = result.map_err(|e| PlatformError::Database(e.to_string()))?;
-            let company: Company =
-                mongodb::bson::from_document(doc).map_err(|e| PlatformError::Database(e.to_string()))?;
+            let company: Company = mongodb::bson::from_document(doc)
+                .map_err(|e| PlatformError::Database(e.to_string()))?;
             companies.push(company);
         }
         Ok(companies)
@@ -77,15 +83,15 @@ impl CompanyService {
             .await
             .map_err(|e| PlatformError::Database(e.to_string()))?
             .ok_or_else(|| PlatformError::NotFound(format!("Компания {id} не найдена")))?;
-        let company: Company =
-            mongodb::bson::from_document(doc).map_err(|e| PlatformError::Database(e.to_string()))?;
+        let company: Company = mongodb::bson::from_document(doc)
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
         Ok(company)
     }
 
     pub async fn create(db: &MongoClient, input: CreateCompanyInput) -> PlatformResult<Company> {
         let company = Company::new(input);
-        let col = db.collection::<Company>("companies");
-        col.insert_one(&company)
+        let col = db.collection::<Document>("companies");
+        col.insert_one(company.to_document())
             .await
             .map_err(|e| {
                 if e.to_string().contains("duplicate key") {
@@ -123,7 +129,7 @@ impl CompanyService {
     }
 
     pub async fn delete(db: &MongoClient, id: Id) -> PlatformResult<()> {
-        let col = db.collection::<Company>("companies");
+        let col = db.collection::<Document>("companies");
         let result = col
             .delete_one(doc! { "_id": id.to_string() })
             .await

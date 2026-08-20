@@ -12,6 +12,7 @@ function createThemeStore() {
   function applyTheme(mode: ThemeMode) {
     const root = document.documentElement;
     root.classList.remove('light', 'dark');
+    root.setAttribute('data-theme', 'nosh');
 
     if (mode === 'system') {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;

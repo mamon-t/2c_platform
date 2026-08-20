@@ -9,24 +9,22 @@ mod events;
 mod ledger;
 mod meta;
 mod notify;
+mod permission_policy;
+mod person;
 mod rhai;
 mod role;
+mod settings;
 mod user;
+mod user_certificate;
+mod user_contact;
+mod user_profile;
 
 use commands::AppState;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tauri::Manager;
-use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,twoplat=debug")),
-        )
-        .init();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
@@ -53,6 +51,28 @@ pub fn run() {
             commands::get_me,
             commands::get_app_config,
             commands::save_app_config,
+            commands::get_person,
+            commands::update_person,
+            commands::list_user_contacts,
+            commands::create_contact,
+            commands::update_contact,
+            commands::delete_contact,
+            commands::list_user_profiles,
+            commands::add_user_profile,
+            commands::update_user_profile,
+            commands::remove_user_profile,
+            commands::list_user_certificates,
+            commands::deactivate_certificate,
+            commands::switch_company,
+            commands::get_contact_types,
+            commands::save_contact_types,
+            commands::list_audit_logs,
+            commands::get_audit_entry,
+            commands::list_permission_policies,
+            commands::create_permission_policy,
+            commands::delete_permission_policy,
+            commands::update_role,
+            commands::get_my_permissions,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

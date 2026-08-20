@@ -1,6 +1,6 @@
 [package]
 name = "twoplat"
-version = "0.1.0"
+version = "0.0.1"
 description = "2C Platform — конфигурируемая документо-событийная платформа"
 authors = ["Миха Алексеев"]
 edition = "2021"
@@ -11,7 +11,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 tauri = { version = "2.11.3", features = ["tray-icon"] }
@@ -34,5 +34,6 @@ rhai = "1.20"
 jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
+async-trait = "0.1"
 
 thiserror = "2"

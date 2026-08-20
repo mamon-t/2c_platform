@@ -29,12 +29,14 @@ export interface Company {
 
 export interface User {
   _id: string;
-  company_id: string;
-  username: string;
+  login: string;
+  person_id: string | null;
   display_name: string;
-  email: string | null;
-  role_id: string;
-  active: boolean;
+  status: string;
+  role_ids: string[];
+  locale: string | null;
+  timezone: string | null;
+  last_login_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +47,74 @@ export interface Role {
   code: string;
   name: string;
   description: string | null;
+  permission_policy_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PermissionPolicy {
+  _id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  scope_type: string;
+  subsystem_code: string;
+  entity_type: string | null;
+  actions: string[];
+  record_scope: string;
+  deny: boolean;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Person {
+  _id: string;
+  last_name: string;
+  first_name: string;
+  middle_name: string | null;
+  display_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserContact {
+  _id: string;
+  user_id: string;
+  channel_type: string;
+  value: string;
+  is_primary: boolean;
+  is_verified: boolean;
+  purposes: string[];
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserProfile {
+  _id: string;
+  company_id: string;
+  company_name: string;
+  company_code: string;
+  role_id: string;
+  role_name: string;
+  position: string | null;
+  department: string | null;
+  employee_number: string | null;
+  is_primary: boolean;
+  is_active: boolean;
+}
+
+export interface UserCertificate {
+  _id: string;
+  user_id: string;
+  provider_code: string;
+  certificate_ref: string;
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  fingerprint: string;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +122,122 @@ export interface Role {
 export interface AuthResult {
   token: string;
   user: User;
+  companies: UserProfile[];
+  role_code: string | null;
+  role_name: string | null;
+  role_id: string | null;
+}
+
+export interface MyPermissions {
+  role_code: string;
+  role_name: string;
+  permissions: PermissionPolicy[];
+}
+
+export interface FieldChange {
+  old: string | null;
+  new: string | null;
+}
+
+export type AuditChanges = Record<string, FieldChange>;
+
+export type AuditableAction =
+  | 'login' | 'logout' | 'switch_company'
+  | 'create_company' | 'update_company' | 'delete_company'
+  | 'create_user' | 'update_user' | 'delete_user' | 'disable_user' | 'unlock_user'
+  | 'create_role' | 'update_role' | 'delete_role'
+  | 'add_user_profile' | 'update_user_profile' | 'remove_user_profile'
+  | 'create_contact' | 'update_contact' | 'delete_contact'
+  | 'update_person'
+  | 'deactivate_certificate' | 'save_settings'
+  | 'create_permission_policy' | 'delete_permission_policy'
+  | 'create_document' | 'update_document' | 'delete_document'
+  | 'post_document' | 'cancel_document' | 'archive_document'
+  | 'create_catalog_entry' | 'update_catalog_entry' | 'delete_catalog_entry'
+  | 'emit_event' | 'replay_event' | 'execute_script';
+
+export interface AuditActionMeta {
+  label: string;
+  icon: string;
+  target_type: string;
+}
+
+export const AUDIT_ACTION_META: Record<string, AuditActionMeta> = {
+  login:                { label: 'Вход в систему',               icon: 'fa-solid fa-right-to-bracket text-success-500',     target_type: 'session' },
+  logout:               { label: 'Выход из системы',             icon: 'fa-solid fa-right-from-bracket text-surface-500',   target_type: 'session' },
+  switch_company:       { label: 'Смена компании',               icon: 'fa-solid fa-right-left text-warn-500',              target_type: 'company' },
+  create_company:       { label: 'Создание компании',            icon: 'fa-solid fa-building text-primary-500',             target_type: 'company' },
+  update_company:       { label: 'Обновление компании',          icon: 'fa-solid fa-building text-primary-500',             target_type: 'company' },
+  delete_company:       { label: 'Удаление компании',            icon: 'fa-solid fa-building text-error-500',               target_type: 'company' },
+  create_user:          { label: 'Создание пользователя',        icon: 'fa-solid fa-user-plus text-primary-500',            target_type: 'user' },
+  update_user:          { label: 'Обновление пользователя',      icon: 'fa-solid fa-user-pen text-primary-500',             target_type: 'user' },
+  delete_user:          { label: 'Удаление пользователя',        icon: 'fa-solid fa-user-minus text-error-500',             target_type: 'user' },
+  disable_user:         { label: 'Блокировка пользователя',      icon: 'fa-solid fa-user-lock text-warn-500',              target_type: 'user' },
+  unlock_user:          { label: 'Разблокировка пользователя',   icon: 'fa-solid fa-user-check text-success-500',           target_type: 'user' },
+  create_role:          { label: 'Создание роли',                icon: 'fa-solid fa-shield-halved text-primary-500',        target_type: 'role' },
+  update_role:          { label: 'Обновление роли',              icon: 'fa-solid fa-shield-halved text-primary-500',        target_type: 'role' },
+  delete_role:          { label: 'Удаление роли',                icon: 'fa-solid fa-shield-halved text-error-500',          target_type: 'role' },
+  add_user_profile:     { label: 'Добавление рабочего профиля',  icon: 'fa-solid fa-id-badge text-primary-500',             target_type: 'user_profile' },
+  update_user_profile:  { label: 'Обновление рабочего профиля',  icon: 'fa-solid fa-id-badge text-primary-500',             target_type: 'user_profile' },
+  remove_user_profile:  { label: 'Удаление рабочего профиля',    icon: 'fa-solid fa-id-badge text-error-500',               target_type: 'user_profile' },
+  create_contact:       { label: 'Создание контакта',            icon: 'fa-solid fa-address-card text-primary-500',         target_type: 'user_contact' },
+  update_contact:       { label: 'Обновление контакта',          icon: 'fa-solid fa-address-card text-primary-500',         target_type: 'user_contact' },
+  delete_contact:       { label: 'Удаление контакта',            icon: 'fa-solid fa-address-card text-error-500',           target_type: 'user_contact' },
+  update_person:        { label: 'Обновление персоны',           icon: 'fa-solid fa-user-pen text-primary-500',             target_type: 'person' },
+  deactivate_certificate: { label: 'Деактивация сертификата',    icon: 'fa-solid fa-certificate text-warn-500',             target_type: 'user_certificate' },
+  save_settings:        { label: 'Сохранение настроек',          icon: 'fa-solid fa-gear text-primary-500',                 target_type: 'setting' },
+  create_permission_policy: { label: 'Создание политики доступа', icon: 'fa-solid fa-key text-primary-500',                 target_type: 'permission_policy' },
+  delete_permission_policy: { label: 'Удаление политики доступа', icon: 'fa-solid fa-key text-error-500',                   target_type: 'permission_policy' },
+  create_document:      { label: 'Создание документа',           icon: 'fa-solid fa-file-circle-plus text-primary-500',     target_type: 'document' },
+  update_document:      { label: 'Обновление документа',         icon: 'fa-solid fa-file-pen text-primary-500',             target_type: 'document' },
+  delete_document:      { label: 'Удаление документа',           icon: 'fa-solid fa-file-circle-xmark text-error-500',      target_type: 'document' },
+  post_document:        { label: 'Проведение документа',         icon: 'fa-solid fa-file-circle-check text-success-500',    target_type: 'document' },
+  cancel_document:      { label: 'Отмена документа',             icon: 'fa-solid fa-file-circle-minus text-warn-500',       target_type: 'document' },
+  archive_document:     { label: 'Архивация документа',          icon: 'fa-solid fa-box-archive text-surface-500',          target_type: 'document' },
+  create_catalog_entry: { label: 'Создание записи справочника',  icon: 'fa-solid fa-book text-primary-500',                 target_type: 'catalog_entry' },
+  update_catalog_entry: { label: 'Обновление записи справочника', icon: 'fa-solid fa-book text-primary-500',                target_type: 'catalog_entry' },
+  delete_catalog_entry: { label: 'Удаление записи справочника',  icon: 'fa-solid fa-book text-error-500',                   target_type: 'catalog_entry' },
+  emit_event:           { label: 'Эмиссия события',              icon: 'fa-solid fa-bolt text-warn-500',                    target_type: 'event' },
+  replay_event:         { label: 'Повторная обработка события',  icon: 'fa-solid fa-rotate text-primary-500',               target_type: 'event' },
+  execute_script:       { label: 'Выполнение скрипта',           icon: 'fa-solid fa-code text-primary-500',                 target_type: 'rhai_script' },
+};
+
+export interface AuditEntry {
+  _id: string;
+  user_id: string;
+  user_login?: string;
+  company_id: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  target_login?: string;
+  entity_type: string | null;
+  object_id: string | null;
+  changes: AuditChanges | null;
+  event_id: string | null;
+  signature_ref: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  occurred_at: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  total_count: number;
+  has_more: boolean;
+  next_cursor: string | null;
+  prev_cursor: string | null;
+}
+
+export interface AuditLogFilters {
+  actions?: string[];
+  target_type?: string;
+  user_id?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  before?: string;
+  after?: string;
 }
 
 export const api = {
@@ -63,8 +249,8 @@ export const api = {
     return getAdapter().invoke('connect_db', { input: { uri, db_name: dbName } });
   },
 
-  async authenticate(username: string, password: string): Promise<AuthResult> {
-    return getAdapter().invoke<AuthResult>('authenticate', { username, password });
+  async authenticate(login: string, password: string): Promise<AuthResult> {
+    return getAdapter().invoke<AuthResult>('authenticate', { login, password });
   },
 
   async getMe(): Promise<User | null> {
@@ -89,44 +275,133 @@ export const api = {
   },
 
   // Users
-  async listUsers(companyId: string): Promise<User[]> {
-    return getAdapter().invoke<User[]>('list_users', { companyId });
+  async listUsers(): Promise<User[]> {
+    return getAdapter().invoke<User[]>('list_users');
   },
   async getUser(id: string): Promise<User> {
     return getAdapter().invoke<User>('get_user', { id });
   },
   async createUser(input: {
-    company_id: string;
-    username: string;
-    display_name: string;
-    email?: string;
+    login: string;
     password: string;
-    role_id: string;
+    display_name?: string;
+    last_name?: string;
+    first_name?: string;
+    middle_name?: string;
+    email?: string;
+    company_id?: string;
+    role_id?: string;
+    position?: string;
+    department?: string;
   }): Promise<User> {
     return getAdapter().invoke<User>('create_user', { input });
   },
-  async updateUser(id: string, input: { display_name?: string; email?: string; active?: boolean; role_id?: string }): Promise<User> {
-    return getAdapter().invoke<User>('update_user', { id, input });
+  async updateUser(id: string, input: { status?: string; locale?: string; timezone?: string; new_password?: string; must_change_password?: boolean }): Promise<void> {
+    return getAdapter().invoke<void>('update_user', { id, input });
   },
   async deleteUser(id: string): Promise<void> {
     return getAdapter().invoke<void>('delete_user', { id });
+  },
+
+  // Person
+  async getPerson(id: string): Promise<Person> {
+    return getAdapter().invoke<Person>('get_person', { id });
+  },
+  async updatePerson(id: string, input: { last_name?: string; first_name?: string; middle_name?: string; display_name?: string }): Promise<Person> {
+    return getAdapter().invoke<Person>('update_person', { id, input });
+  },
+
+  // Contacts
+  async listUserContacts(userId: string): Promise<UserContact[]> {
+    return getAdapter().invoke<UserContact[]>('list_user_contacts', { userId });
+  },
+  async createContact(input: { user_id: string; channel_type: string; value: string; is_primary?: boolean; purposes?: string[] }): Promise<UserContact> {
+    return getAdapter().invoke<UserContact>('create_contact', { input });
+  },
+  async updateContact(id: string, input: { value?: string; is_primary?: boolean; is_verified?: boolean; purposes?: string[] }): Promise<UserContact> {
+    return getAdapter().invoke<UserContact>('update_contact', { id, input });
+  },
+  async deleteContact(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_contact', { id });
+  },
+
+  // Profiles
+  async listUserProfiles(userId: string): Promise<UserProfile[]> {
+    return getAdapter().invoke<UserProfile[]>('list_user_profiles', { userId });
+  },
+  async addUserProfile(input: { user_id: string; company_id: string; role_id: string; position?: string; department?: string }): Promise<UserProfile> {
+    return getAdapter().invoke<UserProfile>('add_user_profile', { input });
+  },
+  async updateUserProfile(id: string, input: { role_id?: string; position?: string; department?: string; is_primary?: boolean; is_active?: boolean }): Promise<void> {
+    return getAdapter().invoke<void>('update_user_profile', { id, input });
+  },
+  async removeUserProfile(id: string): Promise<void> {
+    return getAdapter().invoke<void>('remove_user_profile', { id });
+  },
+
+  // Certificates
+  async listUserCertificates(userId: string): Promise<UserCertificate[]> {
+    return getAdapter().invoke<UserCertificate[]>('list_user_certificates', { userId });
+  },
+  async deactivateCertificate(id: string): Promise<void> {
+    return getAdapter().invoke<void>('deactivate_certificate', { id });
   },
 
   // Roles
   async listRoles(companyId: string): Promise<Role[]> {
     return getAdapter().invoke<Role[]>('list_roles', { companyId });
   },
-  async createRole(input: { company_id: string; code: string; name: string; description?: string }): Promise<Role> {
+  async createRole(input: { company_id: string; code: string; name: string; description?: string; permission_policy_ids?: string[] }): Promise<Role> {
     return getAdapter().invoke<Role>('create_role', { input });
+  },
+  async updateRole(id: string, input: { name?: string; description?: string; permission_policy_ids?: string[] }): Promise<Role> {
+    return getAdapter().invoke<Role>('update_role', { id, input });
   },
   async deleteRole(id: string): Promise<void> {
     return getAdapter().invoke<void>('delete_role', { id });
   },
 
+  // Permission Policies
+  async listPermissionPolicies(): Promise<PermissionPolicy[]> {
+    return getAdapter().invoke<PermissionPolicy[]>('list_permission_policies');
+  },
+  async createPermissionPolicy(input: { code: string; name: string; scope_type: string; subsystem_code: string; entity_type?: string; actions: string[]; record_scope: string }): Promise<PermissionPolicy> {
+    return getAdapter().invoke<PermissionPolicy>('create_permission_policy', { input });
+  },
+  async deletePermissionPolicy(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_permission_policy', { id });
+  },
+
+  // My permissions
+  async getMyPermissions(): Promise<MyPermissions> {
+    return getAdapter().invoke<MyPermissions>('get_my_permissions');
+  },
+
+  // Multi-company
+  async switchCompany(companyId: string): Promise<AuthResult> {
+    return getAdapter().invoke<AuthResult>('switch_company', { input: { company_id: companyId } });
+  },
+
+  // Settings
+  async getContactTypes(): Promise<Array<{ code: string; name: string }>> {
+    return getAdapter().invoke<Array<{ code: string; name: string }>>('get_contact_types');
+  },
+  async saveContactTypes(types: Array<{ code: string; name: string }>): Promise<void> {
+    return getAdapter().invoke<void>('save_contact_types', { types });
+  },
+
+  // Audit
+  async listAuditLogs(filters?: AuditLogFilters): Promise<AuditPage> {
+    return getAdapter().invoke<AuditPage>('list_audit_logs', { filters: filters ?? null });
+  },
+  async getAuditEntry(id: string): Promise<AuditEntry | null> {
+    return getAdapter().invoke<AuditEntry | null>('get_audit_entry', { id });
+  },
+
+  // Rhai
   async validateRhaiScript(source: string): Promise<void> {
     return getAdapter().invoke<void>('validate_rhai_script', { source });
   },
-
   async executeRhaiScript(source: string, context: string): Promise<unknown> {
     return getAdapter().invoke<unknown>('execute_rhai_script', { source, context });
   },

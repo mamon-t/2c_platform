@@ -1,22 +1,20 @@
-import { writable } from 'svelte/store';
-
 export interface NavItem {
   code: string;
   label: string;
   icon: string;
   path: string;
+  requiredPermission?: { subsystem: string; action: string };
 }
 
-export const navItems = writable<NavItem[]>([
-  { code: 'dashboard', label: 'Главная', icon: 'grid', path: '/' },
-  { code: 'companies', label: 'Компании', icon: 'building', path: '/companies' },
-  { code: 'users', label: 'Пользователи', icon: 'users', path: '/users' },
-  { code: 'roles', label: 'Роли', icon: 'shield', path: '/roles' },
-  { code: 'documents', label: 'Документы', icon: 'file-text', path: '/documents' },
-  { code: 'catalogs', label: 'Справочники', icon: 'book', path: '/catalogs' },
-  { code: 'reports', label: 'Отчёты', icon: 'bar-chart', path: '/reports' },
-  { code: 'scripts', label: 'Скрипты', icon: 'code', path: '/scripts' },
-  { code: 'settings', label: 'Настройки', icon: 'settings', path: '/settings' },
-]);
-
-export const activeNav = writable<string>('dashboard');
+export const allNavItems: NavItem[] = [
+  { code: 'dashboard', label: 'Главная', icon: 'fa-solid fa-house', path: '/' },
+  { code: 'companies', label: 'Компании', icon: 'fa-solid fa-building', path: '/companies', requiredPermission: { subsystem: 'companies', action: 'read' } },
+  { code: 'users', label: 'Пользователи', icon: 'fa-solid fa-users', path: '/users', requiredPermission: { subsystem: 'users', action: 'read' } },
+  { code: 'roles', label: 'Роли', icon: 'fa-solid fa-shield-halved', path: '/roles', requiredPermission: { subsystem: 'roles', action: 'read' } },
+  { code: 'documents', label: 'Документы', icon: 'fa-solid fa-file-lines', path: '/documents', requiredPermission: { subsystem: 'documents', action: 'read' } },
+  { code: 'catalogs', label: 'Справочники', icon: 'fa-solid fa-book', path: '/catalogs', requiredPermission: { subsystem: 'catalogs', action: 'read' } },
+  { code: 'reports', label: 'Отчёты', icon: 'fa-solid fa-chart-bar', path: '/reports', requiredPermission: { subsystem: 'reports', action: 'read' } },
+  { code: 'scripts', label: 'Скрипты', icon: 'fa-solid fa-code', path: '/scripts', requiredPermission: { subsystem: 'scripts', action: 'read' } },
+  { code: 'audit', label: 'Журнал', icon: 'fa-solid fa-clock-rotate-left', path: '/audit', requiredPermission: { subsystem: 'audit', action: 'read' } },
+  { code: 'settings', label: 'Настройки', icon: 'fa-solid fa-gear', path: '/settings', requiredPermission: { subsystem: 'settings', action: 'manage' } },
+];
