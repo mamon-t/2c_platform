@@ -10,6 +10,7 @@
   import SettingsPage from '$lib/components/SettingsPage.svelte';
   import EventsPage from '$lib/components/EventsPage.svelte';
   import MetadataPage from '$lib/components/MetadataPage.svelte';
+  import ObjectsPage from '$lib/components/ObjectsPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -871,6 +872,9 @@
             </table>
           </div>
         </div>
+
+      {:else if currentNav === 'objects' || currentNav === 'documents' || currentNav === 'catalogs'}
+        <ObjectsPage />
 
       {:else if currentNav === 'events'}
         <EventsPage />

@@ -397,6 +397,63 @@ export const FIELD_KIND_META: Record<FieldKind, { label: string; icon: string }>
   computed: { label: 'Вычисляемое', icon: 'fa-solid fa-calculator' },
 };
 
+// ── Object types ───────────────────────────────────────────
+
+export type ObjectStateTS = 'draft' | 'active' | 'posted' | 'cancelled' | 'archived' | 'deleted';
+
+export interface ObjectEntity {
+  _id: string;
+  entity_type_id: string;
+  kind: string;
+  company_id: string;
+  state: ObjectStateTS;
+  data: Record<string, unknown>;
+  computed: Record<string, unknown> | null;
+  number: string | null;
+  date: string | null;
+  parent_id: string | null;
+  version: number;
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ObjectSnapshot {
+  _id: string;
+  object_id: string;
+  version: number;
+  data: Record<string, unknown>;
+  state: ObjectStateTS;
+  created_by: string;
+  created_at: string;
+  reason: string | null;
+}
+
+export interface ObjectPage {
+  objects: ObjectEntity[];
+  total_count: number;
+  has_more: boolean;
+}
+
+export interface ObjectFilters {
+  entity_type_id?: string;
+  state?: string;
+  parent_id?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const OBJECT_STATE_META: Record<ObjectStateTS, { label: string; icon: string; color: string }> = {
+  draft:     { label: 'Черновик', icon: 'fa-solid fa-pencil', color: 'bg-surface-400' },
+  active:    { label: 'Активный', icon: 'fa-solid fa-check', color: 'bg-primary-500' },
+  posted:    { label: 'Проведён', icon: 'fa-solid fa-check-double', color: 'bg-success-500' },
+  cancelled: { label: 'Отменён', icon: 'fa-solid fa-xmark', color: 'bg-error-500' },
+  archived:  { label: 'Архив', icon: 'fa-solid fa-box-archive', color: 'bg-warning-500' },
+  deleted:   { label: 'Удалён', icon: 'fa-solid fa-trash', color: 'bg-error-700' },
+};
+
 export const api = {
   async getDiagnostics(): Promise<DiagnosticsReport> {
     return getAdapter().invoke<DiagnosticsReport>('get_diagnostics');
@@ -632,5 +689,31 @@ export const api = {
   },
   async listEntityActions(entityTypeId: string): Promise<EntityAction[]> {
     return getAdapter().invoke<EntityAction[]>('list_entity_actions', { entity_type_id: entityTypeId });
+  },
+
+  // Objects
+  async listObjects(filters?: ObjectFilters): Promise<ObjectPage> {
+    return getAdapter().invoke<ObjectPage>('list_objects', { filters: filters ?? {} });
+  },
+  async getObject(id: string): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('get_object', { id });
+  },
+  async createObject(input: { entity_type_id: string; data: Record<string, unknown>; parent_id?: string; date?: string }): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('create_object', { input });
+  },
+  async updateObject(id: string, input: { data: Record<string, unknown>; version: number; reason?: string }): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('update_object', { id, input });
+  },
+  async postObject(id: string, version: number): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('post_object', { id, version });
+  },
+  async cancelObject(id: string, version: number): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('cancel_object', { id, version });
+  },
+  async restoreObjectVersion(id: string, targetVersion: number): Promise<ObjectEntity> {
+    return getAdapter().invoke<ObjectEntity>('restore_object_version', { id, target_version: targetVersion });
+  },
+  async listObjectVersions(id: string): Promise<ObjectSnapshot[]> {
+    return getAdapter().invoke<ObjectSnapshot[]>('list_object_versions', { id });
   },
 };

@@ -117,6 +117,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     crate::audit::indexes::ensure_audit_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::events::indexes::ensure_event_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::meta::indexes::ensure_meta_indexes(&client).await.map_err(|e| e.to_string())?;
+    crate::objects::indexes::ensure_object_indexes(&client).await.map_err(|e| e.to_string())?;
     Ok(info)
 }
 
@@ -1163,4 +1164,120 @@ pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>)
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityActionService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+// ── Objects (Доска) ─────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::ObjectPage, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    crate::objects::service::ObjectService::list(db, crate::core::CompanyId(cid), filters).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_object(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::objects::service::ObjectService::get(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_object(input: crate::objects::CreateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let user = state.current_user.as_ref()
+        .ok_or_else(|| "Необходима авторизация".to_string())?;
+    let user_id = crate::core::UserId(user._id);
+    let actor = build_actor(&state);
+    crate::objects::service::ObjectService::create(db, input, crate::core::CompanyId(cid), user_id, actor).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let user = state.current_user.as_ref()
+        .ok_or_else(|| "Необходима авторизация".to_string())?;
+    let user_id = crate::core::UserId(user._id);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    crate::objects::service::ObjectService::update(db, uid, input, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let user = state.current_user.as_ref()
+        .ok_or_else(|| "Необходима авторизация".to_string())?;
+    let user_id = crate::core::UserId(user._id);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let user = state.current_user.as_ref()
+        .ok_or_else(|| "Необходима авторизация".to_string())?;
+    let user_id = crate::core::UserId(user._id);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn restore_object_version(id: String, target_version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let user = state.current_user.as_ref()
+        .ok_or_else(|| "Необходима авторизация".to_string())?;
+    let user_id = crate::core::UserId(user._id);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    crate::objects::service::ObjectService::restore_version(db, uid, target_version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_object_versions(id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::objects::ObjectSnapshot>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::objects::service::ObjectService::list_versions(db, uid).await.map_err(|e| e.to_string())
+}
+
+fn build_actor(state: &AppState) -> crate::events::ActorSnapshot {
+    let user = state.current_user.as_ref();
+    crate::events::ActorSnapshot {
+        user_id: user.map(|u| crate::core::UserId(u._id)).unwrap_or(crate::core::UserId(uuid::Uuid::nil())),
+        login: user.map(|u| u.login.clone()).unwrap_or_default(),
+        full_name: user.map(|u| u.display_name.clone()).filter(|s| !s.is_empty()),
+        position: None,
+        company_id: state.current_company_id.as_ref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .map(crate::core::CompanyId)
+            .unwrap_or(crate::core::CompanyId(uuid::Uuid::nil())),
+    }
 }

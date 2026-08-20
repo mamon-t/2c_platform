@@ -162,3 +162,23 @@
 ### Проверки
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
+
+## Этап 6: Objects («Доска» — универсальная коллекция) ✅
+**Дата:** 20.08.2026
+
+### Что сделано
+- **Object модель** — универсальная коллекция для всех сущностей:
+  - entity_type_id, kind, company_id, state, data (JSON), number, version
+- **ObjectSnapshot** — снимки версий с причиной изменения
+- **ObjectService** — CRUD + бизнес-операции:
+  - create (version=1, Draft, snapshot), get, list (фильтры, пагинация)
+  - update (оптимистичная блокировка version), post (Draft→Posted, номер 000001)
+  - cancel (Posted→Cancelled), restore_version (из snapshot)
+- **Интеграция с EventStore** — каждая мутация → событие + ActorSnapshot
+- **MongoDB индексы** — 6 индексов
+- **IPC команды** — 8 команд
+- **Frontend** — ObjectsPage.svelte: дерево типов, таблица, JSON-данные, действия, история версий
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅

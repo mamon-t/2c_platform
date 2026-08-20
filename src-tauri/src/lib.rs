@@ -9,6 +9,7 @@ mod events;
 mod ledger;
 mod meta;
 mod notify;
+mod objects;
 mod permission_policy;
 mod person;
 mod rhai;
@@ -101,6 +102,14 @@ pub fn run() {
             commands::create_entity_action,
             commands::update_entity_action,
             commands::delete_entity_action,
+            commands::list_objects,
+            commands::get_object,
+            commands::create_object,
+            commands::update_object,
+            commands::post_object,
+            commands::cancel_object,
+            commands::restore_object_version,
+            commands::list_object_versions,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");
