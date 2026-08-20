@@ -116,6 +116,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     // Создаём индексы при подключении
     crate::audit::indexes::ensure_audit_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::events::indexes::ensure_event_indexes(&client).await.map_err(|e| e.to_string())?;
+    crate::meta::indexes::ensure_meta_indexes(&client).await.map_err(|e| e.to_string())?;
     Ok(info)
 }
 
@@ -961,4 +962,205 @@ pub async fn list_stream_events(
     let st: crate::events::StreamType = stream_type.parse().map_err(|e: crate::core::PlatformError| e.to_string())?;
     let svc = crate::events::EventService::new();
     svc.list_stream(db, st, &stream_id).await.map_err(|e| e.to_string())
+}
+
+// ── Метаданные ────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_entity_types(state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityType>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let cid = state.current_company_id.as_ref()
+        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        .map(crate::core::CompanyId);
+    crate::meta::service::EntityTypeService::list(db, cid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_entity_type(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTypeService::get(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_type(input: crate::meta::CreateEntityTypeInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let cid = state.current_company_id.as_ref()
+        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        .map(crate::core::CompanyId);
+    crate::meta::service::EntityTypeService::create(db, cid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_type(id: String, input: crate::meta::UpdateEntityTypeInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTypeService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_type(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTypeService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_entity_fields(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityField>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFieldService::list_by_type(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_field(input: crate::meta::CreateEntityFieldInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityField, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    crate::meta::service::EntityFieldService::create(db, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_field(id: String, input: crate::meta::UpdateEntityFieldInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityField, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFieldService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_field(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFieldService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_entity_states(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityState>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityStateService::list_by_type(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_state(input: crate::meta::CreateEntityStateInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityState, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    crate::meta::service::EntityStateService::create(db, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_state(id: String, input: crate::meta::UpdateEntityStateInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityStateService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_state(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityStateService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_entity_transitions(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityTransition>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTransitionService::list_by_type(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_transition(input: crate::meta::CreateEntityTransitionInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityTransition, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    crate::meta::service::EntityTransitionService::create(db, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_transition(id: String, input: crate::meta::UpdateEntityTransitionInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTransitionService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_transition(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityTransitionService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_entity_forms(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityForm>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFormService::list_by_type(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_form(input: crate::meta::CreateEntityFormInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityForm, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    crate::meta::service::EntityFormService::create(db, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_form(id: String, input: crate::meta::UpdateEntityFormInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFormService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_form(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityFormService::delete(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_entity_actions(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityAction>, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityActionService::list_by_type(db, uid).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_entity_action(input: crate::meta::CreateEntityActionInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityAction, String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    crate::meta::service::EntityActionService::create(db, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_entity_action(id: String, input: crate::meta::UpdateEntityActionInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityActionService::update(db, uid, input).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    let db = get_db!(state);
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    crate::meta::service::EntityActionService::delete(db, uid).await.map_err(|e| e.to_string())
 }

@@ -1,16 +1,20 @@
+pub mod service;
+pub mod indexes;
+
 use crate::core::*;
 use chrono::{DateTime, Utc};
-use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityType {
     pub _id: Id,
-    pub company_id: CompanyId,
+    pub company_id: Option<CompanyId>,
     pub code: String,
     pub name: String,
     pub kind: EntityKind,
     pub description: Option<String>,
+    pub icon: Option<String>,
+    pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -22,10 +26,13 @@ pub struct EntityField {
     pub code: String,
     pub name: String,
     pub field_kind: FieldKind,
-    pub required: bool,
+    pub is_required: bool,
+    pub is_readonly: bool,
     pub default_value: Option<serde_json::Value>,
-    pub options: Option<serde_json::Value>,
+    pub enum_values: Option<Vec<String>>,
+    pub reference_entity: Option<String>,
     pub order: i32,
+    pub group_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -37,6 +44,7 @@ pub struct EntityState {
     pub code: String,
     pub name: String,
     pub is_initial: bool,
+    pub is_final: bool,
     pub color: Option<String>,
     pub order: i32,
 }
@@ -49,9 +57,19 @@ pub struct EntityTransition {
     pub name: String,
     pub from_state: String,
     pub to_state: String,
-    pub action_code: Option<String>,
-    pub script_code: Option<String>,
+    pub required_policy: Option<String>,
     pub require_signature: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityForm {
+    pub _id: Id,
+    pub entity_type_id: Id,
+    pub code: String,
+    pub name: String,
+    pub layout: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,119 +79,119 @@ pub struct EntityAction {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
-    pub target_states: Option<Vec<String>>,
-    pub script_code: Option<String>,
-    pub require_signature: bool,
+    pub action_type: Option<String>,
+    pub is_dangerous: bool,
     pub created_at: DateTime<Utc>,
 }
 
-pub struct MetaService;
+// ── Input types ─────────────────────────────────────────────
 
-impl MetaService {
-    pub fn new() -> Self {
-        Self
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityTypeInput {
+    pub code: String,
+    pub name: String,
+    pub kind: EntityKind,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+}
 
-    pub fn create_entity_type(
-        &self,
-        company_id: CompanyId,
-        code: &str,
-        name: &str,
-        kind: EntityKind,
-    ) -> EntityType {
-        let now = Utc::now();
-        EntityType {
-            _id: uuid::Uuid::new_v4(),
-            company_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            kind,
-            description: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityTypeInput {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub is_active: Option<bool>,
+}
 
-    pub fn create_field(
-        &self,
-        entity_type_id: Id,
-        code: &str,
-        name: &str,
-        field_kind: FieldKind,
-        order: i32,
-    ) -> EntityField {
-        let now = Utc::now();
-        EntityField {
-            _id: uuid::Uuid::new_v4(),
-            entity_type_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            field_kind,
-            required: false,
-            default_value: None,
-            options: None,
-            order,
-            created_at: now,
-            updated_at: now,
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityFieldInput {
+    pub entity_type_id: String,
+    pub code: String,
+    pub name: String,
+    pub field_kind: FieldKind,
+    pub is_required: Option<bool>,
+    pub is_readonly: Option<bool>,
+    pub default_value: Option<serde_json::Value>,
+    pub enum_values: Option<Vec<String>>,
+    pub reference_entity: Option<String>,
+    pub group_name: Option<String>,
+}
 
-    pub fn create_state(
-        &self,
-        entity_type_id: Id,
-        code: &str,
-        name: &str,
-        is_initial: bool,
-        order: i32,
-    ) -> EntityState {
-        EntityState {
-            _id: uuid::Uuid::new_v4(),
-            entity_type_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            is_initial,
-            color: None,
-            order,
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityFieldInput {
+    pub name: Option<String>,
+    pub is_required: Option<bool>,
+    pub is_readonly: Option<bool>,
+    pub default_value: Option<serde_json::Value>,
+    pub enum_values: Option<Vec<String>>,
+    pub reference_entity: Option<String>,
+    pub group_name: Option<String>,
+    pub order: Option<i32>,
+}
 
-    pub fn create_transition(
-        &self,
-        entity_type_id: Id,
-        code: &str,
-        name: &str,
-        from_state: &str,
-        to_state: &str,
-    ) -> EntityTransition {
-        EntityTransition {
-            _id: uuid::Uuid::new_v4(),
-            entity_type_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            from_state: from_state.to_string(),
-            to_state: to_state.to_string(),
-            action_code: None,
-            script_code: None,
-            require_signature: false,
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityStateInput {
+    pub entity_type_id: String,
+    pub code: String,
+    pub name: String,
+    pub is_initial: Option<bool>,
+    pub is_final: Option<bool>,
+    pub color: Option<String>,
+}
 
-    pub fn create_action(
-        &self,
-        entity_type_id: Id,
-        code: &str,
-        name: &str,
-    ) -> EntityAction {
-        EntityAction {
-            _id: uuid::Uuid::new_v4(),
-            entity_type_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            description: None,
-            target_states: None,
-            script_code: None,
-            require_signature: false,
-            created_at: Utc::now(),
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityStateInput {
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub is_final: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityTransitionInput {
+    pub entity_type_id: String,
+    pub code: String,
+    pub name: String,
+    pub from_state: String,
+    pub to_state: String,
+    pub required_policy: Option<String>,
+    pub require_signature: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityTransitionInput {
+    pub name: Option<String>,
+    pub required_policy: Option<String>,
+    pub require_signature: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityFormInput {
+    pub entity_type_id: String,
+    pub code: String,
+    pub name: String,
+    pub layout: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityFormInput {
+    pub name: Option<String>,
+    pub layout: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEntityActionInput {
+    pub entity_type_id: String,
+    pub code: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub action_type: Option<String>,
+    pub is_dangerous: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateEntityActionInput {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub action_type: Option<String>,
+    pub is_dangerous: Option<bool>,
 }

@@ -293,6 +293,110 @@ export const EVENT_TYPE_META: Record<string, { label: string; icon: string }> = 
   'user.updated':     { label: 'Обновлён пользователь', icon: 'fa-solid fa-user-pen text-primary-500' },
 };
 
+// ── Metadata types ─────────────────────────────────────────
+
+export type EntityKind = 'document' | 'catalog' | 'register' | 'task' | 'contract' | 'project' | 'setting' | 'custom';
+export type FieldKind = 'string' | 'text' | 'integer' | 'money' | 'date' | 'datetime' | 'boolean' | 'enum' | 'reference' | 'array' | 'table' | 'json' | 'file' | 'user' | 'company' | 'formula' | 'computed';
+
+export interface EntityType {
+  _id: string;
+  company_id: string | null;
+  code: string;
+  name: string;
+  kind: EntityKind;
+  description: string | null;
+  icon: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntityField {
+  _id: string;
+  entity_type_id: string;
+  code: string;
+  name: string;
+  field_kind: FieldKind;
+  is_required: boolean;
+  is_readonly: boolean;
+  default_value: unknown;
+  enum_values: string[] | null;
+  reference_entity: string | null;
+  order: number;
+  group_name: string | null;
+}
+
+export interface EntityState {
+  _id: string;
+  entity_type_id: string;
+  code: string;
+  name: string;
+  is_initial: boolean;
+  is_final: boolean;
+  color: string | null;
+  order: number;
+}
+
+export interface EntityTransition {
+  _id: string;
+  entity_type_id: string;
+  code: string;
+  name: string;
+  from_state: string;
+  to_state: string;
+  required_policy: string | null;
+  require_signature: boolean;
+}
+
+export interface EntityForm {
+  _id: string;
+  entity_type_id: string;
+  code: string;
+  name: string;
+  layout: unknown;
+}
+
+export interface EntityAction {
+  _id: string;
+  entity_type_id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  action_type: string | null;
+  is_dangerous: boolean;
+}
+
+export const ENTITY_KIND_META: Record<EntityKind, { label: string; icon: string }> = {
+  document: { label: 'Документ', icon: 'fa-solid fa-file-lines' },
+  catalog:  { label: 'Справочник', icon: 'fa-solid fa-book' },
+  register: { label: 'Реестр', icon: 'fa-solid fa-list' },
+  task:     { label: 'Задача', icon: 'fa-solid fa-list-check' },
+  contract: { label: 'Договор', icon: 'fa-solid fa-file-contract' },
+  project:  { label: 'Проект', icon: 'fa-solid fa-diagram-project' },
+  setting:  { label: 'Настройка', icon: 'fa-solid fa-gear' },
+  custom:   { label: 'Произвольный', icon: 'fa-solid fa-cube' },
+};
+
+export const FIELD_KIND_META: Record<FieldKind, { label: string; icon: string }> = {
+  string:   { label: 'Строка', icon: 'fa-solid fa-font' },
+  text:     { label: 'Текст', icon: 'fa-solid fa-align-left' },
+  integer:  { label: 'Целое', icon: 'fa-solid fa-hashtag' },
+  money:    { label: 'Деньги', icon: 'fa-solid fa-ruble-sign' },
+  date:     { label: 'Дата', icon: 'fa-solid fa-calendar' },
+  datetime: { label: 'Дата/время', icon: 'fa-solid fa-clock' },
+  boolean:  { label: 'Да/нет', icon: 'fa-solid fa-toggle-on' },
+  enum:     { label: 'Перечисление', icon: 'fa-solid fa-list-ul' },
+  reference:{ label: 'Ссылка', icon: 'fa-solid fa-arrow-right' },
+  array:    { label: 'Массив', icon: 'fa-solid fa-layer-group' },
+  table:    { label: 'Таблица', icon: 'fa-solid fa-table' },
+  json:     { label: 'JSON', icon: 'fa-solid fa-code' },
+  file:     { label: 'Файл', icon: 'fa-solid fa-paperclip' },
+  user:     { label: 'Пользователь', icon: 'fa-solid fa-user' },
+  company:  { label: 'Компания', icon: 'fa-solid fa-building' },
+  formula:  { label: 'Формула', icon: 'fa-solid fa-square-root-variable' },
+  computed: { label: 'Вычисляемое', icon: 'fa-solid fa-calculator' },
+};
+
 export const api = {
   async getDiagnostics(): Promise<DiagnosticsReport> {
     return getAdapter().invoke<DiagnosticsReport>('get_diagnostics');
@@ -468,5 +572,65 @@ export const api = {
   },
   async listStreamEvents(streamType: string, streamId: string): Promise<Event[]> {
     return getAdapter().invoke<Event[]>('list_stream_events', { stream_type: streamType, stream_id: streamId });
+  },
+
+  // Metadata
+  async listEntityTypes(): Promise<EntityType[]> {
+    return getAdapter().invoke<EntityType[]>('list_entity_types');
+  },
+  async getEntityType(id: string): Promise<EntityType> {
+    return getAdapter().invoke<EntityType>('get_entity_type', { id });
+  },
+  async createEntityType(input: { code: string; name: string; kind: EntityKind; description?: string; icon?: string }): Promise<EntityType> {
+    return getAdapter().invoke<EntityType>('create_entity_type', { input });
+  },
+  async updateEntityType(id: string, input: { name?: string; description?: string; icon?: string; is_active?: boolean }): Promise<EntityType> {
+    return getAdapter().invoke<EntityType>('update_entity_type', { id, input });
+  },
+  async deleteEntityType(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_entity_type', { id });
+  },
+
+  async listEntityFields(entityTypeId: string): Promise<EntityField[]> {
+    return getAdapter().invoke<EntityField[]>('list_entity_fields', { entity_type_id: entityTypeId });
+  },
+  async createEntityField(input: { entity_type_id: string; code: string; name: string; field_kind: FieldKind; is_required?: boolean; group_name?: string }): Promise<EntityField> {
+    return getAdapter().invoke<EntityField>('create_entity_field', { input });
+  },
+  async updateEntityField(id: string, input: { name?: string; is_required?: boolean; order?: number }): Promise<EntityField> {
+    return getAdapter().invoke<EntityField>('update_entity_field', { id, input });
+  },
+  async deleteEntityField(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_entity_field', { id });
+  },
+
+  async listEntityStates(entityTypeId: string): Promise<EntityState[]> {
+    return getAdapter().invoke<EntityState[]>('list_entity_states', { entity_type_id: entityTypeId });
+  },
+  async createEntityState(input: { entity_type_id: string; code: string; name: string; is_initial?: boolean; is_final?: boolean; color?: string }): Promise<EntityState> {
+    return getAdapter().invoke<EntityState>('create_entity_state', { input });
+  },
+  async updateEntityState(id: string, input: { name?: string; color?: string; is_final?: boolean }): Promise<void> {
+    return getAdapter().invoke<void>('update_entity_state', { id, input });
+  },
+  async deleteEntityState(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_entity_state', { id });
+  },
+
+  async listEntityTransitions(entityTypeId: string): Promise<EntityTransition[]> {
+    return getAdapter().invoke<EntityTransition[]>('list_entity_transitions', { entity_type_id: entityTypeId });
+  },
+  async createEntityTransition(input: { entity_type_id: string; code: string; name: string; from_state: string; to_state: string }): Promise<EntityTransition> {
+    return getAdapter().invoke<EntityTransition>('create_entity_transition', { input });
+  },
+  async deleteEntityTransition(id: string): Promise<void> {
+    return getAdapter().invoke<void>('delete_entity_transition', { id });
+  },
+
+  async listEntityForms(entityTypeId: string): Promise<EntityForm[]> {
+    return getAdapter().invoke<EntityForm[]>('list_entity_forms', { entity_type_id: entityTypeId });
+  },
+  async listEntityActions(entityTypeId: string): Promise<EntityAction[]> {
+    return getAdapter().invoke<EntityAction[]>('list_entity_actions', { entity_type_id: entityTypeId });
   },
 };

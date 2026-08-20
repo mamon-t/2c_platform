@@ -11,6 +11,7 @@ export const allNavItems: NavItem[] = [
   { code: 'companies', label: 'Компании', icon: 'fa-solid fa-building', path: '/companies', requiredPermission: { subsystem: 'companies', action: 'read' } },
   { code: 'users', label: 'Пользователи', icon: 'fa-solid fa-users', path: '/users', requiredPermission: { subsystem: 'users', action: 'read' } },
   { code: 'roles', label: 'Роли', icon: 'fa-solid fa-shield-halved', path: '/roles', requiredPermission: { subsystem: 'roles', action: 'read' } },
+  { code: 'metadata', label: 'Метаданные', icon: 'fa-solid fa-database', path: '/metadata', requiredPermission: { subsystem: 'settings', action: 'manage' } },
   { code: 'documents', label: 'Документы', icon: 'fa-solid fa-file-lines', path: '/documents', requiredPermission: { subsystem: 'documents', action: 'read' } },
   { code: 'catalogs', label: 'Справочники', icon: 'fa-solid fa-book', path: '/catalogs', requiredPermission: { subsystem: 'catalogs', action: 'read' } },
   { code: 'events', label: 'События', icon: 'fa-solid fa-bolt', path: '/events', requiredPermission: { subsystem: 'audit', action: 'read' } },

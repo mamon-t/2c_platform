@@ -129,3 +129,36 @@
 
 ### Следующий шаг
 - F2: Метаданные (entity_types, entity_fields, entity_states, entity_transitions, entity_forms, entity_actions)
+
+## Этап 5: Метаданные (описание сущностей) ✅
+**Дата:** 20.08.2026
+
+### Что сделано
+- **6 коллекций метаданных**:
+  - `entity_types` — типы сущностей (Document/Catalog/Register/Task/Contract/Project/Setting/Custom)
+  - `entity_fields` — поля описания (17 типов: string, text, integer, money, date, enum, reference, table, formula...)
+  - `entity_states` — состояния (Draft, Active, Posted, Cancelled, Archived, Deleted...)
+  - `entity_transitions` — переходы между состояниями (с привязкой к политике прав)
+  - `entity_forms` — макеты форм (JSON layout)
+  - `entity_actions` — действия над сущностями (с флагом is_dangerous)
+- **6 CRUD сервисов** с deserialize helpers для MongoDB Documents:
+  - EntityTypeService: list, get, create, update, delete (каскадное удаление вложенных)
+  - EntityFieldService: list_by_type, get, create, update, delete, reorder (auto-order)
+  - EntityStateService: list_by_type, create, update, delete
+  - EntityTransitionService: list_by_type, create, update, delete
+  - EntityFormService: list_by_type, create, update, delete
+  - EntityActionService: list_by_type, create, update, delete
+- **24 IPC команды** (CRUD для каждого типа)
+- **6 MongoDB индексов** (unique code per company, ordered lists)
+- **Frontend** — MetadataPage.svelte:
+  - Боковая панель с деревом типов сущностей
+  - Создание/удаление типов с выбором kind
+  - Вкладки: Поля / Состояния / Переходы
+  - Создание полей с выбором FieldKind
+  - Создание состояний с начальным/конечным флагами
+  - Визуальный переход (from → to)
+- **Navigation** — вкладка «Метаданные» (settings/manage)
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅

@@ -9,6 +9,7 @@
   import AuditPage from '$lib/components/AuditPage.svelte';
   import SettingsPage from '$lib/components/SettingsPage.svelte';
   import EventsPage from '$lib/components/EventsPage.svelte';
+  import MetadataPage from '$lib/components/MetadataPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -873,6 +874,9 @@
 
       {:else if currentNav === 'events'}
         <EventsPage />
+
+      {:else if currentNav === 'metadata'}
+        <MetadataPage />
 
       {:else if currentNav === 'audit'}
         <AuditPage />
