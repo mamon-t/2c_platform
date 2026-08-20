@@ -7,7 +7,8 @@ use tokio::sync::Mutex;
 
 #[tauri::command]
 pub async fn load_wasm_module(
-    path: String,
+    wasm_bytes: Vec<u8>,
+    name: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<ModuleInfo, String> {
     let state_arc = Arc::new(tokio::sync::Mutex::new({
@@ -23,7 +24,7 @@ pub async fn load_wasm_module(
         }
     }));
 
-    let convert_plugin = ConvertPlugin::load(&path, state_arc)?;
+    let convert_plugin = ConvertPlugin::load(wasm_bytes, name, state_arc)?;
     let info = convert_plugin.info.clone();
 
     let mut s = state.lock().await;

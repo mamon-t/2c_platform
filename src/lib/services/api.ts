@@ -738,8 +738,8 @@ export const api = {
   },
 
   // ── Конвертация (WASM-модули) ──
-  async loadWasmModule(path: string): Promise<WasmModuleInfo> {
-    return getAdapter().invoke<WasmModuleInfo>('load_wasm_module', { path });
+  async loadWasmModule(wasmBytes: number[], name: string): Promise<WasmModuleInfo> {
+    return getAdapter().invoke<WasmModuleInfo>('load_wasm_module', { wasmBytes, name });
   },
   async unloadWasmModule(moduleId: string): Promise<void> {
     return getAdapter().invoke<void>('unload_wasm_module', { module_id: moduleId });

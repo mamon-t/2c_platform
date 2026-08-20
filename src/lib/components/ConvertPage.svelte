@@ -54,11 +54,12 @@
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const path = await file.text(); // For now, user must provide path manually
       try {
-        const info = await api.loadWasmModule(file.name);
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(arrayBuffer));
+        const info = await api.loadWasmModule(bytes, file.name.replace(/\.wasm$/i, ''));
         modules = [...modules, info];
-        addLog(`Модуль загружен: ${info.name} v${info.version}`, true);
+        addLog(`Модуль загружен: ${info.name} v${info.version} (${bytes.length} bytes)`, true);
       } catch (e: any) {
         addLog(`Ошибка загрузки: ${e}`, false);
       }

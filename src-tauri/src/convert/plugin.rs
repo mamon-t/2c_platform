@@ -73,7 +73,7 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
 });
 
 impl ConvertPlugin {
-    pub fn load(wasm_path: &str, app_state: Arc<tokio::sync::Mutex<crate::commands::AppState>>) -> Result<Self, String> {
+    pub fn load(wasm_bytes: Vec<u8>, wasm_name: String, app_state: Arc<tokio::sync::Mutex<crate::commands::AppState>>) -> Result<Self, String> {
         let hd = {
             let state = tokio::runtime::Handle::current().block_on(async { app_state.lock().await });
             HostData {
@@ -86,7 +86,7 @@ impl ConvertPlugin {
             }
         };
 
-        let manifest = Manifest::new([Wasm::file(wasm_path)]);
+        let manifest = Manifest::new([Wasm::data(wasm_bytes)]);
 
         let plugin = PluginBuilder::new(&manifest)
             .with_function("create_object", [PTR, PTR], [PTR], UserData::new(hd), create_object_impl)
@@ -95,9 +95,9 @@ impl ConvertPlugin {
 
         let info = ModuleInfo {
             id: uuid::Uuid::new_v4().to_string(),
-            name: "convert".into(),
+            name: wasm_name,
             version: "0.1.0".into(),
-            path: wasm_path.to_string(),
+            path: "bytes".into(),
             formats: vec!["csv".into(), "json".into(), "yaml".into(), "xml".into()],
         };
 
