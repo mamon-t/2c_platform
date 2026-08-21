@@ -1241,7 +1241,10 @@ pub async fn create_object(input: crate::objects::CreateObjectInput, state: Stat
         .ok_or_else(|| "Необходима авторизация".to_string())?;
     let user_id = crate::core::UserId(user._id);
     let actor = build_actor(&state);
-    crate::objects::service::ObjectService::create(db, input, crate::core::CompanyId(cid), user_id, actor).await.map_err(|e| e.to_string())
+    let obj = crate::objects::service::ObjectService::create(db, input, crate::core::CompanyId(cid), user_id, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::CreateDocument,
+        target_id = obj._id.to_string());
+    Ok(obj)
 }
 
 #[tauri::command]
@@ -1259,7 +1262,10 @@ pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput,
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    crate::objects::service::ObjectService::update(db, uid, input, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+    let obj = crate::objects::service::ObjectService::update(db, uid, input, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::UpdateDocument,
+        target_id = obj._id.to_string());
+    Ok(obj)
 }
 
 #[tauri::command]
@@ -1277,7 +1283,10 @@ pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppSta
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+    let obj = crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::PostDocument,
+        target_id = obj._id.to_string());
+    Ok(obj)
 }
 
 #[tauri::command]
@@ -1295,7 +1304,10 @@ pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppS
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+    let obj = crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::CancelDocument,
+        target_id = obj._id.to_string());
+    Ok(obj)
 }
 
 #[tauri::command]
@@ -1313,7 +1325,10 @@ pub async fn restore_object_version(id: String, target_version: i64, state: Stat
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    crate::objects::service::ObjectService::restore_version(db, uid, target_version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
+    let obj = crate::objects::service::ObjectService::restore_version(db, uid, target_version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::RestoreDocument,
+        target_id = obj._id.to_string());
+    Ok(obj)
 }
 
 #[tauri::command]

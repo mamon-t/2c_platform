@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use mongodb::bson::{doc, Document};
-use tracing::info;
+use tracing::{info, debug};
 
 use super::{ActorSnapshot, Event, EventFilters, EventPage, StreamType, EventService};
 use crate::core::{CompanyId, PlatformError, PlatformResult};
@@ -100,6 +100,10 @@ impl EventService {
             "Event appended: {} v{} [{}] -> {}",
             stream_type, next_version, event_type, stream_id
         );
+        debug!(
+            "Event detail: id={}, actor={}, payload_keys={:?}",
+            event._id, metadata.login, payload.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
 
         Ok(event)
     }
@@ -186,6 +190,15 @@ impl EventService {
             .session(&mut *session)
             .await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        info!(
+            "Event appended (tx): {} v{} [{}] -> {}",
+            stream_type, next_version, event_type, stream_id
+        );
+        debug!(
+            "Event detail: id={}, actor={}, payload_keys={:?}",
+            event._id, metadata.login, payload.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
 
         Ok(event)
     }
