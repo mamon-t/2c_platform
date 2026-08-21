@@ -2,7 +2,6 @@ mod auth;
 mod audit;
 mod commands;
 mod company;
-mod convert;
 mod core;
 mod crypto;
 mod db;
@@ -116,10 +115,7 @@ pub fn run() {
             plugin_manager::commands::wasm_load,
             plugin_manager::commands::wasm_unload,
             plugin_manager::commands::wasm_list,
-            // TODO: этих команд тут быть не должно. иначе мы теряем вообще смысл плагиной
-            convert::commands::convert_import,
-            convert::commands::convert_export,
-            // ======================================
+            plugin_manager::commands::plugin_call,
             print::commands::print_list_templates,
             print::commands::print_get_template,
             print::commands::print_create_template,

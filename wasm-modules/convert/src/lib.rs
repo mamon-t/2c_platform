@@ -6,6 +6,25 @@ mod json_fmt;
 mod yaml_fmt;
 mod xml_fmt;
 
+// ── Plugin self-description ────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct PluginFunction {
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ModuleInfo {
+    pub name: String,
+    pub version: String,
+    pub functions: Vec<PluginFunction>,
+}
+
+// ── Request / Result types ─────────────────────────────────
+
 #[derive(Serialize, Deserialize)]
 pub struct ImportRequest {
     pub format: String,
@@ -26,7 +45,6 @@ pub struct ImportResult {
 pub struct ExportRequest {
     pub entity_type_id: String,
     pub format: String,
-    pub objects: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,12 +54,7 @@ pub struct ExportResult {
     pub content_type: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ModuleInfo {
-    pub name: String,
-    pub version: String,
-    pub formats: Vec<String>,
-}
+// ── Internal helpers ───────────────────────────────────────
 
 fn parse_file(req: &ImportRequest) -> anyhow::Result<Vec<serde_json::Value>> {
     match req.format.as_str() {
@@ -53,24 +66,34 @@ fn parse_file(req: &ImportRequest) -> anyhow::Result<Vec<serde_json::Value>> {
     }
 }
 
-fn export_file(req: &ExportRequest) -> anyhow::Result<ExportResult> {
-    match req.format.as_str() {
-        "csv" => csv_fmt::export(&req.objects),
-        "json" => json_fmt::export(&req.objects),
-        "yaml" => yaml_fmt::export(&req.objects),
-        "xml" => xml_fmt::export(&req.objects),
+fn export_file(format: &str, objects: &[serde_json::Value]) -> anyhow::Result<ExportResult> {
+    match format {
+        "csv" => csv_fmt::export(objects),
+        "json" => json_fmt::export(objects),
+        "yaml" => yaml_fmt::export(objects),
+        "xml" => xml_fmt::export(objects),
         f => Err(anyhow::anyhow!("Unsupported format: {}", f)),
     }
 }
 
+// ── Host functions ─────────────────────────────────────────
+
 #[host_fn]
 extern "ExtismHost" {
     fn create_object(entity_type_id: String, data: String) -> String;
+    fn list_objects(entity_type_id: String, limit: String) -> String;
     fn log_message(msg: String);
 }
 
+// ── Exported functions ─────────────────────────────────────
+
 #[plugin_fn]
 pub fn import_data(Json(req): Json<ImportRequest>) -> FnResult<Json<ImportResult>> {
+    let _ = unsafe { log_message(format!(
+        "[convert] import: format={}, entity={}, file_bytes={}",
+        req.format, req.entity_type_id, req.file_data.len()
+    )) };
+
     let objects = parse_file(&req)?;
 
     let mut created = 0u32;
@@ -100,6 +123,10 @@ pub fn import_data(Json(req): Json<ImportRequest>) -> FnResult<Json<ImportResult
         }
     }
 
+    let _ = unsafe { log_message(format!(
+        "[convert] import done: created={}/total={}", created, objects.len()
+    )) };
+
     Ok(Json(ImportResult {
         created,
         total: objects.len() as u32,
@@ -110,7 +137,27 @@ pub fn import_data(Json(req): Json<ImportRequest>) -> FnResult<Json<ImportResult
 
 #[plugin_fn]
 pub fn export_data(Json(req): Json<ExportRequest>) -> FnResult<Json<ExportResult>> {
-    let result = export_file(&req)?;
+    let _ = unsafe { log_message(format!(
+        "[convert] export: entity={}, format={}", req.entity_type_id, req.format
+    )) };
+
+    let objects_json = unsafe {
+        list_objects(req.entity_type_id.clone(), "500".into())
+    }?;
+
+    let objects: Vec<serde_json::Value> = serde_json::from_str(&objects_json)
+        .map_err(|e| anyhow::anyhow!("Parse list_objects response: {}", e))?;
+
+    let _ = unsafe { log_message(format!(
+        "[convert] export: got {} objects from host", objects.len()
+    )) };
+
+    let result = export_file(&req.format, &objects)?;
+
+    let _ = unsafe { log_message(format!(
+        "[convert] export done: {} bytes, filename={}", result.data.len(), result.filename
+    )) };
+
     Ok(Json(result))
 }
 
@@ -119,6 +166,56 @@ pub fn get_info() -> FnResult<Json<ModuleInfo>> {
     Ok(Json(ModuleInfo {
         name: "convert".into(),
         version: "0.1.0".into(),
-        formats: vec!["csv".into(), "json".into(), "yaml".into(), "xml".into()],
+        functions: vec![
+            PluginFunction {
+                name: "import_data".into(),
+                label: "Импорт данных".into(),
+                description: "Загрузка CSV/JSON/YAML/XML в систему. Файл парсится, каждый объект создаётся через create_object.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "enum": ["csv", "json", "yaml", "xml"],
+                            "description": "Формат входного файла"
+                        },
+                        "file_data": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "description": "Байты файла (Array.from(Uint8Array))"
+                        },
+                        "entity_type_id": {
+                            "type": "string",
+                            "description": "UUID типа сущности для создаваемых объектов"
+                        },
+                        "mapping": {
+                            "type": "object",
+                            "description": "Маппинг колонок/ключей → кодов полей ({\"col_name\": \"field_code\"})"
+                        }
+                    },
+                    "required": ["format", "file_data", "entity_type_id"]
+                }),
+            },
+            PluginFunction {
+                name: "export_data".into(),
+                label: "Экспорт данных".into(),
+                description: "Выгрузка объектов из системы в файл. Объекты запрашиваются через list_objects.".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "enum": ["csv", "json", "yaml", "xml"],
+                            "description": "Формат выходного файла"
+                        },
+                        "entity_type_id": {
+                            "type": "string",
+                            "description": "UUID типа сущности для экспортируемых объектов"
+                        }
+                    },
+                    "required": ["format", "entity_type_id"]
+                }),
+            },
+        ],
     }))
 }

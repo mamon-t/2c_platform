@@ -3,10 +3,21 @@
   import {
     api,
     type WasmModuleInfo,
+    type PluginFunction,
     type EntityType,
-    type ImportResult,
-    type ExportResult,
   } from '$lib/services/api';
+
+  interface ImportResult {
+    created: number;
+    total: number;
+    errors: string[];
+  }
+
+  interface ExportResult {
+    data: number[];
+    filename: string;
+    content_type: string;
+  }
 
   let modules: WasmModuleInfo[] = $state([]);
   let entityTypes: EntityType[] = $state([]);
@@ -14,8 +25,11 @@
   let error = $state('');
   let log: { time: string; msg: string; ok: boolean }[] = $state([]);
 
-  // Import state
+  // Module selection
   let importModuleId = $state('');
+  let exportModuleId = $state('');
+
+  // Import state
   let importFormat = $state('csv');
   let importEntityTypeId = $state('');
   let importFile = $state<File | null>(null);
@@ -23,13 +37,22 @@
   let importing = $state(false);
 
   // Export state
-  let exportModuleId = $state('');
   let exportFormat = $state('csv');
   let exportEntityTypeId = $state('');
   let exporting = $state(false);
   let exportResult = $state<ExportResult | null>(null);
 
-  const FORMAT_OPTIONS = ['csv', 'json', 'yaml', 'xml'];
+  // Derived: selected modules and their functions
+  let importModule = $derived(modules.find(m => m.id === importModuleId));
+  let exportModule = $derived(modules.find(m => m.id === exportModuleId));
+  let importFn = $derived(importModule?.functions.find(f => f.name === 'import_data'));
+  let exportFn = $derived(exportModule?.functions.find(f => f.name === 'export_data'));
+  let importFormats = $derived(
+    (importFn?.input_schema as any)?.properties?.format?.enum ?? []
+  );
+  let exportFormats = $derived(
+    (exportFn?.input_schema as any)?.properties?.format?.enum ?? []
+  );
 
   function addLog(msg: string, ok: boolean) {
     const time = new Date().toLocaleTimeString('ru-RU');
@@ -59,7 +82,8 @@
         const bytes = Array.from(new Uint8Array(arrayBuffer));
         const info = await api.loadWasmModule(bytes, file.name.replace(/\.wasm$/i, ''));
         modules = [...modules, info];
-        addLog(`Модуль загружен: ${info.name} v${info.version} (${bytes.length} bytes)`, true);
+        const fns = info.functions.map(f => f.name).join(', ');
+        addLog(`Модуль загружен: ${info.name} v${info.version} [${fns}]`, true);
       } catch (e: any) {
         addLog(`Ошибка загрузки: ${e}`, false);
       }
@@ -78,21 +102,20 @@
   }
 
   async function handleImport() {
-    if (!importFile || !importModuleId || !importEntityTypeId) return;
+    if (!importFile || !importModuleId || !importEntityTypeId || !importFn) return;
     importing = true;
     importResult = null;
     try {
       const arrayBuffer = await importFile.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuffer));
-      const result = await api.importObjects({
-        module_id: importModuleId,
-        file: bytes,
-        filename: importFile.name,
-        entity_type_id: importEntityTypeId,
+      const args = JSON.stringify({
         format: importFormat,
+        file_data: bytes,
+        entity_type_id: importEntityTypeId,
       });
-      importResult = result;
-      addLog(`Импорт: ${result.created}/${result.total} объектов`, result.errors.length === 0);
+      const raw = await api.pluginCall(importModuleId, importFn.name, args);
+      importResult = JSON.parse(raw) as ImportResult;
+      addLog(`Импорт: ${importResult.created}/${importResult.total} объектов`, importResult.errors.length === 0);
     } catch (e: any) {
       addLog(`Ошибка импорта: ${e}`, false);
     } finally {
@@ -101,26 +124,26 @@
   }
 
   async function handleExport() {
-    if (!exportModuleId || !exportEntityTypeId) return;
+    if (!exportModuleId || !exportEntityTypeId || !exportFn) return;
     exporting = true;
     exportResult = null;
     try {
-      const result = await api.exportObjects({
-        module_id: exportModuleId,
-        entity_type_id: exportEntityTypeId,
+      const args = JSON.stringify({
         format: exportFormat,
+        entity_type_id: exportEntityTypeId,
       });
-      exportResult = result;
+      const raw = await api.pluginCall(exportModuleId, exportFn.name, args);
+      exportResult = JSON.parse(raw) as ExportResult;
       // Download the file
-      const bytes = new Uint8Array(result.data);
-      const blob = new Blob([bytes], { type: result.content_type });
+      const bytes = new Uint8Array(exportResult.data);
+      const blob = new Blob([bytes], { type: exportResult.content_type });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = result.filename;
+      a.download = exportResult.filename;
       a.click();
       URL.revokeObjectURL(url);
-      addLog(`Экспорт: ${result.filename} (${bytes.length} bytes)`, true);
+      addLog(`Экспорт: ${exportResult.filename} (${bytes.length} bytes)`, true);
     } catch (e: any) {
       addLog(`Ошибка экспорта: ${e}`, false);
     } finally {
@@ -161,7 +184,16 @@
             <span class="font-medium">{m.name}</span>
             <span class="text-surface-500">v{m.version}</span>
           </div>
-          <div class="text-surface-500">{m.formats.join(', ')}</div>
+          {#if m.functions.length > 0}
+            <div class="space-y-0.5">
+              {#each m.functions as fn}
+                <div class="flex items-center gap-1 text-surface-400">
+                  <i class="fa-solid fa-cog text-[10px]"></i>
+                  <span>{fn.label}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
           <button class="btn btn-xs preset-tonal-error text-xs" onclick={() => handleUnloadModule(m.id)}>
             <i class="fa-solid fa-trash mr-1"></i>Выгрузить
           </button>
@@ -194,15 +226,25 @@
               <select class="select select-sm" bind:value={importModuleId}>
                 <option value="">Выберите модуль…</option>
                 {#each modules as m}
-                  <option value={m.id}>{m.name} ({m.formats.join(', ')})</option>
+                  {@const hasImport = m.functions.some(f => f.name === 'import_data')}
+                  {#if hasImport}
+                    <option value={m.id}>{m.name}</option>
+                  {/if}
                 {/each}
               </select>
             </label>
 
+            {#if importFn}
+              <label class="label">
+                <span class="label-text text-xs">Описание</span>
+                <p class="text-xs text-surface-500">{importFn.description}</p>
+              </label>
+            {/if}
+
             <label class="label">
               <span class="label-text text-xs">Формат</span>
               <select class="select select-sm" bind:value={importFormat}>
-                {#each FORMAT_OPTIONS as f}
+                {#each importFormats as f}
                   <option value={f}>{f.toUpperCase()}</option>
                 {/each}
               </select>
@@ -218,7 +260,6 @@
               </select>
             </label>
 
-            <!-- Drag and drop area -->
             <div
               class="border-2 border-dashed border-surface-300-600 rounded p-4 text-center text-xs text-surface-500 cursor-pointer hover:border-primary-500 transition-colors"
               ondrop={onFileDrop}
@@ -235,7 +276,7 @@
 
             <button
               class="btn btn-sm preset-filled-primary w-full text-xs"
-              disabled={importing || !importModuleId || !importEntityTypeId || !importFile}
+              disabled={importing || !importModuleId || !importEntityTypeId || !importFile || !importFn}
               onclick={handleImport}
             >
               {importing ? 'Импорт...' : 'Импортировать'}
@@ -260,15 +301,25 @@
               <select class="select select-sm" bind:value={exportModuleId}>
                 <option value="">Выберите модуль…</option>
                 {#each modules as m}
-                  <option value={m.id}>{m.name} ({m.formats.join(', ')})</option>
+                  {@const hasExport = m.functions.some(f => f.name === 'export_data')}
+                  {#if hasExport}
+                    <option value={m.id}>{m.name}</option>
+                  {/if}
                 {/each}
               </select>
             </label>
 
+            {#if exportFn}
+              <label class="label">
+                <span class="label-text text-xs">Описание</span>
+                <p class="text-xs text-surface-500">{exportFn.description}</p>
+              </label>
+            {/if}
+
             <label class="label">
               <span class="label-text text-xs">Формат</span>
               <select class="select select-sm" bind:value={exportFormat}>
-                {#each FORMAT_OPTIONS as f}
+                {#each exportFormats as f}
                   <option value={f}>{f.toUpperCase()}</option>
                 {/each}
               </select>
@@ -286,7 +337,7 @@
 
             <button
               class="btn btn-sm preset-filled-primary w-full text-xs"
-              disabled={exporting || !exportModuleId || !exportEntityTypeId}
+              disabled={exporting || !exportModuleId || !exportEntityTypeId || !exportFn}
               onclick={handleExport}
             >
               {exporting ? 'Экспорт...' : 'Экспортировать'}

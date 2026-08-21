@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{CompanyId, Id, UserId};
 
-/// Тип потока事件
+/// Тип потока
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamType {

@@ -40,7 +40,7 @@ pub struct ObjectSnapshot {
     pub reason: Option<String>,
 }
 
-/// Результат往后操作
+/// Результат операции
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectPage {
     pub objects: Vec<Object>,
