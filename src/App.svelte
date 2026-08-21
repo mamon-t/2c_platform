@@ -14,6 +14,8 @@
   import ConvertPage from '$lib/components/ConvertPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
+  import ScriptsPage from '$lib/components/ScriptsPage.svelte';
+  import ReportsPage from '$lib/components/ReportsPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -896,6 +898,12 @@
 
       {:else if currentNav === 'numbering'}
         <NumberingPage />
+
+      {:else if currentNav === 'scripts'}
+        <ScriptsPage />
+
+      {:else if currentNav === 'reports'}
+        <ReportsPage />
 
       {:else if currentNav === 'settings'}
         <SettingsPage />
