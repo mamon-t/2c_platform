@@ -15,6 +15,9 @@ pub async fn numbering_list(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<NumberSequence>, String> {
     let state = state.lock().await;
+    if !state.check_access("numbering", None, "read") {
+        return Err("Доступ запрещён: нет права numbering.read".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or("Не выбрана компания")?;
@@ -28,6 +31,9 @@ pub async fn numbering_get(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<Option<NumberSequence>, String> {
     let state = state.lock().await;
+    if !state.check_access("numbering", None, "read") {
+        return Err("Доступ запрещён: нет права numbering.read".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or("Не выбрана компания")?;
@@ -43,6 +49,9 @@ pub async fn numbering_update_format(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<NumberSequence, String> {
     let state = state.lock().await;
+    if !state.check_access("numbering", None, "manage") {
+        return Err("Доступ запрещён: нет права numbering.manage".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or("Не выбрана компания")?;
@@ -57,6 +66,9 @@ pub async fn numbering_reset(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
     let state = state.lock().await;
+    if !state.check_access("numbering", None, "manage") {
+        return Err("Доступ запрещён: нет права numbering.manage".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or("Не выбрана компания")?;

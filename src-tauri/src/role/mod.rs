@@ -144,7 +144,7 @@ impl RoleService {
         let all_policy_ids: Vec<String> = all_policies.iter().map(|p| p._id.to_string()).collect();
 
         let user_policy_ids: Vec<String> = all_policies.iter()
-            .filter(|p| matches!(p.subsystem_code.as_str(), "platform" | "users" | "contacts" | "documents" | "catalogs" | "reports"))
+            .filter(|p| matches!(p.subsystem_code.as_str(), "platform" | "users" | "contacts" | "documents" | "catalogs" | "reports" | "print" | "numbering"))
             .map(|p| p._id.to_string())
             .collect();
 

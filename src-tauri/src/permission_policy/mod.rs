@@ -168,6 +168,15 @@ impl PermissionPolicyService {
             ("audit.read".into(), "Просмотр журнала".into(), "audit".into(), vec!["read".into()], "company".into()),
             ("settings.read".into(), "Просмотр настроек".into(), "settings".into(), vec!["read".into()], "company".into()),
             ("settings.manage".into(), "Управление настройками".into(), "settings".into(), vec!["manage".into()], "company".into()),
+            ("print.read".into(), "Просмотр шаблонов печати".into(), "print".into(), vec!["read".into()], "company".into()),
+            ("print.create".into(), "Создание шаблонов печати".into(), "print".into(), vec!["create".into()], "company".into()),
+            ("print.update".into(), "Изменение шаблонов печати".into(), "print".into(), vec!["update".into()], "company".into()),
+            ("print.delete".into(), "Удаление шаблонов печати".into(), "print".into(), vec!["delete".into()], "company".into()),
+            ("plugins.read".into(), "Просмотр плагинов".into(), "plugins".into(), vec!["read".into()], "company".into()),
+            ("plugins.manage".into(), "Управление плагинами".into(), "plugins".into(), vec!["manage".into()], "company".into()),
+            ("plugins.execute".into(), "Выполнение функций плагинов".into(), "plugins".into(), vec!["execute".into()], "company".into()),
+            ("numbering.read".into(), "Просмотр правил нумерации".into(), "numbering".into(), vec!["read".into()], "company".into()),
+            ("numbering.manage".into(), "Управление нумерацией".into(), "numbering".into(), vec!["manage".into()], "company".into()),
         ]
     }
 

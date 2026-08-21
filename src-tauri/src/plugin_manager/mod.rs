@@ -2,6 +2,7 @@ pub mod commands;
 
 use extism::*;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock};
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -25,20 +26,28 @@ pub struct ModuleInfo {
 pub struct WasmPlugin {
     plugin: Plugin,
     pub info: ModuleInfo,
+    pub ctx: Arc<RwLock<PluginContext>>,
 }
 
-// ── HostData ───────────────────────────────────────────────
+// ── Mutable context (обновляется при каждом plugin_call) ───
+
+#[derive(Clone, Default)]
+pub struct PluginContext {
+    pub company_id: Option<String>,
+    pub user_id: Option<String>,
+    pub user_login: Option<String>,
+    pub display_name: Option<String>,
+}
+
+// ── HostData (только db + общий контекст) ──────────────────
 
 #[derive(Clone)]
 struct HostData {
     db: Option<crate::db::MongoClient>,
-    company_id: Option<String>,
-    user_id: Option<String>,
-    user_login: Option<String>,
-    display_name: Option<String>,
+    ctx: Arc<RwLock<PluginContext>>,
 }
 
-// ── Host functions ─────────────────────────────────────────
+// ── Host functions (читают свежий контекст через Arc) ──────
 
 extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String, data: String) -> String {
     let hd = user_data.get()?.lock().unwrap().clone();
@@ -54,7 +63,9 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
                 Err(e) => return serde_json::json!({"ok": false, "error": format!("Invalid JSON: {}", e)}).to_string(),
             };
 
-            let company_id = match hd.company_id.as_ref() {
+            let ctx = hd.ctx.read().unwrap();
+
+            let company_id = match ctx.company_id.as_ref() {
                 Some(cid) => match uuid::Uuid::parse_str(cid) {
                     Ok(uid) => crate::core::CompanyId(uid),
                     Err(_) => return serde_json::json!({"ok": false, "error": "Invalid company UUID"}).to_string(),
@@ -62,7 +73,7 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
                 None => return serde_json::json!({"ok": false, "error": "No company selected"}).to_string(),
             };
 
-            let user_id = match hd.user_id.as_ref() {
+            let user_id = match ctx.user_id.as_ref() {
                 Some(uid) => match uuid::Uuid::parse_str(uid) {
                     Ok(uuid) => crate::core::UserId(uuid),
                     Err(_) => return serde_json::json!({"ok": false, "error": "Invalid user UUID"}).to_string(),
@@ -72,8 +83,8 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
 
             let actor = crate::events::ActorSnapshot {
                 user_id: user_id.clone(),
-                login: hd.user_login.clone().unwrap_or_default(),
-                full_name: hd.display_name.clone(),
+                login: ctx.user_login.clone().unwrap_or_default(),
+                full_name: ctx.display_name.clone(),
                 position: None,
                 company_id: company_id.clone(),
             };
@@ -103,7 +114,8 @@ extism::host_fn!(list_objects_impl(user_data: HostData; entity_type_id: String, 
                 None => return r#"[]"#.to_string(),
             };
 
-            let company_id = match hd.company_id.as_ref() {
+            let ctx = hd.ctx.read().unwrap();
+            let company_id = match ctx.company_id.as_ref() {
                 Some(cid) => match uuid::Uuid::parse_str(cid) {
                     Ok(uid) => crate::core::CompanyId(uid),
                     Err(_) => return r#"[]"#.to_string(),
@@ -153,16 +165,23 @@ extism::host_fn!(log_message_impl(user_data: HostData; msg: String) -> String {
 // ── WasmPlugin ─────────────────────────────────────────────
 
 impl WasmPlugin {
+    /// Загрузить WASM-модуль с ресурсными лимитами.
+    /// HostData.db клонируется один раз; company_id/user_id читаются
+    /// из Arc<RwLock<PluginContext>> при каждом вызове хост-функции.
     pub fn load(wasm_bytes: Vec<u8>, wasm_name: String, host_data: HostData) -> Result<Self, String> {
-        let manifest = Manifest::new([Wasm::data(wasm_bytes)]);
+        let mut manifest = Manifest::new([Wasm::data(wasm_bytes)]);
+        manifest.timeout_ms = Some(10_000);
+        manifest.memory.max_pages = Some(256);
+
+        let ctx = host_data.ctx.clone();
         let mut plugin = PluginBuilder::new(&manifest)
             .with_function("create_object", [PTR, PTR], [PTR], UserData::new(host_data.clone()), create_object_impl)
             .with_function("list_objects",  [PTR, PTR], [PTR], UserData::new(host_data.clone()), list_objects_impl)
             .with_function("log_message",   [PTR],      [],    UserData::new(host_data.clone()), log_message_impl)
+            .with_fuel_limit(10_000_000)
             .build()
             .map_err(|e| format!("Failed to load plugin: {}", e))?;
 
-        // Call get_info() at load time to discover functions
         let info_json = plugin.call::<&[u8], String>("get_info", b"")
             .map_err(|e| format!("get_info() failed: {}", e))?;
 
@@ -178,12 +197,23 @@ impl WasmPlugin {
         };
 
         tracing::info!(
-            "[Plugin loaded] {} v{} — {} functions: {}",
+            "[Plugin loaded] {} v{} — {} functions: {} (fuel=10M, memory=256 pages, timeout=10s)",
             info.name, info.version, info.functions.len(),
             info.functions.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
         );
 
-        Ok(Self { plugin, info })
+        Ok(Self { plugin, info, ctx })
+    }
+
+    /// Обновить контекст (company_id, user_id) перед вызовом.
+    /// Вызывается из plugin_call с актуальными данными из AppState.
+    pub fn update_context(&self, company_id: Option<String>, user_id: Option<String>, user_login: Option<String>, display_name: Option<String>) {
+        if let Ok(mut ctx) = self.ctx.write() {
+            ctx.company_id = company_id;
+            ctx.user_id = user_id;
+            ctx.user_login = user_login;
+            ctx.display_name = display_name;
+        }
     }
 
     pub fn call(&mut self, function: &str, input: &[u8]) -> Result<Vec<u8>, String> {

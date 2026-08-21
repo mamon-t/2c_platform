@@ -16,6 +16,7 @@ use crate::core::CompanyId;
 use crate::plugin_manager::WasmPlugin;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -69,7 +70,7 @@ pub struct AppState {
     pub current_company_id: Option<String>,
     pub current_role_id: Option<String>,
     pub current_policies: Option<Vec<crate::permission_policy::PermissionPolicy>>,
-    pub wasm_modules: Option<HashMap<String, WasmPlugin>>,
+    pub wasm_modules: Option<HashMap<String, Arc<std::sync::Mutex<WasmPlugin>>>>,
 }
 
 impl AppState {
@@ -770,13 +771,21 @@ pub async fn delete_role(id: String, state: State<'_, Mutex<AppState>>) -> Resul
 // ── Rhai ──────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn validate_rhai_script(source: String) -> Result<(), String> {
+pub async fn validate_rhai_script(source: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
+    let state = state.lock().await;
+    if !state.check_access("scripts", None, "read") {
+        return Err("Доступ запрещён: нет права scripts.read".into());
+    }
     let sandbox = Sandbox::new(5000, 10000);
     sandbox.validate(&source).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn execute_rhai_script(source: String, context: String) -> Result<serde_json::Value, String> {
+pub async fn execute_rhai_script(source: String, context: String, state: State<'_, Mutex<AppState>>) -> Result<serde_json::Value, String> {
+    let state = state.lock().await;
+    if !state.check_access("scripts", None, "execute") {
+        return Err("Доступ запрещён: нет права scripts.execute".into());
+    }
     let sandbox = Sandbox::new(5000, 10000);
     sandbox.execute(&source, &context).map_err(|e| e.to_string())
 }

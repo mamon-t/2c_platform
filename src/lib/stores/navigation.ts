@@ -19,8 +19,8 @@ export const allNavItems: NavItem[] = [
   { code: 'reports', label: 'Отчёты', icon: 'fa-solid fa-chart-bar', path: '/reports', requiredPermission: { subsystem: 'reports', action: 'read' } },
   { code: 'scripts', label: 'Скрипты', icon: 'fa-solid fa-code', path: '/scripts', requiredPermission: { subsystem: 'scripts', action: 'read' } },
   { code: 'audit', label: 'Журнал', icon: 'fa-solid fa-clock-rotate-left', path: '/audit', requiredPermission: { subsystem: 'audit', action: 'read' } },
-  { code: 'convert', label: 'Конвертация', icon: 'fa-solid fa-right-left', path: '/convert', requiredPermission: { subsystem: 'settings', action: 'manage' } },
-  { code: 'print', label: 'Печатные формы', icon: 'fa-solid fa-print', path: '/print', requiredPermission: { subsystem: 'settings', action: 'manage' } },
-  { code: 'numbering', label: 'Нумерация', icon: 'fa-solid fa-hashtag', path: '/numbering', requiredPermission: { subsystem: 'settings', action: 'manage' } },
+  { code: 'convert', label: 'Конвертация', icon: 'fa-solid fa-right-left', path: '/convert', requiredPermission: { subsystem: 'plugins', action: 'read' } },
+  { code: 'print', label: 'Печатные формы', icon: 'fa-solid fa-print', path: '/print', requiredPermission: { subsystem: 'print', action: 'read' } },
+  { code: 'numbering', label: 'Нумерация', icon: 'fa-solid fa-hashtag', path: '/numbering', requiredPermission: { subsystem: 'numbering', action: 'read' } },
   { code: 'settings', label: 'Настройки', icon: 'fa-solid fa-gear', path: '/settings', requiredPermission: { subsystem: 'settings', action: 'manage' } },
 ];

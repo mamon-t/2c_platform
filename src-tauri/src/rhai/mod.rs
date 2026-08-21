@@ -44,7 +44,8 @@ impl Sandbox {
     }
 
     pub fn execute(&self, source: &str, context: &str) -> PlatformResult<serde_json::Value> {
-        let engine = Engine::new();
+        let mut engine = Engine::new();
+        engine.set_max_operations(self.max_ops);
         let mut scope = Scope::new();
 
         let result = engine
@@ -56,7 +57,8 @@ impl Sandbox {
     }
 
     pub fn validate(&self, source: &str) -> PlatformResult<()> {
-        let engine = Engine::new();
+        let mut engine = Engine::new();
+        engine.set_max_operations(self.max_ops);
         engine
             .compile(source)
             .map_err(|e| PlatformError::Script(format!("Ошибка компиляции: {e}")))?;

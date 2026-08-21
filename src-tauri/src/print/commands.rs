@@ -17,6 +17,9 @@ pub async fn print_list_templates(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<PrintTemplate>, String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "read") {
+        return Err("Доступ запрещён: нет права print.read".into());
+    }
     let db = get_db!(state);
     PrintService::list(db, &entity_type, form_code.as_deref()).await.map_err(|e| e.to_string())
 }
@@ -27,6 +30,9 @@ pub async fn print_get_template(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<PrintTemplate, String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "read") {
+        return Err("Доступ запрещён: нет права print.read".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     PrintService::get(db, uid).await.map_err(|e| e.to_string())
@@ -38,6 +44,9 @@ pub async fn print_create_template(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<PrintTemplate, String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "create") {
+        return Err("Доступ запрещён: нет права print.create".into());
+    }
     let db = get_db!(state);
     let user = state.current_user.as_ref().map(|u| u._id.to_string());
     PrintService::create(db, input, user).await.map_err(|e| e.to_string())
@@ -50,6 +59,9 @@ pub async fn print_update_template(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<PrintTemplate, String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "update") {
+        return Err("Доступ запрещён: нет права print.update".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     PrintService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -61,6 +73,9 @@ pub async fn print_delete_template(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "delete") {
+        return Err("Доступ запрещён: нет права print.delete".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     PrintService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -73,6 +88,9 @@ pub async fn print_render(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<String, String> {
     let state = state.lock().await;
+    if !state.check_access("print", None, "read") {
+        return Err("Доступ запрещён: нет права print.read".into());
+    }
     let db = get_db!(state);
     let tid = uuid::Uuid::parse_str(&template_id).map_err(|e| e.to_string())?;
     let oid = uuid::Uuid::parse_str(&object_id).map_err(|e| e.to_string())?;
