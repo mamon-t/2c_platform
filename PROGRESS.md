@@ -103,7 +103,7 @@
 
 ## Этап 4: Event Store (ядро «Труба и Доски») ✅
 **Дата:** 20.08.2026
-**Коммит:** (текущий)
+**Коммит:** 6aa0818
 
 ### Что сделано
 - **Event модель** — полная структура Event (append-only):
@@ -127,11 +127,9 @@
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
 
-### Следующий шаг
-- F2: Метаданные (entity_types, entity_fields, entity_states, entity_transitions, entity_forms, entity_actions)
-
 ## Этап 5: Метаданные (описание сущностей) ✅
 **Дата:** 20.08.2026
+**Коммит:** 2c88c4b
 
 ### Что сделано
 - **6 коллекций метаданных**:
@@ -165,6 +163,7 @@
 
 ## Этап 6: Objects («Доска» — универсальная коллекция) ✅
 **Дата:** 20.08.2026
+**Коммит:** f33f152
 
 ### Что сделано
 - **Object модель** — универсальная коллекция для всех сущностей:
@@ -185,6 +184,7 @@
 
 ## Этап 7: Динамический UI (генерация форм из метаданных) ✅
 **Дата:** 20.08.2026
+**Коммит:** 8261b20
 
 ### Что сделано
 - **ObjectEditor.svelte** — динамическая форма из entity_fields:
@@ -205,6 +205,7 @@
 
 ## Этап 8: Конвертация данных (WASM-модуль на Extism) ✅
 **Дата:** 20.08.2026
+**Коммит:** c1f3d73 + 56d8c31 (refactor)
 
 ### Что сделано
 - **WASM Plugin** (wasm-modules/convert/) — Extism PDK на Rust:
@@ -236,3 +237,113 @@
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
 - WASM plugin: компилируется (620KB) ✅
+
+## Этап 9: Печать + Рефакторинг плагинов + Нумерация ✅
+**Дата:** 20.08.2026
+**Коммиты:** b7e60cd (F6), ba15ae7 (F7), ca4c15d (F8)
+
+### F6: Print Forms Engine v0.1
+- **PrintService** — шаблонизатор для печатных форм (Handlebars-подобный синтаксис)
+- Подстановка полей объекта: `{{data.field_name}}`, `{{number}}`, `{{date}}`
+- Подстановка метаданных: `{{entity_type.code}}`, `{{state}}`
+- Табличные данные: `{{#each rows}}...{{/each}}`
+- Условия: `{{#if data.sum}}...{{/if}}`
+- IPC команды: render_print_form, list_print_forms
+- Frontend: PrintPage.svelte — форма редактирования шаблона + превью рендера в реальном времени
+
+### F7: Архитектура плагинов (рефакторинг)
+- **PluginManager** выделен из convert в отдельный модуль (`src-tauri/src/plugin_manager/`)
+- WASM runtime (Extism) обобщён для любых плагинов, не только конвертации
+- Host function `plugin_call` — плагины могут вызывать функции ядра (create_object, get_object, list_objects)
+- Плагины самодескрибирующиеся: JSON-описание `plugin_info()` при загрузке
+- Старые команды convert переименованы в `wasm_load`, `wasm_unload`, `wasm_list`, `plugin_call`
+
+### F8: Нумерация документов
+- **NumberingService** — атомарный генератор номеров через MongoDB `findOneAndUpdate` с `upsert`
+- Формат номера: `{company_prefix}-{entity_code}-{seq:6}` (например `MAIN-DOCA-000001`)
+- Формат настраивается per entity_type per company
+- Счётчик хранится в коллекции `number_sequences`
+- Транзакционная версия: `next_number_with_session()` для использования внутри ObjectService
+- IPC команды: get_numbering_rules, update_numbering_rule, reset_numbering_counter, preview_next_number
+- Frontend: NumberingPage.svelte — таблица правил нумерации, сброс счётчика, превью следующего номера
+
+## Этап 10: MongoDB Transactions + Валидация данных ✅
+**Дата:** 20.08.2026
+**Коммит:** 2526322
+
+### Что сделано
+- **Транзакции MongoDB** — все 5 мутаций объектов (create, update, post, cancel, restore_version) обёрнуты в `session.start_transaction()` → операции → `session.commit_transaction()`:
+  - Запись события (EventStore), создание/обновление снапшота, инкремент номера — атомарно
+  - При ошибке — `session.abort_transaction()` (rollback)
+  - Приватные `*_inner()` методы для каждого типа мутации (избегание async closure проблем)
+- **Валидация данных** (`objects/validation.rs`):
+  - Проверка `is_required` — обязательные поля
+  - Проверка `is_readonly` — запрет изменения защищённых полей
+  - Проверка типов: 18 типов полей (string, text, integer, money, float, percent, date, datetime, boolean, email, phone, url, reference, enum, table, json, file, formula)
+  - Валидация `enum_values` — допустимые значения
+  - `validate_field_value()` — валидация одного поля по EntityField
+  - `validate_data()` — валидация всех полей объекта
+- **Транзакционная нумерация** — `next_number_with_session()` использует сессию для атомарного инкремента внутри транзакции
+- **Публичный `MongoClient::client()`** — прокси для `start_session()` из модуля db
+- **Составные индексы** — добавлен индекс `entity_type_id + company_id + updated_at` для高效的 list_by_type+company
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
+
+## Этап 11: Полный RBAC для Object Operations ✅
+**Дата:** 20.08.2026
+**Коммит:** 791894c
+
+### Что сделано
+- **PermissionPolicyService::check_access()** — deny-by-default проверка прав:
+  - Приоритет: deny-политики имеют приоритет над allow
+  - Wildcard entity_type: политика с `entity_type: None` применяется ко всем типам
+  - Tracing логирование каждого решения (allow/deny + причина)
+- **AppState.current_policies** — кэш политик, загружается при `authenticate` и `switch_company`
+  - `RoleService::get_policies(db, &role)` разрешает role.permission_policy_ids → Vec<PermissionPolicy>
+- **RBAC в 8 object commands:**
+  - `list_objects` / `get_object` → `documents.read`
+  - `create_object` → `documents.create`
+  - `update_object` → `documents.update`
+  - `post_object` → `documents.approve`
+  - `cancel_object` → `documents.cancel`
+  - `restore_object_version` → `documents.update`
+  - `list_object_versions` → `documents.read`
+- **Владение компанией** — `get_object` и `list_object_versions` проверяют `company_id` объекта (нельзя читать объекты другой компании)
+- **Frontend RBAC:**
+  - Кнопка «Создать» скрыта без `documents.create`
+  - Кнопка «Сохранить» скрыта без `documents.update`
+  - Кнопка «Восстановить» скрыта без `documents.update`
+  - Кнопки переходов фильтруются по `documents.approve` / `documents.cancel`
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
+
+## Этап 12: Аудит объектов + Логирование индексов + Events tracing ✅
+**Дата:** 21.08.2026
+**Коммиты:** b0fb1b3, f6f589b
+
+### Что сделано
+
+#### Аудит Object Operations
+- **RestoreDocument** — новый AuditableAction (label: «Восстановление документа», icon: `fa-clock-rotate-left`)
+- `audit_log!` добавлен во все 5 mutable object commands:
+  - `create_object` → `CreateDocument`
+  - `update_object` → `UpdateDocument`
+  - `post_object` → `PostDocument`
+  - `cancel_object` → `CancelDocument`
+  - `restore_version` → `RestoreDocument`
+
+#### Index Error Handling
+- Все `let _ = collection.create_index(...)` заменены на `if let Err(e) = ... { warn!(...) }`
+- 4 файла indexes (objects, events, audit, meta) — теперь каждая ошибка создания индекса логируется с описанием коллекции и имени индекса
+
+#### Events Debug Tracing
+- `EventService::append` — добавлен `debug!` с event_id, actor_login, payload_keys
+- `EventService::append_with_session` — добавлен `info!` + `debug!` (раньше не логировался вообще)
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
