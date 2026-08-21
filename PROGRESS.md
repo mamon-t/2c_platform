@@ -403,3 +403,33 @@
 ### Проверки
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
+
+## Этап 14: Страницы Скрипты и Отчёты + ObjectEditor-фикс ✅
+**Дата:** 21.08.2026
+**Коммиты:** f76d4f1 (ObjectEditor), 1b14973 (Scripts+Reports)
+
+### ObjectEditor — полировка
+- `$derived(() => {...})` → `$derived.by(() => {...})` (рекомендация Svelte 5)
+- Save: кнопка активна для состояний draft + active (было только draft)
+- Required валидация: обязательные поля проверяются перед сохранением
+- Confirmation: диалог подтверждения для post/cancel/restore
+- Все 17 типов полей работают: array, table, json (textarea), user, company (text input), formula/computed (read-only display), reference (select dropdown с lookup)
+
+### ScriptsPage.svelte
+- Rhai-редактор с подсчётом строк
+- Кнопка «Валидировать» → validate_rhai_script
+- Кнопка «Выполнить» → execute_rhai_script
+- Панель контекста (JSON) + результат + лог
+- RBAC: execute permission
+- Справочник по API контекста
+
+### ReportsPage.svelte
+- Сводные карточки: всего объектов, типов, черновиков, проведено
+- Разбивка по состояниям (bar chart)
+- Разбивка по типам объектов (bar chart)
+- Таблица последних 10 объектов
+- Auto-refresh
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
