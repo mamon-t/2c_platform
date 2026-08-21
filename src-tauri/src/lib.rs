@@ -8,6 +8,7 @@ mod db;
 mod events;
 mod ledger;
 mod meta;
+mod modules;
 mod notify;
 mod objects;
 mod numbering;
@@ -127,6 +128,13 @@ pub fn run() {
             numbering::commands::numbering_get,
             numbering::commands::numbering_update_format,
             numbering::commands::numbering_reset,
+            modules::commands::modules_list,
+            modules::commands::modules_get,
+            modules::commands::modules_install,
+            modules::commands::modules_uninstall,
+            modules::commands::modules_enable,
+            modules::commands::modules_disable,
+            modules::commands::modules_update_settings,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

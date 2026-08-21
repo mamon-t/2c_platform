@@ -472,6 +472,24 @@ export interface WasmModuleInfo {
   functions: PluginFunction[];
 }
 
+export type ModuleStatus = 'installed' | 'enabled' | 'disabled';
+
+export interface InstalledModule {
+  _id: string;
+  code: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  api_version: string;
+  capabilities: string[];
+  functions: PluginFunction[];
+  status: ModuleStatus;
+  manifest: Record<string, unknown>;
+  installed_at: string;
+  updated_at: string;
+}
+
 export const OBJECT_STATE_META: Record<ObjectStateTS, { label: string; icon: string; color: string }> = {
   draft:     { label: 'Черновик', icon: 'fa-solid fa-pencil', color: 'bg-surface-400' },
   active:    { label: 'Активный', icon: 'fa-solid fa-check', color: 'bg-primary-500' },
@@ -851,5 +869,28 @@ export const api = {
   },
   async numberingReset(entityTypeId: string, newValue?: number): Promise<void> {
     return getAdapter().invoke<void>('numbering_reset', { entityTypeId, new_value: newValue ?? null });
+  },
+
+  // ── Прикладные модули (WASM) ──
+  async modulesList(): Promise<InstalledModule[]> {
+    return getAdapter().invoke<InstalledModule[]>('modules_list');
+  },
+  async modulesGet(moduleId: string): Promise<InstalledModule> {
+    return getAdapter().invoke<InstalledModule>('modules_get', { moduleId });
+  },
+  async modulesInstall(wasmBytes: number[]): Promise<InstalledModule> {
+    return getAdapter().invoke<InstalledModule>('modules_install', { input: { wasm_bytes: wasmBytes } });
+  },
+  async modulesUninstall(moduleId: string): Promise<void> {
+    return getAdapter().invoke<void>('modules_uninstall', { moduleId });
+  },
+  async modulesEnable(moduleId: string): Promise<void> {
+    return getAdapter().invoke<void>('modules_enable', { moduleId });
+  },
+  async modulesDisable(moduleId: string): Promise<void> {
+    return getAdapter().invoke<void>('modules_disable', { moduleId });
+  },
+  async modulesUpdateSettings(moduleId: string, settings: Record<string, unknown>): Promise<void> {
+    return getAdapter().invoke<void>('modules_update_settings', { moduleId, settings });
   },
 };

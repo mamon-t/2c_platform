@@ -11,7 +11,7 @@
   import EventsPage from '$lib/components/EventsPage.svelte';
   import MetadataPage from '$lib/components/MetadataPage.svelte';
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
-  import ConvertPage from '$lib/components/ConvertPage.svelte';
+  import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
   import ScriptsPage from '$lib/components/ScriptsPage.svelte';
@@ -890,8 +890,8 @@
       {:else if currentNav === 'audit'}
         <AuditPage />
 
-      {:else if currentNav === 'convert'}
-        <ConvertPage />
+      {:else if currentNav === 'modules'}
+        <ModulesPage />
 
       {:else if currentNav === 'print'}
         <PrintPage />

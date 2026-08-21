@@ -433,3 +433,112 @@
 ### Проверки
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
+
+---
+
+## Этап 15: Прикладные модули (WASM) — Инфраструктура
+
+**Коммит: в прогрессе**
+
+### Задача
+Построить инфраструктуру для прикладных WASM-модулей с:
+- Capability-based безопасностью
+- Per-company lifecycle (install → enable/disable → uninstall)
+- MongoDB persistence (модули + привязки к компаниям)
+- Полным API хост-функций для работы с объектами, метаданными, логированием
+- UI для управления модулями
+
+### Архитектура API
+
+#### Capability System
+- Модуль декларирует capabilities в манифесте (через `get_info()`)
+- Хост проверяет capability при каждом вызове host-функции
+- `required_capability()` — маппинг: имя функции → требуемая capability
+
+#### Допустимые capabilities
+```
+objects.create, objects.read, objects.update, objects.delete,
+metadata.read, events.emit, numbering.next, logging, notifications
+```
+
+#### API Versioning
+- `CURRENT_API_VERSION = "1.0"` — проверяется при установке
+- Модуль указывает `api_version` в манифесте; если версия не совместима — установка блокируется
+
+#### Host Functions (7 шт., расширяемые)
+| Функция | Capability | Описание |
+|---|---|---|
+| `create_object` | objects.create | Создание объекта |
+| `list_objects` | objects.read | Список объектов (с пагинацией) |
+| `get_object` | objects.read | Получение объекта по UUID |
+| `update_object` | objects.update | Обновление данных объекта |
+| `log_message` | logging | Логирование сообщения |
+| `get_entity_type` | metadata.read | Получение типа сущности |
+| `list_entity_fields` | metadata.read | Список полей типа сущности |
+
+> Планируются: `emit_event`, `next_number`, `notify_user`
+
+#### Structured Error Responses
+```json
+{ "ok": false, "error": { "code": "CAPABILITY_DENIED", "message": "..." } }
+```
+
+### Реализовано
+
+#### Backend (Rust)
+
+**`src-tauri/src/modules/mod.rs`** — Типы и константы
+- `InstalledModule` — BSON документ в коллекции `modules`
+- `CompanyModule` — привязка модуля к компании (включение/отключение + настройки)
+- `ModuleManifest` — манифест из `get_info()`
+- `ModuleStatus` — `installed | enabled | disabled`
+- `VALID_CAPABILITIES` — белый список capabilities
+- `required_capability()` — маппинг функций на capabilities
+- `CURRENT_API_VERSION = "1.0"`
+- Error helpers: `module_not_found`, `already_installed`, `capability_denied`, `api_version_mismatch`, `invalid_manifest`
+
+**`src-tauri/src/modules/service.rs`** — CRUD + lifecycle
+- `ModuleService::install` — валидация WASM → сохранение в MongoDB
+- `ModuleService::uninstall` — удаление модуля + company привязок
+- `ModuleService::enable/disable` — per-company lifecycle
+- `ModuleService::list` — все модули с merged статусом из company_modules
+- `ModuleService::get/get_by_code` — чтение модуля
+- `ModuleService::update_settings` — per-company настройки
+
+**`src-tauri/src/modules/indexes.rs`** — MongoDB индексы
+- `modules.code` (уникальный), `modules.api_version`
+- `company_modules.company_id + module_id` (уникальный), `company_modules.company_id`
+
+**`src-tauri/src/modules/commands.rs`** — 7 IPC команд
+- `modules_list`, `modules_get`, `modules_install`, `modules_uninstall`
+- `modules_enable`, `modules_disable`, `modules_update_settings`
+
+**`src-tauri/src/plugin_manager/mod.rs`** — Переписан
+- `HostData` с `module_code` + `capabilities`
+- 7 host-функций с capability checks + structured error responses
+- `WasmPlugin::load()` async
+- Fuel: 10M, Memory: 256 pages, Timeout: 10s
+
+**`src-tauri/src/plugin_manager/commands.rs`** — Переписан
+- `wasm_load` принимает `capabilities: Vec<String>`
+- Async загрузка `WasmPlugin::load`
+
+**`src-tauri/src/lib.rs`** — `mod modules` + 7 команд в generate_handler
+**`src-tauri/src/commands/mod.rs`** — `modules::indexes::ensure_indexes` при подключении
+
+#### Frontend (TypeScript/Svelte)
+
+**`src/lib/services/api.ts`** — `InstalledModule`, `ModuleStatus`, 7 API-методов
+
+**`src/lib/components/ModulesPage.svelte`** — UI управления модулями
+- Карточки модулей с expanded details (capabilities, functions)
+- Upload WASM-файла для установки
+- Enable/Disable/Uninstall
+- RBAC: plugins.read / plugins.manage
+
+**`src/lib/stores/navigation.ts`** — `convert` → `modules` (Прикладные модули)
+**`src/App.svelte`** — Routes: `ModulesPage` вместо `ConvertPage`
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅

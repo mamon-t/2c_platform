@@ -11,27 +11,28 @@ const PLUGIN_TIMEOUT_MS: u64 = 30_000;
 pub async fn wasm_load(
     wasm_bytes: Vec<u8>,
     name: String,
+    capabilities: Vec<String>,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<ModuleInfo, String> {
-    let ctx = {
+    let (ctx, db) = {
         let s = state.lock().await;
-        Arc::new(RwLock::new(PluginContext {
+        let ctx = Arc::new(RwLock::new(PluginContext {
             company_id: s.current_company_id.clone(),
             user_id: s.current_user.as_ref().map(|u| u._id.to_string()),
             user_login: s.current_user.as_ref().map(|u| u.login.clone()),
             display_name: s.current_user.as_ref().map(|u| u.display_name.clone()),
-        }))
+        }));
+        (ctx, s.db.clone())
     };
 
     let host_data = HostData {
-        db: {
-            let s = state.lock().await;
-            s.db.clone()
-        },
+        db,
         ctx: ctx.clone(),
+        module_code: Some(name.clone()),
+        capabilities: capabilities.clone(),
     };
 
-    let wasm_plugin = WasmPlugin::load(wasm_bytes, name, host_data)?;
+    let wasm_plugin = WasmPlugin::load(wasm_bytes, name, host_data).await?;
     let info = wasm_plugin.info.clone();
     let plugin_arc = Arc::new(StdMutex::new(wasm_plugin));
 
@@ -51,7 +52,7 @@ pub async fn wasm_unload(
 ) -> Result<(), String> {
     let mut s = state.lock().await;
     if let Some(ref mut modules) = s.wasm_modules {
-        modules.remove(&module_id).ok_or_else(|| format!("Module {} not found", module_id))?;
+        modules.remove(&module_id).ok_or_else(|| format!("Модуль {} не найден", module_id))?;
     }
     Ok(())
 }
@@ -76,9 +77,9 @@ pub async fn plugin_call(
 ) -> Result<String, String> {
     let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display) = {
         let s = state.lock().await;
-        let modules = s.wasm_modules.as_ref().ok_or("No WASM modules loaded")?;
+        let modules = s.wasm_modules.as_ref().ok_or("Нет загруженных WASM-модулей")?;
         let arc = modules.get(&module_id)
-            .ok_or_else(|| format!("Module {} not found", module_id))?
+            .ok_or_else(|| format!("Модуль {} не найден", module_id))?
             .clone();
         let company = s.current_company_id.clone();
         let uid = s.current_user.as_ref().map(|u| u._id.to_string());
@@ -101,16 +102,16 @@ pub async fn plugin_call(
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(PLUGIN_TIMEOUT_MS),
         tokio::task::spawn_blocking(move || {
-            let mut plugin = plugin_arc.lock().map_err(|e| format!("Plugin lock poisoned: {}", e))?;
+            let mut plugin = plugin_arc.lock().map_err(|e| format!("Ошибка блокировки плагина: {}", e))?;
             let output = plugin.call(&function_clone, args_json.as_bytes())?;
-            String::from_utf8(output).map_err(|e| format!("UTF-8 decode error: {}", e))
+            String::from_utf8(output).map_err(|e| format!("UTF-8 ошибка: {}", e))
         })
     ).await;
 
     match result {
         Ok(Ok(Ok(output))) => Ok(output),
         Ok(Ok(Err(e))) => Err(e),
-        Ok(Err(join_err)) => Err(format!("Plugin task panicked: {}", join_err)),
-        Err(_) => Err(format!("Plugin '{}' timed out after {}ms", function, PLUGIN_TIMEOUT_MS)),
+        Ok(Err(join_err)) => Err(format!("Паника в плагине: {}", join_err)),
+        Err(_) => Err(format!("Плагин '{}' таймаут {}ms", function, PLUGIN_TIMEOUT_MS)),
     }
 }
