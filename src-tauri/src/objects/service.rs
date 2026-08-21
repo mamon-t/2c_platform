@@ -1,11 +1,14 @@
+use chrono::Utc;
 use futures::StreamExt;
 use mongodb::bson::{doc, Document};
 use tracing::info;
 
 use super::*;
+use super::validation::validate_data;
 use crate::core::{CompanyId, PlatformError, PlatformResult, UserId};
 use crate::db::MongoClient;
 use crate::events::{EventService, StreamType, ActorSnapshot};
+use crate::meta::service::EntityFieldService;
 
 const COLLECTION: &str = "objects";
 const SNAPSHOTS: &str = "object_snapshots";
@@ -13,7 +16,7 @@ const SNAPSHOTS: &str = "object_snapshots";
 pub struct ObjectService;
 
 impl ObjectService {
-    /// Создать объект. version = 1, state = Draft
+    /// Создать объект. version = 1, state = Draft. Валидация data + транзакция.
     pub async fn create(
         db: &MongoClient,
         input: CreateObjectInput,
@@ -24,7 +27,6 @@ impl ObjectService {
         let et_id = uuid::Uuid::parse_str(&input.entity_type_id)
             .map_err(|_| PlatformError::Validation("Невалидный entity_type_id".into()))?;
 
-        // Определяем kind из entity_type
         let et_col = db.collection::<Document>("entity_types");
         let et_doc = et_col.find_one(doc! { "_id": input.entity_type_id.clone() }).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
@@ -33,18 +35,54 @@ impl ObjectService {
             .unwrap_or("document")
             .to_string();
 
+        let fields = EntityFieldService::list_by_type(db, et_id).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        if !fields.is_empty() {
+            validate_data(&input.data, &fields, false)?;
+        }
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        let result = Self::create_inner(db, &mut session, &input, &company_id, &user_id, &actor, &kind).await;
+
+        match result {
+            Ok(obj) => {
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+                info!("Object created: {} ({})", obj._id, obj.entity_type_id);
+                Ok(obj)
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
+                Err(e)
+            }
+        }
+    }
+
+    async fn create_inner(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        input: &CreateObjectInput,
+        company_id: &CompanyId,
+        user_id: &UserId,
+        actor: &ActorSnapshot,
+        kind: &str,
+    ) -> PlatformResult<Object> {
         let now = Utc::now();
         let obj = Object {
             _id: uuid::Uuid::new_v4(),
-            entity_type_id: input.entity_type_id,
-            kind,
+            entity_type_id: input.entity_type_id.clone(),
+            kind: kind.to_string(),
             company_id: company_id.clone(),
             state: ObjectState::Draft,
             data: input.data.clone(),
             computed: None,
             number: None,
-            date: input.date,
-            parent_id: input.parent_id,
+            date: input.date.clone(),
+            parent_id: input.parent_id.clone(),
             version: 1,
             created_by: user_id.clone(),
             updated_by: user_id.clone(),
@@ -52,14 +90,13 @@ impl ObjectService {
             updated_at: now,
         };
 
-        let mut doc = serialize_object(&obj)?;
-        db.collection::<Document>(COLLECTION).insert_one(doc).await
+        let doc = serialize_object(&obj)?;
+        db.collection::<Document>(COLLECTION).insert_one(doc)
+            .session(&mut *session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
 
-        // Сохраняем снимок версии 1
-        save_snapshot(db, &obj, user_id, Some("Создание объекта".into())).await?;
+        save_snapshot_with_session(db, session, &obj, user_id.clone(), Some("Создание объекта".into())).await?;
 
-        // Записываем событие
         let svc = EventService::new();
         let payload = serde_json::json!({
             "entity_type_id": obj.entity_type_id,
@@ -67,9 +104,8 @@ impl ObjectService {
             "state": "draft",
             "data": obj.data,
         });
-        let _ = svc.append(db, StreamType::Object, &obj._id.to_string(), "object.created", payload, actor, company_id, None, None).await;
+        let _ = svc.append_with_session(db, session, StreamType::Object, &obj._id.to_string(), "object.created", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        info!("Object created: {} ({})", obj._id, obj.entity_type_id);
         Ok(obj)
     }
 
@@ -79,10 +115,10 @@ impl ObjectService {
         let doc = col.find_one(doc! { "_id": id.to_string() }).await
             .map_err(|e| PlatformError::Database(e.to_string()))?
             .ok_or_else(|| PlatformError::NotFound(format!("Объект {id} не найден")))?;
-        deserialize_object(&doc).map_err(|e| PlatformError::NotFound(e))
+        deserialize_object(&doc).map_err(PlatformError::NotFound)
     }
 
-    /// Обновить данные объекта (оптимистичная блокировка по version)
+    /// Обновить данные объекта (оптимистичная блокировка по version). Валидация + транзакция.
     pub async fn update(
         db: &MongoClient,
         id: uuid::Uuid,
@@ -93,13 +129,49 @@ impl ObjectService {
     ) -> PlatformResult<Object> {
         let old = Self::get(db, id).await?;
 
-        // Проверяем version
         if input.version != old.version {
             return Err(PlatformError::Validation(
                 format!("Конфликт версий: ожидается v{}, получен v{}", old.version, input.version)
             ));
         }
 
+        let et_id = uuid::Uuid::parse_str(&old.entity_type_id)
+            .map_err(|_| PlatformError::Validation("Невалидный entity_type_id".into()))?;
+        let fields = EntityFieldService::list_by_type(db, et_id).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        if !fields.is_empty() {
+            validate_data(&input.data, &fields, true)?;
+        }
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        let result = Self::update_inner(db, &mut session, &old, &input, &user_id, &actor, &company_id).await;
+
+        match result {
+            Ok(obj) => {
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+                Ok(obj)
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
+                Err(e)
+            }
+        }
+    }
+
+    async fn update_inner(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        old: &Object,
+        input: &UpdateObjectInput,
+        user_id: &UserId,
+        actor: &ActorSnapshot,
+        company_id: &CompanyId,
+    ) -> PlatformResult<Object> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -110,34 +182,34 @@ impl ObjectService {
             "updated_by": user_id.0.to_string(),
             "updated_at": mongodb::bson::to_bson(&now).unwrap(),
         };
-        let result = col.update_one(doc! { "_id": id.to_string(), "version": input.version }, doc! { "$set": set }).await
+        let result = col.update_one(doc! { "_id": old._id.to_string(), "version": input.version }, doc! { "$set": set })
+            .session(&mut *session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
 
         if result.matched_count == 0 {
             return Err(PlatformError::Validation("Конфликт версий: объект был изменён другим пользователем".into()));
         }
 
-        // Сохраняем снимок
         let mut updated = old.clone();
         updated.data = input.data.clone();
         updated.version = new_version;
         updated.updated_by = user_id.clone();
         updated.updated_at = now;
-        save_snapshot(db, &updated, user_id, input.reason).await?;
 
-        // Событие
+        save_snapshot_with_session(db, session, &updated, user_id.clone(), input.reason.clone()).await?;
+
         let svc = EventService::new();
         let payload = serde_json::json!({
             "version": new_version,
             "data": input.data,
             "state": format!("{:?}", updated.state).to_lowercase(),
         });
-        let _ = svc.append(db, StreamType::Object, &id.to_string(), "object.updated", payload, actor, company_id, None, None).await;
+        let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.updated", payload, actor.clone(), company_id.clone(), None, None).await;
 
         Ok(updated)
     }
 
-    /// Провести объект (Draft → Posted). Номер присваивается атомарно.
+    /// Провести объект (Draft → Posted). Номер присваивается атомарно в транзакции.
     pub async fn post(
         db: &MongoClient,
         id: uuid::Uuid,
@@ -154,9 +226,40 @@ impl ObjectService {
             return Err(PlatformError::Validation("Конфликт версий".into()));
         }
 
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        let result = Self::post_inner(db, &mut session, &old, &user_id, &actor, &company_id).await;
+
+        match result {
+            Ok(obj) => {
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+                info!("Object posted: {} → №{}", id, obj.number.as_deref().unwrap_or("?"));
+                Ok(obj)
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
+                Err(e)
+            }
+        }
+    }
+
+    async fn post_inner(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        old: &Object,
+        user_id: &UserId,
+        actor: &ActorSnapshot,
+        company_id: &CompanyId,
+    ) -> PlatformResult<Object> {
         let new_version = old.version + 1;
         let now = Utc::now();
-        let number = generate_number(db, &old.entity_type_id, &company_id).await?;
+        let number = crate::numbering::NumberingService::next_number_with_session(
+            db, session, company_id, &old.entity_type_id, &old.entity_type_id,
+        ).await?;
 
         let col = db.collection::<Document>(COLLECTION);
         let set = doc! {
@@ -166,17 +269,18 @@ impl ObjectService {
             "updated_by": user_id.0.to_string(),
             "updated_at": mongodb::bson::to_bson(&now).unwrap(),
         };
-        col.update_one(doc! { "_id": id.to_string(), "version": version }, doc! { "$set": set }).await
+        col.update_one(doc! { "_id": old._id.to_string(), "version": old.version }, doc! { "$set": set })
+            .session(&mut *session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
 
-        let mut updated = old;
+        let mut updated = old.clone();
         updated.state = ObjectState::Posted;
         updated.version = new_version;
         updated.number = Some(number.clone());
         updated.updated_by = user_id.clone();
         updated.updated_at = now;
 
-        save_snapshot(db, &updated, user_id, Some(format!("Проведён. Номер: {number}"))).await?;
+        save_snapshot_with_session(db, session, &updated, user_id.clone(), Some(format!("Проведён. Номер: {number}"))).await?;
 
         let svc = EventService::new();
         let payload = serde_json::json!({
@@ -184,13 +288,12 @@ impl ObjectService {
             "version": new_version,
             "state": "posted",
         });
-        let _ = svc.append(db, StreamType::Object, &id.to_string(), "object.posted", payload, actor, company_id, None, None).await;
+        let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.posted", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        info!("Object posted: {} → №{}", id, updated.number.as_deref().unwrap_or("?"));
         Ok(updated)
     }
 
-    /// Отменить проведение (Posted → Cancelled)
+    /// Отменить проведение (Posted → Cancelled). Транзакция.
     pub async fn cancel(
         db: &MongoClient,
         id: uuid::Uuid,
@@ -207,6 +310,34 @@ impl ObjectService {
             return Err(PlatformError::Validation("Конфликт версий".into()));
         }
 
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        let result = Self::cancel_inner(db, &mut session, &old, &user_id, &actor, &company_id).await;
+
+        match result {
+            Ok(obj) => {
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+                Ok(obj)
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
+                Err(e)
+            }
+        }
+    }
+
+    async fn cancel_inner(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        old: &Object,
+        user_id: &UserId,
+        actor: &ActorSnapshot,
+        company_id: &CompanyId,
+    ) -> PlatformResult<Object> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -217,25 +348,26 @@ impl ObjectService {
             "updated_by": user_id.0.to_string(),
             "updated_at": mongodb::bson::to_bson(&now).unwrap(),
         };
-        col.update_one(doc! { "_id": id.to_string(), "version": version }, doc! { "$set": set }).await
+        col.update_one(doc! { "_id": old._id.to_string(), "version": old.version }, doc! { "$set": set })
+            .session(&mut *session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
 
-        let mut updated = old;
+        let mut updated = old.clone();
         updated.state = ObjectState::Cancelled;
         updated.version = new_version;
         updated.updated_by = user_id.clone();
         updated.updated_at = now;
 
-        save_snapshot(db, &updated, user_id, Some("Отмена проведения".into())).await?;
+        save_snapshot_with_session(db, session, &updated, user_id.clone(), Some("Отмена проведения".into())).await?;
 
         let svc = EventService::new();
         let payload = serde_json::json!({ "version": new_version, "state": "cancelled" });
-        let _ = svc.append(db, StreamType::Object, &id.to_string(), "object.cancelled", payload, actor, company_id, None, None).await;
+        let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.cancelled", payload, actor.clone(), company_id.clone(), None, None).await;
 
         Ok(updated)
     }
 
-    /// Восстановить предыдущую версию
+    /// Восстановить предыдущую версию. Транзакция.
     pub async fn restore_version(
         db: &MongoClient,
         id: uuid::Uuid,
@@ -246,7 +378,6 @@ impl ObjectService {
     ) -> PlatformResult<Object> {
         let old = Self::get(db, id).await?;
 
-        // Находим снимок нужной версии
         let snap_col = db.collection::<Document>(SNAPSHOTS);
         let snap_doc = snap_col.find_one(doc! {
             "object_id": id.to_string(),
@@ -259,6 +390,36 @@ impl ObjectService {
             .and_then(|d| mongodb::bson::from_document(d.clone()).ok())
             .unwrap_or(serde_json::Value::Null);
 
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        let result = Self::restore_inner(db, &mut session, &old, target_version, snap_data, &user_id, &actor, &company_id).await;
+
+        match result {
+            Ok(obj) => {
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+                Ok(obj)
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
+                Err(e)
+            }
+        }
+    }
+
+    async fn restore_inner(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        old: &Object,
+        target_version: i64,
+        snap_data: serde_json::Value,
+        user_id: &UserId,
+        actor: &ActorSnapshot,
+        company_id: &CompanyId,
+    ) -> PlatformResult<Object> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -269,25 +430,26 @@ impl ObjectService {
             "updated_by": user_id.0.to_string(),
             "updated_at": mongodb::bson::to_bson(&now).unwrap(),
         };
-        col.update_one(doc! { "_id": id.to_string() }, doc! { "$set": set }).await
+        col.update_one(doc! { "_id": old._id.to_string() }, doc! { "$set": set })
+            .session(&mut *session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
 
-        let mut updated = old;
+        let mut updated = old.clone();
         updated.data = snap_data;
         updated.version = new_version;
         updated.updated_by = user_id.clone();
         updated.updated_at = now;
 
-        save_snapshot(db, &updated, user_id, Some(format!("Восстановлена версия {target_version}"))).await?;
+        save_snapshot_with_session(db, session, &updated, user_id.clone(), Some(format!("Восстановлена версия {target_version}"))).await?;
 
         let svc = EventService::new();
         let payload = serde_json::json!({ "target_version": target_version, "new_version": new_version });
-        let _ = svc.append(db, StreamType::Object, &id.to_string(), "object.restored", payload, actor, company_id, None, None).await;
+        let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.restored", payload, actor.clone(), company_id.clone(), None, None).await;
 
         Ok(updated)
     }
 
-    /// Список объектов с фильтрами
+    /// Список объектов с фильтрами (company_id всегда на сервере)
     pub async fn list(db: &MongoClient, company_id: CompanyId, filters: ObjectFilters) -> PlatformResult<ObjectPage> {
         let col = db.collection::<Document>(COLLECTION);
         let mut f = doc! { "company_id": company_id.0.to_string() };
@@ -396,37 +558,6 @@ fn deserialize_object(doc: &Document) -> Result<Object, String> {
     })
 }
 
-async fn save_snapshot(db: &MongoClient, obj: &Object, user_id: UserId, reason: Option<String>) -> PlatformResult<()> {
-    let snap = ObjectSnapshot {
-        _id: uuid::Uuid::new_v4(),
-        object_id: obj._id.to_string(),
-        version: obj.version,
-        data: obj.data.clone(),
-        state: obj.state.clone(),
-        created_by: user_id,
-        created_at: Utc::now(),
-        reason,
-    };
-    let mut doc = Document::new();
-    doc.insert("_id", snap._id.to_string());
-    doc.insert("object_id", &snap.object_id);
-    doc.insert("version", snap.version);
-    if let Ok(bson) = mongodb::bson::to_bson(&snap.data) { doc.insert("data", bson); }
-    doc.insert("state", format!("{:?}", snap.state).to_lowercase());
-    doc.insert("created_by", snap.created_by.0.to_string());
-    doc.insert("created_at", mongodb::bson::to_bson(&snap.created_at).unwrap());
-    if let Some(ref r) = snap.reason { doc.insert("reason", r); }
-
-    db.collection::<Document>(SNAPSHOTS).insert_one(doc).await
-        .map_err(|e| PlatformError::Database(e.to_string()))?;
-    Ok(())
-}
-
-async fn generate_number(db: &MongoClient, entity_type_id: &str, company_id: &CompanyId) -> PlatformResult<String> {
-    use crate::numbering::NumberingService;
-    NumberingService::next_number(db, company_id, entity_type_id, entity_type_id).await
-}
-
 fn deserialize_snapshot(doc: &Document) -> Result<ObjectSnapshot, String> {
     let _id = uuid::Uuid::parse_str(doc.get_str("_id").unwrap_or("")).map_err(|e| e.to_string())?;
     let state_str = doc.get_str("state").unwrap_or("draft");
@@ -451,4 +582,36 @@ fn deserialize_snapshot(doc: &Document) -> Result<ObjectSnapshot, String> {
     })
 }
 
-use chrono::Utc;
+/// Сохранить снимок версии в рамках сессии (транзакции)
+async fn save_snapshot_with_session(
+    db: &MongoClient,
+    session: &mut mongodb::ClientSession,
+    obj: &Object,
+    user_id: UserId,
+    reason: Option<String>,
+) -> PlatformResult<()> {
+    let snap = ObjectSnapshot {
+        _id: uuid::Uuid::new_v4(),
+        object_id: obj._id.to_string(),
+        version: obj.version,
+        data: obj.data.clone(),
+        state: obj.state.clone(),
+        created_by: user_id,
+        created_at: Utc::now(),
+        reason,
+    };
+    let mut doc = Document::new();
+    doc.insert("_id", snap._id.to_string());
+    doc.insert("object_id", &snap.object_id);
+    doc.insert("version", snap.version);
+    if let Ok(bson) = mongodb::bson::to_bson(&snap.data) { doc.insert("data", bson); }
+    doc.insert("state", format!("{:?}", snap.state).to_lowercase());
+    doc.insert("created_by", snap.created_by.0.to_string());
+    doc.insert("created_at", mongodb::bson::to_bson(&snap.created_at).unwrap());
+    if let Some(ref r) = snap.reason { doc.insert("reason", r); }
+
+    db.collection::<Document>(SNAPSHOTS).insert_one(doc)
+        .session(&mut *session).await
+        .map_err(|e| PlatformError::Database(e.to_string()))?;
+    Ok(())
+}

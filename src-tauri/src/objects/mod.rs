@@ -1,5 +1,6 @@
 pub mod service;
 pub mod indexes;
+pub mod validation;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

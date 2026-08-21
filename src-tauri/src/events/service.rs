@@ -104,6 +104,92 @@ impl EventService {
         Ok(event)
     }
 
+    /// Записать событие в рамках сессии (транзакции)
+    pub async fn append_with_session(
+        &self,
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        stream_type: StreamType,
+        stream_id: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+        metadata: ActorSnapshot,
+        company_id: CompanyId,
+        correlation_id: Option<String>,
+        causation_id: Option<String>,
+    ) -> PlatformResult<Event> {
+        let col = db.collection::<Document>(COLLECTION);
+
+        let filter = doc! {
+            "stream_type": stream_type.to_string(),
+            "stream_id": stream_id,
+        };
+
+        let mut cursor = col
+            .find(filter.clone())
+            .sort(doc! { "version": -1 })
+            .limit(1)
+            .session(&mut *session)
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let next_version = if let Some(Ok(last_doc)) = cursor.next(&mut *session).await {
+            last_doc.get_i64("version").unwrap_or(0) + 1
+        } else {
+            1
+        };
+
+        let event_id = uuid::Uuid::new_v4();
+        let event = Event {
+            _id: event_id,
+            stream_type: stream_type.clone(),
+            stream_id: stream_id.to_string(),
+            event_type: event_type.to_string(),
+            version: next_version,
+            payload: payload.clone(),
+            metadata: metadata.clone(),
+            company_id: company_id.clone(),
+            correlation_id: correlation_id.clone(),
+            causation_id,
+            signature_ref: None,
+            occurred_at: chrono::Utc::now(),
+        };
+
+        let mut doc = Document::new();
+        doc.insert("_id", event._id.to_string());
+        doc.insert("stream_type", stream_type.to_string());
+        doc.insert("stream_id", stream_id);
+        doc.insert("event_type", &event.event_type);
+        doc.insert("version", next_version);
+        if let Ok(bson) = mongodb::bson::to_bson(&payload) {
+            doc.insert("payload", bson);
+        }
+        doc.insert("actor_user_id", metadata.user_id.0.to_string());
+        doc.insert("actor_login", &metadata.login);
+        if let Some(ref fn_) = metadata.full_name {
+            doc.insert("actor_full_name", fn_);
+        }
+        if let Some(ref pos) = metadata.position {
+            doc.insert("actor_position", pos);
+        }
+        doc.insert("actor_company_id", metadata.company_id.0.to_string());
+        doc.insert("company_id", company_id.0.to_string());
+        if let Some(ref cid) = correlation_id {
+            doc.insert("correlation_id", cid);
+        }
+        if let Some(ref sid) = event.signature_ref {
+            doc.insert("signature_ref", sid);
+        }
+        doc.insert("occurred_at", mongodb::bson::to_bson(&event.occurred_at).unwrap());
+
+        col.insert_one(doc)
+            .session(&mut *session)
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        Ok(event)
+    }
+
     /// Прочитать весь поток событий объекта (для version history)
     pub async fn list_stream(
         &self,

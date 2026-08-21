@@ -99,6 +99,52 @@ impl NumberingService {
         Ok(format!("{}{:0>width$}{}", prefix, current_value, suffix, width = padding))
     }
 
+    /// Атомарно получить следующий номер в рамках сессии (транзакции)
+    pub async fn next_number_with_session(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        company_id: &CompanyId,
+        entity_type_id: &str,
+        entity_type_name: &str,
+    ) -> PlatformResult<String> {
+        let col = db.collection::<Document>(COLLECTION);
+        let seq_key = format!("{}:{}", company_id.0, entity_type_id);
+
+        let filter = doc! { "_id": &seq_key };
+        let update = doc! {
+            "$inc": { "current_value": 1 },
+            "$set": { "updated_at": mongodb::bson::to_bson(&Utc::now()).unwrap() },
+            "$setOnInsert": {
+                "_id": &seq_key,
+                "company_id": company_id.0.to_string(),
+                "entity_type_id": entity_type_id,
+                "entity_type_name": entity_type_name,
+                "prefix": "",
+                "padding": 6,
+                "suffix": "",
+            }
+        };
+        let opts = mongodb::options::FindOneAndUpdateOptions::builder()
+            .upsert(true)
+            .return_document(mongodb::options::ReturnDocument::After)
+            .build();
+
+        let result = col.find_one_and_update(filter, update)
+            .with_options(opts)
+            .session(&mut *session)
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let doc = result.ok_or_else(|| PlatformError::Database("Не удалось получить номер".into()))?;
+
+        let current_value = doc.get_i64("current_value").unwrap_or(1);
+        let prefix = doc.get_str("prefix").unwrap_or("");
+        let padding = doc.get_i32("padding").unwrap_or(6) as usize;
+        let suffix = doc.get_str("suffix").unwrap_or("");
+
+        Ok(format!("{}{:0>width$}{}", prefix, current_value, suffix, width = padding))
+    }
+
     /// Сбросить последовательность нумерации (для администратора)
     pub async fn reset_sequence(
         db: &MongoClient,

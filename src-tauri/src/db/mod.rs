@@ -52,6 +52,10 @@ impl MongoClient {
         self.database().collection(name)
     }
 
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     pub async fn diagnostics(&self) -> DiagnosticsInfo {
         let mut info = DiagnosticsInfo {
             connected: false,
