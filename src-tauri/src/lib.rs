@@ -10,6 +10,7 @@ mod ledger;
 mod meta;
 mod notify;
 mod objects;
+mod numbering;
 mod permission_policy;
 mod person;
 mod plugin_manager;
@@ -122,6 +123,10 @@ pub fn run() {
             print::commands::print_update_template,
             print::commands::print_delete_template,
             print::commands::print_render,
+            numbering::commands::numbering_list,
+            numbering::commands::numbering_get,
+            numbering::commands::numbering_update_format,
+            numbering::commands::numbering_reset,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

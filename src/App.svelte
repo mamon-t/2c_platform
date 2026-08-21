@@ -13,6 +13,7 @@
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
   import ConvertPage from '$lib/components/ConvertPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
+  import NumberingPage from '$lib/components/NumberingPage.svelte';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -892,6 +893,9 @@
 
       {:else if currentNav === 'print'}
         <PrintPage />
+
+      {:else if currentNav === 'numbering'}
+        <NumberingPage />
 
       {:else if currentNav === 'settings'}
         <SettingsPage />

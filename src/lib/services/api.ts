@@ -366,6 +366,18 @@ export interface EntityAction {
   is_dangerous: boolean;
 }
 
+export interface NumberSequence {
+  _id: string;
+  company_id: string;
+  entity_type_id: string;
+  entity_type_name: string;
+  prefix: string;
+  padding: number;
+  suffix: string;
+  current_value: number;
+  updated_at: string;
+}
+
 export const ENTITY_KIND_META: Record<EntityKind, { label: string; icon: string }> = {
   document: { label: 'Документ', icon: 'fa-solid fa-file-lines' },
   catalog:  { label: 'Справочник', icon: 'fa-solid fa-book' },
@@ -825,5 +837,19 @@ export const api = {
   },
   async printRender(templateId: string, objectId: string): Promise<string> {
     return getAdapter().invoke<string>('print_render', { templateId, objectId });
+  },
+
+  // ── Нумерация ──
+  async numberingList(): Promise<NumberSequence[]> {
+    return getAdapter().invoke<NumberSequence[]>('numbering_list');
+  },
+  async numberingGet(entityTypeId: string): Promise<NumberSequence | null> {
+    return getAdapter().invoke<NumberSequence | null>('numbering_get', { entityTypeId });
+  },
+  async numberingUpdateFormat(entityTypeId: string, entityTypeName: string, input: { prefix?: string; padding?: number; suffix?: string }): Promise<NumberSequence> {
+    return getAdapter().invoke<NumberSequence>('numbering_update_format', { entityTypeId, entityTypeName, input });
+  },
+  async numberingReset(entityTypeId: string, newValue?: number): Promise<void> {
+    return getAdapter().invoke<void>('numbering_reset', { entityTypeId, new_value: newValue ?? null });
   },
 };

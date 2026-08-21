@@ -423,15 +423,8 @@ async fn save_snapshot(db: &MongoClient, obj: &Object, user_id: UserId, reason: 
 }
 
 async fn generate_number(db: &MongoClient, entity_type_id: &str, company_id: &CompanyId) -> PlatformResult<String> {
-    let col = db.collection::<Document>(COLLECTION);
-    let filter = doc! {
-        "entity_type_id": entity_type_id,
-        "company_id": company_id.0.to_string(),
-        "state": "posted",
-    };
-    let count = col.count_documents(filter).await
-        .map_err(|e| PlatformError::Database(e.to_string()))?;
-    Ok(format!("{:06}", count + 1))
+    use crate::numbering::NumberingService;
+    NumberingService::next_number(db, company_id, entity_type_id, entity_type_id).await
 }
 
 fn deserialize_snapshot(doc: &Document) -> Result<ObjectSnapshot, String> {

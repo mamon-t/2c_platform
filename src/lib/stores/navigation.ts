@@ -21,5 +21,6 @@ export const allNavItems: NavItem[] = [
   { code: 'audit', label: 'Журнал', icon: 'fa-solid fa-clock-rotate-left', path: '/audit', requiredPermission: { subsystem: 'audit', action: 'read' } },
   { code: 'convert', label: 'Конвертация', icon: 'fa-solid fa-right-left', path: '/convert', requiredPermission: { subsystem: 'settings', action: 'manage' } },
   { code: 'print', label: 'Печатные формы', icon: 'fa-solid fa-print', path: '/print', requiredPermission: { subsystem: 'settings', action: 'manage' } },
+  { code: 'numbering', label: 'Нумерация', icon: 'fa-solid fa-hashtag', path: '/numbering', requiredPermission: { subsystem: 'settings', action: 'manage' } },
   { code: 'settings', label: 'Настройки', icon: 'fa-solid fa-gear', path: '/settings', requiredPermission: { subsystem: 'settings', action: 'manage' } },
 ];
