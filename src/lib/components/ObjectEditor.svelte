@@ -25,15 +25,18 @@
   let loading = $state(true);
   let saving = $state(false);
   let error = $state('');
+  let validationErrors: string[] = $state([]);
   let versions: ObjectSnapshot[] = $state([]);
   let showVersions = $state(false);
   let tab = $state<'form' | 'json' | 'versions'>('form');
   let jsonText = $state('');
 
+  let referenceOptions: Record<string, ObjectEntity[]> = $state({});
+  let loadingReferences: Record<string, boolean> = $state({});
+
   const entityType = $derived(entityTypes.find(t => t._id === object.entity_type_id));
 
-  // Группировка полей
-  const groupedFields = $derived(() => {
+  const groupedFields = $derived.by(() => {
     const groups: Record<string, EntityField[]> = {};
     for (const f of fields.sort((a, b) => a.order - b.order)) {
       const g = f.group_name ?? '';
@@ -43,7 +46,6 @@
     return groups;
   });
 
-  // Доступные переходы из текущего состояния (с учётом RBAC)
   const availableTransitions = $derived(
     transitions.filter(t => {
       if (t.to_state === object.state) return false;
@@ -62,8 +64,25 @@
         api.listEntityStates(object.entity_type_id),
         api.listEntityTransitions(object.entity_type_id),
       ]);
+      await loadReferences();
     } catch (e: any) {
       error = e?.toString() || 'Ошибка загрузки метаданных';
+    }
+  }
+
+  async function loadReferences() {
+    for (const field of fields) {
+      if (field.field_kind === 'reference' && field.reference_entity) {
+        loadingReferences[field.code] = true;
+        try {
+          const et = entityTypes.find(t => t.code === field.reference_entity || t._id === field.reference_entity);
+          if (et) {
+            const page = await api.listObjects({ entity_type_id: et._id, limit: 200 });
+            referenceOptions[field.code] = page.objects;
+          }
+        } catch { /* ignore */ }
+        loadingReferences[field.code] = false;
+      }
     }
   }
 
@@ -72,7 +91,25 @@
     jsonText = JSON.stringify(data, null, 2);
   }
 
+  function validateRequired(): string[] {
+    const errors: string[] = [];
+    for (const field of fields) {
+      if (!field.is_required) continue;
+      const val = data[field.code];
+      if (val === undefined || val === null || val === '') {
+        errors.push(`«${field.name}» — обязательное поле`);
+      }
+    }
+    return errors;
+  }
+
   async function handleSave() {
+    const reqErrors = validateRequired();
+    if (reqErrors.length > 0) {
+      validationErrors = reqErrors;
+      return;
+    }
+    validationErrors = [];
     saving = true;
     error = '';
     try {
@@ -92,17 +129,22 @@
   }
 
   async function handleTransition(t: EntityTransition) {
+    const isDangerous = t.to_state === 'posted' || t.to_state === 'cancelled';
+    if (isDangerous) {
+      const label = t.to_state === 'posted' ? 'проведении' : 'отмене';
+      if (!confirm(`Вы уверены в ${label} документа?`)) return;
+    }
+
     saving = true;
     error = '';
+    validationErrors = [];
     try {
       let saved: ObjectEntity;
-      // Для post и cancel используем специальные команды
       if (t.to_state === 'posted') {
         saved = await api.postObject(object._id, object.version);
       } else if (t.to_state === 'cancelled') {
         saved = await api.cancelObject(object._id, object.version);
       } else {
-        // Generic: update + state change через данные
         saved = await api.updateObject(object._id, {
           data: { ...data, _state_transition: t.code },
           version: object.version,
@@ -127,6 +169,7 @@
   }
 
   async function handleRestore(targetVersion: number) {
+    if (!confirm(`Восстановить версию v${targetVersion}?`)) return;
     saving = true;
     try {
       const saved = await api.restoreObjectVersion(object._id, targetVersion);
@@ -145,6 +188,8 @@
   function setField(code: string, value: unknown) {
     data = { ...data, [code]: value };
   }
+
+  const isEditable = $derived(object.state === 'draft' || object.state === 'active');
 
   onMount(async () => {
     loading = true;
@@ -174,6 +219,15 @@
     <div class="alert preset-tonal-error mx-3 mt-2 text-sm">{error}</div>
   {/if}
 
+  {#if validationErrors.length > 0}
+    <div class="alert preset-tonal-warning mx-3 mt-2 text-sm">
+      <div class="font-medium mb-1">Заполните обязательные поля:</div>
+      {#each validationErrors as ve}
+        <div class="text-xs">• {ve}</div>
+      {/each}
+    </div>
+  {/if}
+
   <!-- Transition buttons -->
   {#if availableTransitions.length > 0}
     <div class="flex items-center gap-2 px-3 py-2 border-b border-surface-300-700 shrink-0">
@@ -199,7 +253,7 @@
     <button class="btn btn-sm text-xs" class:preset-tonal={tab === 'json'} onclick={() => { tab = 'json'; jsonText = JSON.stringify(data, null, 2); }}>JSON</button>
     <button class="btn btn-sm text-xs" class:preset-tonal={tab === 'versions'} onclick={() => { tab = 'versions'; loadVersions(); }}>История ({versions.length})</button>
     <div class="flex-1"></div>
-    {#if object.state === 'draft' && $auth && hasPermission($auth.permissions, 'documents', 'update')}
+    {#if isEditable && $auth && hasPermission($auth.permissions, 'documents', 'update')}
       <button class="btn btn-sm preset-filled-primary text-xs" disabled={saving} onclick={handleSave}>
         {saving ? '...' : 'Сохранить'}
       </button>
@@ -216,7 +270,7 @@
         <div class="text-center py-8 text-surface-500 text-sm">Нет полей. Добавьте поля в метаданных.</div>
       {:else}
         <div class="space-y-4 max-w-2xl">
-          {#each Object.entries(groupedFields()) as [groupName, groupFields]}
+          {#each Object.entries(groupedFields) as [groupName, groupFields]}
             {#if groupName}
               <h4 class="text-xs font-semibold text-surface-500 uppercase tracking-wider mt-4">{groupName}</h4>
             {/if}
@@ -226,6 +280,9 @@
                   <span class="label-text text-sm">
                     {field.name}
                     {#if field.is_required}<span class="text-error-500">*</span>{/if}
+                    {#if field.field_kind === 'formula' || field.field_kind === 'computed'}
+                      <i class="fa-solid fa-calculator text-xs text-surface-400 ml-1"></i>
+                    {/if}
                   </span>
 
                   {#if field.field_kind === 'string'}
@@ -233,7 +290,7 @@
                       class="input"
                       type="text"
                       placeholder={field.code}
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value)}
                     />
@@ -242,7 +299,7 @@
                     <textarea
                       class="textarea"
                       placeholder={field.code}
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       oninput={(e) => setField(field.code, (e.target as HTMLTextAreaElement).value)}
                     ></textarea>
@@ -252,7 +309,7 @@
                       class="input"
                       type="number"
                       step="1"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={data[field.code] ?? ''}
                       oninput={(e) => setField(field.code, parseInt((e.target as HTMLInputElement).value) || 0)}
                     />
@@ -262,7 +319,7 @@
                       class="input"
                       type="number"
                       step="0.01"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={data[field.code] ?? ''}
                       oninput={(e) => setField(field.code, parseFloat((e.target as HTMLInputElement).value) || 0)}
                     />
@@ -271,7 +328,7 @@
                     <input
                       class="input"
                       type="date"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value)}
                     />
@@ -280,7 +337,7 @@
                     <input
                       class="input"
                       type="datetime-local"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value)}
                     />
@@ -290,7 +347,7 @@
                       <input
                         class="checkbox"
                         type="checkbox"
-                        disabled={field.is_readonly || object.state !== 'draft'}
+                        disabled={field.is_readonly || !isEditable}
                         checked={Boolean(data[field.code])}
                         onchange={(e) => setField(field.code, (e.target as HTMLInputElement).checked)}
                       />
@@ -300,7 +357,7 @@
                   {:else if field.field_kind === 'enum'}
                     <select
                       class="select"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       onchange={(e) => setField(field.code, (e.target as HTMLSelectElement).value)}
                     >
@@ -311,21 +368,98 @@
                     </select>
 
                   {:else if field.field_kind === 'reference'}
+                    {#if referenceOptions[field.code]}
+                      <select
+                        class="select"
+                        disabled={field.is_readonly || !isEditable}
+                        value={String(data[field.code] ?? '')}
+                        onchange={(e) => setField(field.code, (e.target as HTMLSelectElement).value || null)}
+                      >
+                        <option value="">— не задано —</option>
+                        {#each referenceOptions[field.code] as refObj}
+                          <option value={refObj._id}>{refObj.number ?? refObj._id} — {refObj.data?.name ?? refObj.data?.title ?? ''}</option>
+                        {/each}
+                      </select>
+                    {:else if loadingReferences[field.code]}
+                      <div class="text-xs text-surface-400 py-1"><i class="fa-solid fa-spinner fa-spin mr-1"></i>Загрузка...</div>
+                    {:else}
+                      <input
+                        class="input"
+                        type="text"
+                        placeholder="UUID: {field.reference_entity ?? ''}"
+                        disabled={field.is_readonly || !isEditable}
+                        value={String(data[field.code] ?? '')}
+                        oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value || null)}
+                      />
+                    {/if}
+
+                  {:else if field.field_kind === 'user'}
                     <input
                       class="input"
                       type="text"
-                      placeholder="ID ссылки: {field.reference_entity ?? ''}"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      placeholder="UUID пользователя"
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
-                      oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value)}
+                      oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value || null)}
                     />
+
+                  {:else if field.field_kind === 'company'}
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="UUID компании"
+                      disabled={field.is_readonly || !isEditable}
+                      value={String(data[field.code] ?? '')}
+                      oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value || null)}
+                    />
+
+                  {:else if field.field_kind === 'array'}
+                    <textarea
+                      class="textarea font-mono text-xs"
+                      placeholder='["элемент1", "элемент2"]'
+                      disabled={field.is_readonly || !isEditable}
+                      value={JSON.stringify(data[field.code] ?? [], null, 2)}
+                      oninput={(e) => {
+                        try { setField(field.code, JSON.parse((e.target as HTMLTextAreaElement).value)); }
+                        catch { /* ждём валидный JSON */ }
+                      }}
+                    ></textarea>
+
+                  {:else if field.field_kind === 'table'}
+                    <textarea
+                      class="textarea font-mono text-xs"
+                      placeholder='[{"col1": "val1", "col2": "val2"}]'
+                      disabled={field.is_readonly || !isEditable}
+                      value={JSON.stringify(data[field.code] ?? [], null, 2)}
+                      oninput={(e) => {
+                        try { setField(field.code, JSON.parse((e.target as HTMLTextAreaElement).value)); }
+                        catch { /* ждём валидный JSON */ }
+                      }}
+                    ></textarea>
+
+                  {:else if field.field_kind === 'json'}
+                    <textarea
+                      class="textarea font-mono text-xs"
+                      placeholder="{}"
+                      disabled={field.is_readonly || !isEditable}
+                      value={JSON.stringify(data[field.code] ?? null, null, 2)}
+                      oninput={(e) => {
+                        try { setField(field.code, JSON.parse((e.target as HTMLTextAreaElement).value)); }
+                        catch { /* ждём валидный JSON */ }
+                      }}
+                    ></textarea>
+
+                  {:else if field.field_kind === 'formula' || field.field_kind === 'computed'}
+                    <div class="input bg-surface-50-900 text-surface-500 cursor-not-allowed">
+                      {data[field.code] ?? '—'}
+                    </div>
 
                   {:else}
                     <input
                       class="input"
                       type="text"
                       placeholder="{FIELD_KIND_META[field.field_kind]?.label ?? field.field_kind}"
-                      disabled={field.is_readonly || object.state !== 'draft'}
+                      disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
                       oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value)}
                     />
@@ -340,7 +474,7 @@
     {:else if tab === 'json'}
       <textarea
         class="textarea font-mono text-xs w-full h-full min-h-[300px]"
-        disabled={object.state !== 'draft'}
+        disabled={!isEditable}
         bind:value={jsonText}
       ></textarea>
 
