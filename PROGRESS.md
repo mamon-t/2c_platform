@@ -347,3 +347,59 @@
 ### Проверки
 - cargo check: 0 ошибок ✅
 - svelte-check: 0 ошибок ✅
+
+## Этап 13: RBAC Print/Scripts/Plugins/Numbering + Security Fixes ✅
+**Дата:** 21.08.2026
+**Коммит:** 09d3544
+
+### RBAC: 16 новых команд с проверкой доступа
+
+#### Новые seed-политики (12 штук)
+- `print.read`, `print.create`, `print.update`, `print.delete` — шаблоны печати
+- `plugins.read`, `plugins.manage`, `plugins.execute` — WASM-плагины
+- `numbering.read`, `numbering.manage` — нумерация документов
+- (`scripts.read/create/execute` уже существовали)
+
+#### Защищённые команды (16 новых)
+- **Print** (6): `print_list_templates` → `print.read`, `print_get_template` → `print.read`, `print_render` → `print.read`, `print_create_template` → `print.create`, `print_update_template` → `print.update`, `print_delete_template` → `print.delete`
+- **Plugins** (4): `wasm_list` → `plugins.read`, `wasm_load` → `plugins.manage`, `wasm_unload` → `plugins.manage`, `plugin_call` → `plugins.execute`
+- **Numbering** (4): `numbering_list` → `numbering.read`, `numbering_get` → `numbering.read`, `numbering_update_format` → `numbering.manage`, `numbering_reset` → `numbering.manage`
+- **Scripts** (2): `validate_rhai_script` → `scripts.read`, `execute_rhai_script` → `scripts.execute`
+
+#### Итого по RBAC
+- 24/93 команд защищены (было 8)
+- Назначение ролей: SUPERADMIN — всё, ADMIN — print + numbering (read+write), VIEWER — print.read, plugins.read, numbering.read
+
+#### Frontend
+- `navigation.ts`: `print` → `print.read`, `convert` → `plugins.read`, `numbering` → `numbering.read`
+
+### Security Fixes: WASM-плагины
+
+#### Проблема 1: Замороженный контекст (FIXED)
+- **Было:** `HostData` с company_id/user_id клонировался при `wasm_load`, плагин использовал устаревшие данные после `switch_company`
+- **Стало:** `Arc<RwLock<PluginContext>>` обновляется свежими данными из AppState перед каждым `plugin_call`
+- **Impact:** устранена кросс-компанийная утечка данных через плагины
+
+#### Проблема 2: Lock contention (FIXED)
+- **Было:** `plugin_call` удерживал глобальный `AppState` mutex на всё время выполнения WASM — все команды платформы встали
+- **Стало:** плагин извлекается из HashMap → mutex отпускается → `spawn_blocking` + `std::sync::Mutex` для плагина → плагин возвращается обратно
+- **Impact:** плагин не блокирует остальные команды
+
+#### Проблема 3: Нет лимитов (FIXED)
+- **Было:** `plugin.call()` без timeout, fuel, memory limits — бесконечный цикл = OOM или hang
+- **Стало:** `timeout_ms=10000`, `fuel_limit=10_000_000`, `memory=256 pages` (16MB), `tokio::time::timeout(30s)` на уровне команды
+
+#### Проблема 4: block_in_place (-addressed)
+- `block_in_place` используется в host functions для async DB из sync WASM — работает на multi-thread runtime (Tauri default)
+- Теперь вызывается из `spawn_blocking` (не из async context) — безопасно
+
+### Security Fixes: Rhai Sandbox
+
+#### Проблема: Мёртвый код (FIXED)
+- **Было:** `Sandbox { timeout, max_ops }` поля не применялись к `Engine` — `Engine::new()` без ограничений
+- **Стало:** `engine.set_max_operations(self.max_ops)` применяется в `execute()` и `validate()`
+- Rhai не имеет встроенного `set_timeout` — лимит операций является основным механизмом защиты
+
+### Проверки
+- cargo check: 0 ошибок ✅
+- svelte-check: 0 ошибок ✅
