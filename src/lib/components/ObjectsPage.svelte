@@ -4,6 +4,7 @@
     api, type EntityType, type ObjectEntity, type EntityField,
     ENTITY_KIND_META, OBJECT_STATE_META,
   } from '$lib/services/api';
+  import { auth, hasPermission } from '$lib/stores/auth';
   import ObjectEditor from './ObjectEditor.svelte';
 
   let entityTypes: EntityType[] = $state([]);
@@ -113,6 +114,7 @@
         <span class="text-xs text-surface-500 ml-auto">{totalCount} объектов</span>
 
         <!-- Create -->
+        {#if $auth && hasPermission($auth.permissions, 'documents', 'create')}
         <div class="flex items-center gap-1 ml-3">
           {#if creating}
             <select class="select select-sm max-w-[160px]" bind:value={createTypeId}>
@@ -129,6 +131,7 @@
             </button>
           {/if}
         </div>
+        {/if}
       </div>
 
       {#if error}

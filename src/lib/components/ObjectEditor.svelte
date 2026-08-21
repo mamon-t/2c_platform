@@ -7,6 +7,7 @@
     FIELD_KIND_META, OBJECT_STATE_META,
     type FieldKind, type ObjectStateTS,
   } from '$lib/services/api';
+  import { auth, hasPermission } from '$lib/stores/auth';
 
   interface Props {
     object: ObjectEntity;
@@ -42,9 +43,15 @@
     return groups;
   });
 
-  // Доступные переходы из текущего состояния
+  // Доступные переходы из текущего состояния (с учётом RBAC)
   const availableTransitions = $derived(
-    transitions.filter(t => t.from_state === object.state)
+    transitions.filter(t => {
+      if (t.to_state === object.state) return false;
+      if (!$auth) return false;
+      if (t.to_state === 'posted') return hasPermission($auth.permissions, 'documents', 'approve');
+      if (t.to_state === 'cancelled') return hasPermission($auth.permissions, 'documents', 'cancel');
+      return true;
+    }).filter(t => t.from_state === object.state)
   );
 
   async function loadMetadata() {
@@ -192,7 +199,7 @@
     <button class="btn btn-sm text-xs" class:preset-tonal={tab === 'json'} onclick={() => { tab = 'json'; jsonText = JSON.stringify(data, null, 2); }}>JSON</button>
     <button class="btn btn-sm text-xs" class:preset-tonal={tab === 'versions'} onclick={() => { tab = 'versions'; loadVersions(); }}>История ({versions.length})</button>
     <div class="flex-1"></div>
-    {#if object.state === 'draft'}
+    {#if object.state === 'draft' && $auth && hasPermission($auth.permissions, 'documents', 'update')}
       <button class="btn btn-sm preset-filled-primary text-xs" disabled={saving} onclick={handleSave}>
         {saving ? '...' : 'Сохранить'}
       </button>
@@ -351,7 +358,7 @@
               {#if v.reason}
                 <div class="text-surface-500">{v.reason}</div>
               {/if}
-              {#if v.version < object.version}
+              {#if v.version < object.version && $auth && hasPermission($auth.permissions, 'documents', 'update')}
                 <button class="btn btn-xs preset-tonal text-xs" disabled={saving} onclick={() => handleRestore(v.version)}>
                   <i class="fa-solid fa-rotate-left mr-1"></i>Восстановить v{v.version}
                 </button>

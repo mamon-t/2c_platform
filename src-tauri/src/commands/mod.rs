@@ -68,6 +68,7 @@ pub struct AppState {
     pub current_user: Option<UserPublic>,
     pub current_company_id: Option<String>,
     pub current_role_id: Option<String>,
+    pub current_policies: Option<Vec<crate::permission_policy::PermissionPolicy>>,
     pub wasm_modules: Option<HashMap<String, WasmPlugin>>,
 }
 
@@ -83,7 +84,18 @@ impl AppState {
             current_user: None,
             current_company_id: None,
             current_role_id: None,
+            current_policies: None,
             wasm_modules: None,
+        }
+    }
+
+    /// Проверить доступ по cached policies. Deny-by-default.
+    pub fn check_access(&self, subsystem: &str, entity_type: Option<&str>, action: &str) -> bool {
+        match &self.current_policies {
+            Some(policies) => crate::permission_policy::PermissionPolicyService::check_access(
+                policies, subsystem, entity_type, action,
+            ),
+            None => false,
         }
     }
 }
@@ -380,6 +392,7 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
         state.current_user = Some(user.clone());
         state.current_company_id = Some(company_id.to_string());
         state.current_role_id = Some(role_id.to_string());
+        state.current_policies = RoleService::get_policies(&db, role).await.ok();
         return Ok(AuthResultWithCompanies { token, user, companies, role_code: Some(role.code.clone()), role_name: Some(role.name.clone()), role_id: Some(role_id.to_string()) });
     }
 
@@ -408,6 +421,10 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
         target_id = user._id.to_string());
 
     let role = RoleService::get(&db, role_id).await.ok();
+    state.current_policies = match role.as_ref() {
+        Some(r) => RoleService::get_policies(&db, r).await.ok(),
+        None => None,
+    };
     Ok(AuthResultWithCompanies {
         token, user, companies,
         role_code: role.as_ref().map(|r| r.code.clone()),
@@ -702,6 +719,14 @@ pub async fn switch_company(input: SwitchCompanyInput, state: State<'_, Mutex<Ap
     let role_info = {
         let db = state.db.as_ref().ok_or_else(|| "Не подключено к MongoDB".to_string())?;
         RoleService::get(db, role_id.0).await.ok()
+    };
+
+    state.current_policies = match role_info.as_ref() {
+        Some(r) => {
+            let db = state.db.as_ref().unwrap();
+            RoleService::get_policies(db, r).await.ok()
+        }
+        None => None,
     };
 
     Ok(AuthResultWithCompanies {
@@ -1175,6 +1200,9 @@ pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>)
 #[tauri::command]
 pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::ObjectPage, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "read") {
+        return Err("Доступ запрещён: нет права documents.read".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or_else(|| "Не выбрана компания".to_string())?;
@@ -1185,14 +1213,26 @@ pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'
 #[tauri::command]
 pub async fn get_object(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "read") {
+        return Err("Доступ запрещён: нет права documents.read".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    crate::objects::service::ObjectService::get(db, uid).await.map_err(|e| e.to_string())
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let obj = crate::objects::service::ObjectService::get(db, uid).await.map_err(|e| e.to_string())?;
+    if obj.company_id.0.to_string() != *company_id {
+        return Err("Доступ запрещён: объект другой компании".into());
+    }
+    Ok(obj)
 }
 
 #[tauri::command]
 pub async fn create_object(input: crate::objects::CreateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "create") {
+        return Err("Доступ запрещён: нет права documents.create".into());
+    }
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or_else(|| "Не выбрана компания".to_string())?;
@@ -1207,6 +1247,9 @@ pub async fn create_object(input: crate::objects::CreateObjectInput, state: Stat
 #[tauri::command]
 pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "update") {
+        return Err("Доступ запрещён: нет права documents.update".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1222,6 +1265,9 @@ pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput,
 #[tauri::command]
 pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "approve") {
+        return Err("Доступ запрещён: нет права documents.approve".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1237,6 +1283,9 @@ pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppSta
 #[tauri::command]
 pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "cancel") {
+        return Err("Доступ запрещён: нет права documents.cancel".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1252,6 +1301,9 @@ pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppS
 #[tauri::command]
 pub async fn restore_object_version(id: String, target_version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "update") {
+        return Err("Доступ запрещён: нет права documents.update".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1267,8 +1319,17 @@ pub async fn restore_object_version(id: String, target_version: i64, state: Stat
 #[tauri::command]
 pub async fn list_object_versions(id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::objects::ObjectSnapshot>, String> {
     let state = state.lock().await;
+    if !state.check_access("documents", None, "read") {
+        return Err("Доступ запрещён: нет права documents.read".into());
+    }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let obj = crate::objects::service::ObjectService::get(db, uid).await.map_err(|e| e.to_string())?;
+    if obj.company_id.0.to_string() != *company_id {
+        return Err("Доступ запрещён: объект другой компании".into());
+    }
     crate::objects::service::ObjectService::list_versions(db, uid).await.map_err(|e| e.to_string())
 }
 

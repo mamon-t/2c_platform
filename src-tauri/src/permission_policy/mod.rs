@@ -186,4 +186,63 @@ impl PermissionPolicyService {
         }
         Ok(())
     }
+
+    /// Проверить доступ: subsystem + entity_type? + action.
+    ///
+    /// Логика (deny-by-default):
+    /// 1. Фильтруем по subsystem_code (точное совпадение)
+    /// 2. Фильтруем по entity_type (если Some — точное совпадение; None-политика = wildcard)
+    /// 3. Фильтруем по actions (содержит action или "*")
+    /// 4. Среди совпавших: deny=true с наивысшим priority → ДОСТУП ЗАПРЕЩЁН
+    /// 5. Среди совпавших: deny=false с наивысшим priority → ДОСТУП РАЗРЕШЁН
+    /// 6. Если ничего не совпало → ДОСТУП ЗАПРЕЩЁН
+    pub fn check_access(
+        policies: &[PermissionPolicy],
+        subsystem: &str,
+        entity_type: Option<&str>,
+        action: &str,
+    ) -> bool {
+        let matching: Vec<&PermissionPolicy> = policies.iter()
+            .filter(|p| p.subsystem_code == subsystem)
+            .filter(|p| {
+                match entity_type {
+                    Some(et) => p.entity_type.as_deref() == Some(et) || p.entity_type.is_none(),
+                    None => true,
+                }
+            })
+            .filter(|p| p.actions.iter().any(|a| a == action || a == "*"))
+            .collect();
+
+        // Сначала проверяем deny-политики (приоритет: чем выше priority, тем весомее)
+        if let Some(deny) = matching.iter()
+            .filter(|p| p.deny)
+            .max_by_key(|p| p.priority)
+        {
+            // Есть deny-политика → доступ запрещён
+            tracing::debug!(
+                "check_access DENIED: subsystem={}, entity_type={:?}, action={}, policy={}",
+                subsystem, entity_type, action, deny.code
+            );
+            return false;
+        }
+
+        // Проверяем allow-политики
+        if let Some(allow) = matching.iter()
+            .filter(|p| !p.deny)
+            .max_by_key(|p| p.priority)
+        {
+            tracing::debug!(
+                "check_access ALLOWED: subsystem={}, entity_type={:?}, action={}, policy={}",
+                subsystem, entity_type, action, allow.code
+            );
+            return true;
+        }
+
+        // Нет совпавших политик → deny-by-default
+        tracing::debug!(
+            "check_access DENIED (no match): subsystem={}, entity_type={:?}, action={}",
+            subsystem, entity_type, action
+        );
+        false
+    }
 }
