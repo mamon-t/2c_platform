@@ -474,6 +474,67 @@ export const OBJECT_STATE_META: Record<ObjectStateTS, { label: string; icon: str
   deleted:   { label: 'Удалён', icon: 'fa-solid fa-trash', color: 'bg-error-700' },
 };
 
+// ── Print Forms types ─────────────────────────────────────
+
+export type PaperFormat = 'a4' | 'a5' | 'letter';
+export type Orientation = 'portrait' | 'landscape';
+
+export interface PrintMargins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface PrintTemplate {
+  _id: string;
+  code: string;
+  name: string;
+  entity_type: string;
+  form_code: string;
+  template_body: string;
+  css_styles: string;
+  paper_format: PaperFormat;
+  orientation: Orientation;
+  margins: PrintMargins;
+  is_default: boolean;
+  is_active: boolean;
+  version: number;
+  valid_from: string | null;
+  valid_to: string | null;
+  company_id: string | null;
+  before_print_script: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePrintTemplateInput {
+  code: string;
+  name: string;
+  entity_type: string;
+  form_code: string;
+  template_body: string;
+  css_styles?: string;
+  paper_format?: PaperFormat;
+  orientation?: Orientation;
+  margins?: PrintMargins;
+  is_default?: boolean;
+  before_print_script?: string;
+}
+
+export interface UpdatePrintTemplateInput {
+  name?: string;
+  template_body?: string;
+  css_styles?: string;
+  paper_format?: PaperFormat;
+  orientation?: Orientation;
+  margins?: PrintMargins;
+  is_default?: boolean;
+  is_active?: boolean;
+  before_print_script?: string;
+}
+
 export const api = {
   async getDiagnostics(): Promise<DiagnosticsReport> {
     return getAdapter().invoke<DiagnosticsReport>('get_diagnostics');
@@ -754,5 +815,25 @@ export const api = {
   },
   async exportObjects(params: { module_id: string; entity_type_id: string; format: string }): Promise<ExportResult> {
     return getAdapter().invoke<ExportResult>('convert_export', params);
+  },
+
+  // ── Печатные формы ──
+  async printListTemplates(entityType: string, formCode?: string): Promise<PrintTemplate[]> {
+    return getAdapter().invoke<PrintTemplate[]>('print_list_templates', { entityType, formCode: formCode ?? null });
+  },
+  async printGetTemplate(id: string): Promise<PrintTemplate> {
+    return getAdapter().invoke<PrintTemplate>('print_get_template', { id });
+  },
+  async printCreateTemplate(input: CreatePrintTemplateInput): Promise<PrintTemplate> {
+    return getAdapter().invoke<PrintTemplate>('print_create_template', { input });
+  },
+  async printUpdateTemplate(id: string, input: UpdatePrintTemplateInput): Promise<PrintTemplate> {
+    return getAdapter().invoke<PrintTemplate>('print_update_template', { id, input });
+  },
+  async printDeleteTemplate(id: string): Promise<void> {
+    return getAdapter().invoke<void>('print_delete_template', { id });
+  },
+  async printRender(templateId: string, objectId: string): Promise<string> {
+    return getAdapter().invoke<string>('print_render', { templateId, objectId });
   },
 };

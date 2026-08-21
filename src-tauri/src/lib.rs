@@ -14,6 +14,7 @@ mod objects;
 mod permission_policy;
 mod person;
 mod plugin_manager;
+mod print;
 mod rhai;
 mod role;
 mod settings;
@@ -115,8 +116,16 @@ pub fn run() {
             plugin_manager::commands::wasm_load,
             plugin_manager::commands::wasm_unload,
             plugin_manager::commands::wasm_list,
+            // TODO: этих команд тут быть не должно. иначе мы теряем вообще смысл плагиной
             convert::commands::convert_import,
             convert::commands::convert_export,
+            // ======================================
+            print::commands::print_list_templates,
+            print::commands::print_get_template,
+            print::commands::print_create_template,
+            print::commands::print_update_template,
+            print::commands::print_delete_template,
+            print::commands::print_render,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

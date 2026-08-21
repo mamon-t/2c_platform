@@ -1,7 +1,6 @@
-use super::{ModuleInfo, WasmPlugin};
+use super::{HostData, ModuleInfo, WasmPlugin};
 use crate::commands::AppState;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -11,22 +10,24 @@ pub async fn wasm_load(
     name: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<ModuleInfo, String> {
-    let state_arc = Arc::new(tokio::sync::Mutex::new({
-        let s = state.lock().await;
-        AppState {
-            db: s.db.clone(),
-            auth: crate::auth::AuthService::new("2c-platform-dev-secret-key-change-in-production"),
-            config: s.config.clone(),
-            current_user: s.current_user.clone(),
-            current_company_id: s.current_company_id.clone(),
-            current_role_id: s.current_role_id.clone(),
-            wasm_modules: None,
-        }
-    }));
+    // 1. Безопасно ждем лок в async-контексте
+    let s = state.lock().await;
+    
+    // 2. Собираем легкий HostData. 
+    // s.db.clone() дешевый (Arc под капотом), новых соединений НЕ создает.
+    let host_data = HostData {
+        db: s.db.clone(), // <-- Просто берем то, что уже есть в AppState
+        company_id: s.current_company_id.clone(),
+        user_id: s.current_user.as_ref().map(|u| u._id.to_string()),
+        user_login: s.current_user.as_ref().map(|u| u.login.clone()),
+        display_name: s.current_user.as_ref().map(|u| u.display_name.clone()),
+    };
 
-    let plugin = WasmPlugin::load(wasm_bytes, name, state_arc)?;
+    // 3. Загружаем плагин синхронно, передавая готовые данные
+    let mut plugin = WasmPlugin::load(wasm_bytes, name, host_data)?;
     let info = plugin.info.clone();
 
+    // 4. Кладем плагин в общий стейт
     let mut s = state.lock().await;
     if s.wasm_modules.is_none() {
         s.wasm_modules = Some(HashMap::new());
@@ -53,7 +54,8 @@ pub async fn wasm_list(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<ModuleInfo>, String> {
     let s = state.lock().await;
-    Ok(s.wasm_modules.as_ref()
+    Ok(s.wasm_modules
+        .as_ref()
         .map(|m| m.values().map(|p| p.info.clone()).collect())
         .unwrap_or_default())
 }
