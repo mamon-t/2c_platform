@@ -1,6 +1,6 @@
 use mongodb::IndexModel;
 use mongodb::bson::doc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::db::MongoClient;
 use crate::core::PlatformResult;
@@ -11,26 +11,16 @@ pub async fn ensure_event_indexes(db: &MongoClient) -> PlatformResult<()> {
     let col = db.collection::<mongodb::bson::Document>(COLLECTION);
 
     let indexes = vec![
-        // Основной индекс для чтения потока (object version history)
-        IndexModel::builder()
-            .keys(doc! { "stream_type": 1, "stream_id": 1, "version": 1 })
-            .build(),
-        // Поиск по типу события и времени
-        IndexModel::builder()
-            .keys(doc! { "event_type": 1, "occurred_at": -1 })
-            .build(),
-        // Поиск по компании и времени
-        IndexModel::builder()
-            .keys(doc! { "company_id": 1, "occurred_at": -1 })
-            .build(),
-        // Correlation ID для трассировки бизнес-операций
-        IndexModel::builder()
-            .keys(doc! { "correlation_id": 1 })
-            .build(),
+        ("stream_type + stream_id + version",  doc! { "stream_type": 1, "stream_id": 1, "version": 1 }),
+        ("event_type + occurred_at",           doc! { "event_type": 1, "occurred_at": -1 }),
+        ("company_id + occurred_at",           doc! { "company_id": 1, "occurred_at": -1 }),
+        ("correlation_id",                     doc! { "correlation_id": 1 }),
     ];
 
-    for idx in indexes {
-        let _ = col.create_index(idx).await;
+    for (name, keys) in indexes {
+        if let Err(e) = col.create_index(IndexModel::builder().keys(keys).build()).await {
+            warn!("Не удалось создать индекс events/{name}: {e}");
+        }
     }
 
     info!("Event store indexes ensured");
