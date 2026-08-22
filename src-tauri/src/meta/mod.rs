@@ -72,6 +72,19 @@ pub struct EntityForm {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionHandlerKind {
+    /// Переход между состояниями (FSM)
+    Transition,
+    /// Кастомное действие (вызов WASM/Rhai)
+    Custom,
+}
+
+impl Default for ActionHandlerKind {
+    fn default() -> Self { Self::Custom }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityAction {
     pub _id: Id,
@@ -80,6 +93,14 @@ pub struct EntityAction {
     pub name: String,
     pub description: Option<String>,
     pub action_type: Option<String>,
+    /// Тип обработчика: transition (FSM) или custom (WASM/Rhai)
+    pub handler_kind: ActionHandlerKind,
+    /// Для Transition: target_state_code
+    pub target_state: Option<String>,
+    /// Для Custom: код WASM модуля или путь к Rhai-скрипту
+    pub handler_ref: Option<String>,
+    /// Обязательная политика для выполнения (переопределение)
+    pub required_policy: Option<String>,
     pub is_dangerous: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -185,6 +206,10 @@ pub struct CreateEntityActionInput {
     pub name: String,
     pub description: Option<String>,
     pub action_type: Option<String>,
+    pub handler_kind: Option<String>,
+    pub target_state: Option<String>,
+    pub handler_ref: Option<String>,
+    pub required_policy: Option<String>,
     pub is_dangerous: Option<bool>,
 }
 
@@ -193,5 +218,9 @@ pub struct UpdateEntityActionInput {
     pub name: Option<String>,
     pub description: Option<String>,
     pub action_type: Option<String>,
+    pub handler_kind: Option<String>,
+    pub target_state: Option<String>,
+    pub handler_ref: Option<String>,
+    pub required_policy: Option<String>,
     pub is_dangerous: Option<bool>,
 }

@@ -419,9 +419,20 @@ impl EntityActionService {
         Ok(result)
     }
 
+    pub async fn get(db: &MongoClient, id: uuid::Uuid) -> PlatformResult<EntityAction> {
+        let col = db.collection::<Document>("entity_actions");
+        let doc = col.find_one(doc! { "_id": id.to_string() }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?
+            .ok_or_else(|| PlatformError::NotFound(format!("EntityAction {id} не найдена")))?;
+        deserialize_entity_action(&doc).map_err(|_| PlatformError::NotFound("Ошибка десериализации".into()))
+    }
+
     pub async fn create(db: &MongoClient, input: CreateEntityActionInput) -> PlatformResult<EntityAction> {
         let et_id = uuid::Uuid::parse_str(&input.entity_type_id)
             .map_err(|_| PlatformError::Validation("Невалидный entity_type_id".into()))?;
+        let handler_kind = input.handler_kind.as_deref()
+            .and_then(|s| serde_json::from_str(&format!("\"{s}\"")).ok())
+            .unwrap_or(ActionHandlerKind::Custom);
         let a = EntityAction {
             _id: uuid::Uuid::new_v4(),
             entity_type_id: et_id,
@@ -429,6 +440,10 @@ impl EntityActionService {
             name: input.name,
             description: input.description,
             action_type: input.action_type,
+            handler_kind,
+            target_state: input.target_state,
+            handler_ref: input.handler_ref,
+            required_policy: input.required_policy,
             is_dangerous: input.is_dangerous.unwrap_or(false),
             created_at: Utc::now(),
         };
@@ -439,6 +454,10 @@ impl EntityActionService {
         doc.insert("name", &a.name);
         if let Some(ref d) = a.description { doc.insert("description", d); }
         if let Some(ref t) = a.action_type { doc.insert("action_type", t); }
+        doc.insert("handler_kind", serde_json::to_string(&a.handler_kind).unwrap_or_default().trim_matches('"').to_string());
+        if let Some(ref s) = a.target_state { doc.insert("target_state", s); }
+        if let Some(ref r) = a.handler_ref { doc.insert("handler_ref", r); }
+        if let Some(ref p) = a.required_policy { doc.insert("required_policy", p); }
         doc.insert("is_dangerous", a.is_dangerous);
         doc.insert("created_at", mongodb::bson::to_bson(&a.created_at).unwrap());
 
@@ -453,6 +472,10 @@ impl EntityActionService {
         if let Some(ref n) = input.name { set.insert("name", n); }
         if let Some(ref d) = input.description { set.insert("description", d); }
         if let Some(ref t) = input.action_type { set.insert("action_type", t); }
+        if let Some(ref hk) = input.handler_kind { set.insert("handler_kind", hk); }
+        if let Some(ref s) = input.target_state { set.insert("target_state", s); }
+        if let Some(ref r) = input.handler_ref { set.insert("handler_ref", r); }
+        if let Some(ref p) = input.required_policy { set.insert("required_policy", p); }
         if let Some(d) = input.is_dangerous { set.insert("is_dangerous", d); }
         if !set.is_empty() {
             col.update_one(doc! { "_id": id.to_string() }, doc! { "$set": set }).await
@@ -578,6 +601,8 @@ fn deserialize_entity_form(doc: &Document) -> Result<EntityForm, ()> {
 fn deserialize_entity_action(doc: &Document) -> Result<EntityAction, ()> {
     let _id = uuid::Uuid::parse_str(doc.get_str("_id").unwrap_or("")).map_err(|_| ())?;
     let entity_type_id = uuid::Uuid::parse_str(doc.get_str("entity_type_id").unwrap_or("")).map_err(|_| ())?;
+    let handler_kind_str = doc.get_str("handler_kind").unwrap_or("custom");
+    let handler_kind: ActionHandlerKind = serde_json::from_str(&format!("\"{handler_kind_str}\"")).unwrap_or(ActionHandlerKind::Custom);
     Ok(EntityAction {
         _id,
         entity_type_id,
@@ -585,6 +610,10 @@ fn deserialize_entity_action(doc: &Document) -> Result<EntityAction, ()> {
         name: doc.get_str("name").unwrap_or("").to_string(),
         description: doc.get_str("description").ok().map(String::from),
         action_type: doc.get_str("action_type").ok().map(String::from),
+        handler_kind,
+        target_state: doc.get_str("target_state").ok().map(String::from),
+        handler_ref: doc.get_str("handler_ref").ok().map(String::from),
+        required_policy: doc.get_str("required_policy").ok().map(String::from),
         is_dangerous: doc.get_bool("is_dangerous").unwrap_or(false),
         created_at: doc.get_datetime("created_at").ok()
             .and_then(|v| chrono::DateTime::from_timestamp_millis(v.timestamp_millis()))

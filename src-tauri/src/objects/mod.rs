@@ -5,8 +5,10 @@ pub mod validation;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub use service::ObjectService;
+pub use crate::core::ObjectState;
+
 use crate::core::{CompanyId, Id, UserId};
-use crate::core::ObjectState;
 
 /// Универсальный объект — хранит все сущности (документы, справочники и т.д.)
 #[derive(Debug, Clone, Serialize, Deserialize)]

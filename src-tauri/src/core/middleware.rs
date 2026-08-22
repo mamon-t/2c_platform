@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::audit::{AuditChanges, AuditableAction, macros::fire_audit, service::MongoAuditService, service::AuditService as AuditServiceTrait};
+use crate::audit::{AuditChanges, AuditableAction, service::MongoAuditService, service::AuditService as AuditServiceTrait};
 use crate::commands::AppState;
 use crate::core::{CompanyId, PlatformError, PlatformResult, UserId};
 use crate::db::MongoClient;
@@ -119,7 +119,7 @@ impl CommandContext {
 
         // ── PRE: Record scope (Object) ──
         if let Scope::Object(ref obj_id) = scope {
-            self.check_record_scope(obj_id).await?;
+            self.check_record_scope(obj_id, permission).await?;
         }
 
         // ── EXECUTE: Business logic ──
@@ -151,12 +151,44 @@ impl CommandContext {
         Ok(outcome.result)
     }
 
-    async fn check_record_scope(&self, obj_id: &str) -> PlatformResult<()> {
-        let _ = obj_id;
-        // TODO: record scope check (выполнится в коммите 5)
-        // 1. Загрузить объект по id
-        // 2. Найти политику для subsystem "documents" с action "read"
-        // 3. Если record_scope == "own" && obj.created_by != self.user.id → deny
-        Ok(())
+    /// Record scope check: если политика имеет record_scope == "own",
+    /// разрешаем доступ только к собственным записям.
+    async fn check_record_scope(&self, obj_id: &str, permission: &str) -> PlatformResult<()> {
+        let parts: Vec<&str> = permission.split('.').collect();
+        if parts.len() != 2 { return Ok(()); }
+        let subsystem = parts[0];
+        let action = parts[1];
+
+        // Ищем подходящую политику
+        let matching: Vec<&PermissionPolicy> = self.policies.iter()
+            .filter(|p| p.subsystem_code == subsystem)
+            .filter(|p| p.actions.iter().any(|a| a == action || a == "*"))
+            .collect();
+
+        // Берём policy с наивысшим приоритетом
+        let policy = match matching.iter()
+            .filter(|p| !p.deny)
+            .max_by_key(|p| p.priority)
+        {
+            Some(p) => *p,
+            None => return Ok(()), // нет allow-политики → deny уже был выше
+        };
+
+        if policy.record_scope != "own" {
+            return Ok(()); // company scope → доступ ко всем записям компании
+        }
+
+        // Загружаем объект
+        let obj = crate::objects::ObjectService::get(&self.db, uuid::Uuid::parse_str(obj_id)
+            .map_err(|e| PlatformError::Validation(format!("Невалидный object_id: {e}")))?).await?;
+
+        // Проверяем: объект принадлежит текущему пользователю
+        if obj.created_by == UserId(self.user._id) {
+            Ok(())
+        } else {
+            Err(PlatformError::PermissionDenied(
+                format!("Доступ запрещён: запись принадлежит другому пользователю (record_scope = own)")
+            ))
+        }
     }
 }

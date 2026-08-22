@@ -108,6 +108,8 @@ pub fn run() {
             commands::create_entity_action,
             commands::update_entity_action,
             commands::delete_entity_action,
+            commands::validate_entity_transition,
+            commands::execute_entity_action,
             commands::list_objects,
             commands::get_object,
             commands::create_object,

@@ -44,6 +44,7 @@ pub enum AuditableAction {
     UpdatePrintTemplate,
     DeletePrintTemplate,
     ExecuteScript,
+    ExecuteEntityAction,
 }
 
 impl AuditableAction {
@@ -90,6 +91,7 @@ impl AuditableAction {
             Self::CreatePrintTemplate => "create_print_template",
             Self::UpdatePrintTemplate => "update_print_template",
             Self::DeletePrintTemplate => "delete_print_template",
+            Self::ExecuteEntityAction => "execute_entity_action",
         }
     }
 
@@ -136,6 +138,7 @@ impl AuditableAction {
             Self::CreatePrintTemplate => "Создание шаблона печати",
             Self::UpdatePrintTemplate => "Обновление шаблона печати",
             Self::DeletePrintTemplate => "Удаление шаблона печати",
+            Self::ExecuteEntityAction => "Выполнение действия над объектом",
         }
     }
 
@@ -182,6 +185,7 @@ impl AuditableAction {
             Self::CreatePrintTemplate => "fa-solid fa-print text-primary-500",
             Self::UpdatePrintTemplate => "fa-solid fa-print text-primary-500",
             Self::DeletePrintTemplate => "fa-solid fa-print text-error-500",
+            Self::ExecuteEntityAction => "fa-solid fa-play text-primary-500",
         }
     }
 
@@ -208,6 +212,7 @@ impl AuditableAction {
             Self::CreatePrintTemplate | Self::UpdatePrintTemplate
             | Self::DeletePrintTemplate => "print_template",
             Self::ExecuteScript => "rhai_script",
+            Self::ExecuteEntityAction => "document",
         }
     }
 }
@@ -263,6 +268,7 @@ impl std::str::FromStr for AuditableAction {
             "create_print_template" => Ok(Self::CreatePrintTemplate),
             "update_print_template" => Ok(Self::UpdatePrintTemplate),
             "delete_print_template" => Ok(Self::DeletePrintTemplate),
+            "execute_entity_action" => Ok(Self::ExecuteEntityAction),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }

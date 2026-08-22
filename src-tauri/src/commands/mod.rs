@@ -1245,6 +1245,178 @@ pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>)
     crate::meta::service::EntityActionService::delete(db, uid).await.map_err(|e| e.to_string())
 }
 
+// ── Entity Action execution ──────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ExecuteActionInput {
+    pub action_id: String,
+    pub object_id: String,
+    pub data: Option<serde_json::Value>,
+}
+
+/// Результат выполнения действия
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ActionResult {
+    pub success: bool,
+    pub message: String,
+    pub new_state: Option<String>,
+    pub changes: Option<crate::audit::AuditChanges>,
+}
+
+/// Валидация перехода: проверяет что переход возможен из текущего состояния.
+#[tauri::command]
+pub async fn validate_entity_transition(
+    action_id: String,
+    object_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.read").map_err(|e| e.to_string())?;
+    let db = get_db!(state);
+
+    let action_uuid = uuid::Uuid::parse_str(&action_id).map_err(|e| e.to_string())?;
+    let object_uuid = uuid::Uuid::parse_str(&object_id).map_err(|e| e.to_string())?;
+
+    let action = crate::meta::service::EntityActionService::get(db, action_uuid).await
+        .map_err(|e| e.to_string())?;
+    let obj = crate::objects::ObjectService::get(db, object_uuid).await
+        .map_err(|e| e.to_string())?;
+
+    // Проверяем тип обработчика
+    if action.handler_kind != crate::meta::ActionHandlerKind::Transition {
+        return Err("Действие не является переходом (handler_kind != transition)".into());
+    }
+
+    // Ищем определение перехода по entity_type
+    let transitions = crate::meta::service::EntityTransitionService::list_by_type(db, action.entity_type_id).await
+        .map_err(|e| e.to_string())?;
+
+    let current_state = format!("{:?}", obj.state).to_lowercase();
+    let target_state = action.target_state.as_deref()
+        .ok_or_else(|| "Действие не имеет target_state".to_string())?;
+
+    // Ищем переход: from_state == текущее состояние AND to_state == target_state
+    let matching: Vec<_> = transitions.iter()
+        .filter(|t| t.from_state == current_state && t.to_state == target_state)
+        .collect();
+
+    let is_valid = !matching.is_empty();
+    let transition = matching.first().map(|t| {
+        serde_json::json!({
+            "transition_id": t._id.to_string(),
+            "code": t.code,
+            "name": t.name,
+            "required_policy": t.required_policy,
+            "require_signature": t.require_signature,
+        })
+    });
+
+    Ok(serde_json::json!({
+        "valid": is_valid,
+        "current_state": current_state,
+        "target_state": target_state,
+        "transition": transition,
+    }))
+}
+
+/// Выполнить действие над объектом.
+/// Для Transition-действий: проверка перехода + смена состояния.
+/// Для Custom-действий: вызов WASM/Rhai обработчика (пока заглушка).
+#[tauri::command]
+pub async fn execute_entity_action(
+    input: ExecuteActionInput,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<ActionResult, String> {
+    let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.approve").map_err(|e| e.to_string())?;
+    let db = get_db!(state);
+
+    let action_uuid = uuid::Uuid::parse_str(&input.action_id).map_err(|e| e.to_string())?;
+    let object_uuid = uuid::Uuid::parse_str(&input.object_id).map_err(|e| e.to_string())?;
+
+    let action = crate::meta::service::EntityActionService::get(db, action_uuid).await
+        .map_err(|e| e.to_string())?;
+    let obj = crate::objects::ObjectService::get(db, object_uuid).await
+        .map_err(|e| e.to_string())?;
+
+    // Проверка company_id
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    if obj.company_id.0.to_string() != *company_id {
+        return Err("Доступ запрещён: объект другой компании".into());
+    }
+
+    // Проверка required_policy (переопределяет глобальную)
+    if let Some(ref policy_code) = action.required_policy {
+        ctx.check_permission(policy_code).map_err(|e| e.to_string())?;
+    }
+
+    match action.handler_kind {
+        crate::meta::ActionHandlerKind::Transition => {
+            let target_state = action.target_state.as_deref()
+                .ok_or_else(|| "Действие не имеет target_state".to_string())?;
+
+            // Ищем переход
+            let transitions = crate::meta::service::EntityTransitionService::list_by_type(db, action.entity_type_id).await
+                .map_err(|e| e.to_string())?;
+            let current_state = format!("{:?}", obj.state).to_lowercase();
+
+            let _transition = transitions.iter()
+                .find(|t| t.from_state == current_state && t.to_state == target_state)
+                .ok_or_else(|| format!("Переход {current_state} → {target_state} не найден"))?;
+
+            // Выполняем переход через ObjectService
+            let user_id = crate::core::UserId(state.current_user.as_ref()
+                .ok_or_else(|| "Необходима авторизация".to_string())?._id);
+            let actor = build_actor(&state);
+            let cid = crate::core::CompanyId(uuid::Uuid::parse_str(&company_id).map_err(|e| e.to_string())?);
+
+            let new_state: crate::objects::ObjectState = serde_json::from_str(&format!("\"{target_state}\""))
+                .map_err(|e| format!("Неизвестное состояние: {e}"))?;
+
+            let changes = match (obj.state.clone(), new_state.clone()) {
+                (crate::objects::ObjectState::Draft, crate::objects::ObjectState::Posted) => {
+                    let outcome = crate::objects::ObjectService::post(db, object_uuid, obj.version, user_id, actor, cid).await
+                        .map_err(|e| e.to_string())?;
+                    outcome.changes
+                },
+                (crate::objects::ObjectState::Posted, crate::objects::ObjectState::Cancelled) => {
+                    let outcome = crate::objects::ObjectService::cancel(db, object_uuid, obj.version, user_id, actor, cid).await
+                        .map_err(|e| e.to_string())?;
+                    outcome.changes
+                },
+                _ => {
+                    return Err(format!("Прямой переход {current_state} → {target_state} не поддерживается. Используйте update_object + state change."));
+                },
+            };
+
+            Ok(ActionResult {
+                success: true,
+                message: format!("Переход выполнен: {current_state} → {target_state}"),
+                new_state: Some(target_state.to_string()),
+                changes,
+            })
+        },
+        crate::meta::ActionHandlerKind::Custom => {
+            // Custom: вызов WASM/Rhai обработчика
+            // Пока заглушка — в будущем будет диспетчеризация по handler_ref
+            if let Some(ref handler_ref) = action.handler_ref {
+                tracing::info!("Custom action {} handler_ref={}", action.code, handler_ref);
+                Ok(ActionResult {
+                    success: true,
+                    message: format!("Кастомное действие '{}' выполнено (handler_ref: {})", action.code, handler_ref),
+                    new_state: None,
+                    changes: None,
+                })
+            } else {
+                Err("Кастомное действие без handler_ref не поддерживается".into())
+            }
+        },
+    }
+}
+
 // ── Objects (Доска) ─────────────────────────────────────────
 
 #[tauri::command]

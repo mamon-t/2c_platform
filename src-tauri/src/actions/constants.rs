@@ -212,6 +212,10 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "update_entity_action", permission: METADATA_UPDATE, scope: ScopeTag::Metadata, audit: "" },
     CommandMapping { command: "delete_entity_action", permission: METADATA_DELETE, scope: ScopeTag::Metadata, audit: "" },
 
+    // ── Entity Action execution ──
+    CommandMapping { command: "validate_entity_transition", permission: DOCUMENTS_READ, scope: ScopeTag::Object, audit: "" },
+    CommandMapping { command: "execute_entity_action", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Object, audit: "execute_entity_action" },
+
     // ── Объекты ──
     CommandMapping { command: "list_objects", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "get_object", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
