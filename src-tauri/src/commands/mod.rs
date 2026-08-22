@@ -13,6 +13,7 @@ use crate::audit::{AuditEntry, AuditEntryView, AuditFilters, AuditableAction, Mo
 use crate::audit::service::AuditService as AuditServiceTrait;
 use crate::permission_policy::{PermissionPolicy, PermissionPolicyService, CreatePermissionPolicyInput};
 use crate::core::CompanyId;
+use crate::core::middleware::{CommandContext, Scope};
 use crate::plugin_manager::WasmPlugin;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -166,6 +167,8 @@ pub async fn save_app_config(config: AppConfig, state: State<'_, Mutex<AppState>
 #[tauri::command]
 pub async fn list_companies(state: State<'_, Mutex<AppState>>) -> Result<Vec<Company>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("companies.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     CompanyService::list(db).await.map_err(|e| e.to_string())
 }
@@ -173,6 +176,8 @@ pub async fn list_companies(state: State<'_, Mutex<AppState>>) -> Result<Vec<Com
 #[tauri::command]
 pub async fn get_company(id: String, state: State<'_, Mutex<AppState>>) -> Result<Company, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("companies.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     CompanyService::get(db, id).await.map_err(|e| e.to_string())
@@ -181,48 +186,49 @@ pub async fn get_company(id: String, state: State<'_, Mutex<AppState>>) -> Resul
 #[tauri::command]
 pub async fn create_company(input: CreateCompanyInput, state: State<'_, Mutex<AppState>>) -> Result<Company, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
-    let actor = build_actor(&state);
-    let outcome = CompanyService::create(db, input, actor).await.map_err(|e| e.to_string())?;
-    let _ = RoleService::create(db, CreateRoleInput {
-        company_id: crate::core::CompanyId(outcome.result._id),
-        code: "ADMIN".to_string(), name: "Администратор".to_string(),
-        description: Some("Администратор компании".to_string()),
-        permission_policy_ids: None,
-    }, crate::events::ActorSnapshot {
-        user_id: crate::core::UserId(uuid::Uuid::nil()),
-        login: "system".to_string(),
-        full_name: Some("Система".to_string()),
-        position: None,
-        company_id: crate::core::CompanyId(outcome.result._id),
-    }).await;
-    crate::audit_log!(state, db, AuditableAction::CreateCompany,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
+    let company = ctx.execute("companies.create", Scope::Company, AuditableAction::CreateCompany, move |actor| async move {
+        let outcome = CompanyService::create(&db, input, actor).await?;
+        // Автоматически создаём роль ADMIN для новой компании
+        let _ = RoleService::create(&db, CreateRoleInput {
+            company_id: crate::core::CompanyId(outcome.result._id),
+            code: "ADMIN".to_string(),
+            name: "Администратор".to_string(),
+            description: Some("Администратор компании".to_string()),
+            permission_policy_ids: None,
+        }, crate::events::ActorSnapshot {
+            user_id: crate::core::UserId(uuid::Uuid::nil()),
+            login: "system".to_string(),
+            full_name: Some("Система".to_string()),
+            position: None,
+            company_id: crate::core::CompanyId(outcome.result._id),
+        }).await;
+        Ok(outcome)
+    }).await.map_err(|e| e.to_string())?;
+    Ok(company)
 }
 
 #[tauri::command]
 pub async fn update_company(id: String, input: UpdateCompanyInput, state: State<'_, Mutex<AppState>>) -> Result<Company, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
     let cid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let outcome = CompanyService::update(db, cid, input, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::UpdateCompany,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    ctx.execute("companies.update", Scope::Company, AuditableAction::UpdateCompany, move |actor| async move {
+        CompanyService::update(&db, cid, input, actor).await
+    }).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_company(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
     let cid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let _outcome = CompanyService::delete(db, cid, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeleteCompany,
-        target_id = id);
-    Ok(())
+    ctx.execute("companies.delete", Scope::Company, AuditableAction::DeleteCompany, move |actor| async move {
+        CompanyService::delete(&db, cid, actor).await
+    }).await.map_err(|e| e.to_string()).map(|_| ())
 }
 
 // ── Пользователи ──────────────────────────────────────────────
@@ -230,6 +236,8 @@ pub async fn delete_company(id: String, state: State<'_, Mutex<AppState>>) -> Re
 #[tauri::command]
 pub async fn list_users(state: State<'_, Mutex<AppState>>) -> Result<Vec<UserPublic>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let users = UserService::list(db).await.map_err(|e| e.to_string())?;
     let mut result = Vec::new();
@@ -244,6 +252,8 @@ pub async fn list_users(state: State<'_, Mutex<AppState>>) -> Result<Vec<UserPub
 #[tauri::command]
 pub async fn get_user(id: String, state: State<'_, Mutex<AppState>>) -> Result<UserPublic, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = UserService::get(db, id).await.map_err(|e| e.to_string())?;
@@ -255,44 +265,47 @@ pub async fn get_user(id: String, state: State<'_, Mutex<AppState>>) -> Result<U
 #[tauri::command]
 pub async fn create_user(input: CreateUserInput, state: State<'_, Mutex<AppState>>) -> Result<UserPublic, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
-    let actor = build_actor(&state);
-    let outcome = UserService::create(db, input, &state.auth, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::CreateUser,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
+    let auth = &state.auth;
+    ctx.execute("users.create", Scope::Company, AuditableAction::CreateUser, move |actor| async move {
+        UserService::create(&db, input, auth, actor).await
+    }).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn update_user(id: String, input: UpdateUserInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    if let Some(ref status) = input.status {
-        if status == "disabled" || status == "archived" {
-            if UserService::is_last_admin(db, uid).await.map_err(|e| e.to_string())? {
-                return Err("Невозможно заблокировать последнего администратора компании".to_string());
+    let db = ctx.db.clone();
+    let auth = &state.auth;
+    ctx.execute("users.update", Scope::Company, AuditableAction::UpdateUser, move |actor| async move {
+        if let Some(ref status) = input.status {
+            if status == "disabled" || status == "archived" {
+                if UserService::is_last_admin(&db, uid).await? {
+                    return Err(crate::core::PlatformError::Validation(
+                        "Невозможно заблокировать последнего администратора компании".into()));
+                }
             }
         }
-    }
-    let actor = build_actor(&state);
-    let _outcome = UserService::update(db, uid, input, &state.auth, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::UpdateUser, target_id = id);
-    Ok(())
+        UserService::update(&db, uid, input, auth, actor).await
+    }).await.map_err(|e| e.to_string()).map(|_| ())
 }
 
 #[tauri::command]
 pub async fn delete_user(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    if UserService::is_last_admin(db, uid).await.map_err(|e| e.to_string())? {
-        return Err("Невозможно удалить последнего администратора компании".to_string());
-    }
-    let actor = build_actor(&state);
-    let _outcome = UserService::delete(db, uid, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeleteUser, target_id = id);
-    Ok(())
+    let db = ctx.db.clone();
+    ctx.execute("users.delete", Scope::Company, AuditableAction::DeleteUser, move |actor| async move {
+        if UserService::is_last_admin(&db, uid).await? {
+            return Err(crate::core::PlatformError::Validation(
+                "Невозможно удалить последнего администратора компании".into()));
+        }
+        UserService::delete(&db, uid, actor).await
+    }).await.map_err(|e| e.to_string()).map(|_| ())
 }
 
 #[tauri::command]
@@ -416,6 +429,8 @@ pub async fn get_me(state: State<'_, Mutex<AppState>>) -> Result<Option<UserPubl
 #[tauri::command]
 pub async fn get_person(id: String, state: State<'_, Mutex<AppState>>) -> Result<Person, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     PersonService::get(db, id).await.map_err(|e| e.to_string())
@@ -424,6 +439,8 @@ pub async fn get_person(id: String, state: State<'_, Mutex<AppState>>) -> Result
 #[tauri::command]
 pub async fn update_person(id: String, input: UpdatePersonInput, state: State<'_, Mutex<AppState>>) -> Result<Person, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = PersonService::get(db, id).await.ok();
@@ -464,6 +481,8 @@ pub async fn update_person(id: String, input: UpdatePersonInput, state: State<'_
 #[tauri::command]
 pub async fn list_user_contacts(user_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<UserContact>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("contacts.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&user_id).map_err(|e| e.to_string())?;
     UserContactService::list_by_user(db, crate::core::UserId(uid)).await.map_err(|e| e.to_string())
@@ -472,6 +491,8 @@ pub async fn list_user_contacts(user_id: String, state: State<'_, Mutex<AppState
 #[tauri::command]
 pub async fn create_contact(input: CreateContactInput, state: State<'_, Mutex<AppState>>) -> Result<UserContact, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("contacts.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let channel_type = input.channel_type.clone();
     let value = input.value.clone();
@@ -490,6 +511,8 @@ pub async fn create_contact(input: CreateContactInput, state: State<'_, Mutex<Ap
 #[tauri::command]
 pub async fn update_contact(id: String, input: UpdateContactInput, state: State<'_, Mutex<AppState>>) -> Result<UserContact, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("contacts.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let cid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserContactService::get(db, cid).await.ok();
@@ -526,6 +549,8 @@ pub async fn update_contact(id: String, input: UpdateContactInput, state: State<
 #[tauri::command]
 pub async fn delete_contact(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("contacts.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserContactService::get(db, id).await.ok();
@@ -545,6 +570,8 @@ pub async fn delete_contact(id: String, state: State<'_, Mutex<AppState>>) -> Re
 #[tauri::command]
 pub async fn list_user_profiles(user_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<UserProfileWithDetails>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&user_id).map_err(|e| e.to_string())?;
     UserProfileService::list_with_details(db, crate::core::UserId(uid)).await.map_err(|e| e.to_string())
@@ -553,6 +580,8 @@ pub async fn list_user_profiles(user_id: String, state: State<'_, Mutex<AppState
 #[tauri::command]
 pub async fn add_user_profile(input: CreateProfileInput, state: State<'_, Mutex<AppState>>) -> Result<UserProfileWithDetails, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let company_id_str = input.company_id.clone();
     let role_id_str = input.role_id.clone();
@@ -576,6 +605,8 @@ pub async fn add_user_profile(input: CreateProfileInput, state: State<'_, Mutex<
 #[tauri::command]
 pub async fn update_user_profile(id: String, input: UpdateProfileInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserProfileService::get(db, id).await.ok();
@@ -622,6 +653,8 @@ pub async fn update_user_profile(id: String, input: UpdateProfileInput, state: S
 #[tauri::command]
 pub async fn remove_user_profile(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserProfileService::get(db, id).await.ok();
@@ -641,6 +674,8 @@ pub async fn remove_user_profile(id: String, state: State<'_, Mutex<AppState>>) 
 #[tauri::command]
 pub async fn list_user_certificates(user_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<UserCertificate>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&user_id).map_err(|e| e.to_string())?;
     UserCertificateService::list_by_user(db, crate::core::UserId(uid)).await.map_err(|e| e.to_string())
@@ -649,6 +684,8 @@ pub async fn list_user_certificates(user_id: String, state: State<'_, Mutex<AppS
 #[tauri::command]
 pub async fn deactivate_certificate(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("users.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::DeactivateCertificate,
@@ -714,17 +751,18 @@ pub async fn switch_company(input: SwitchCompanyInput, state: State<'_, Mutex<Ap
 #[tauri::command]
 pub async fn create_role(input: CreateRoleInput, state: State<'_, Mutex<AppState>>) -> Result<Role, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
-    let actor = build_actor(&state);
-    let outcome = RoleService::create(db, input, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::CreateRole,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
+    ctx.execute("roles.create", Scope::Company, AuditableAction::CreateRole, move |actor| async move {
+        RoleService::create(&db, input, actor).await
+    }).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn list_roles(company_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<Role>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("roles.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let cid = uuid::Uuid::parse_str(&company_id).map_err(|e| e.to_string())?;
     RoleService::list(db, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())
@@ -733,12 +771,12 @@ pub async fn list_roles(company_id: String, state: State<'_, Mutex<AppState>>) -
 #[tauri::command]
 pub async fn delete_role(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
     let rid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let _outcome = RoleService::delete(db, rid, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeleteRole, target_id = id);
-    Ok(())
+    ctx.execute("roles.delete", Scope::Company, AuditableAction::DeleteRole, move |actor| async move {
+        RoleService::delete(&db, rid, actor).await
+    }).await.map_err(|e| e.to_string()).map(|_| ())
 }
 
 // ── Rhai ──────────────────────────────────────────────────────
@@ -746,9 +784,8 @@ pub async fn delete_role(id: String, state: State<'_, Mutex<AppState>>) -> Resul
 #[tauri::command]
 pub async fn validate_rhai_script(source: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    if !state.check_access("scripts", None, "read") {
-        return Err("Доступ запрещён: нет права scripts.read".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("scripts.read").map_err(|e| e.to_string())?;
     let sandbox = Sandbox::new(5000, 10000);
     sandbox.validate(&source).map_err(|e| e.to_string())
 }
@@ -756,9 +793,8 @@ pub async fn validate_rhai_script(source: String, state: State<'_, Mutex<AppStat
 #[tauri::command]
 pub async fn execute_rhai_script(source: String, context: String, state: State<'_, Mutex<AppState>>) -> Result<serde_json::Value, String> {
     let state = state.lock().await;
-    if !state.check_access("scripts", None, "execute") {
-        return Err("Доступ запрещён: нет права scripts.execute".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("scripts.execute").map_err(|e| e.to_string())?;
     let sandbox = Sandbox::new(5000, 10000);
     sandbox.execute(&source, &context).map_err(|e| e.to_string())
 }
@@ -768,6 +804,8 @@ pub async fn execute_rhai_script(source: String, context: String, state: State<'
 #[tauri::command]
 pub async fn get_contact_types(state: State<'_, Mutex<AppState>>) -> Result<Vec<SettingEntry>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     SettingsService::get_contact_types(db).await.map_err(|e| e.to_string())
 }
@@ -775,6 +813,8 @@ pub async fn get_contact_types(state: State<'_, Mutex<AppState>>) -> Result<Vec<
 #[tauri::command]
 pub async fn save_contact_types(types: Vec<SettingEntry>, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let val = serde_json::to_value(&types).map_err(|e| e.to_string())?;
     SettingsService::save_setting(db, "contact_types", val).await.map_err(|e| e.to_string())?;
@@ -799,11 +839,10 @@ pub struct AuditLogFilters {
 #[tauri::command]
 pub async fn list_audit_logs(filters: Option<AuditLogFilters>, state: State<'_, Mutex<AppState>>) -> Result<crate::audit::AuditPage, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
-    let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
-    let company_id_str = state.current_company_id.as_ref()
-        .ok_or_else(|| "Не выбрана компания".to_string())?;
-    let cid = uuid::Uuid::parse_str(company_id_str).map_err(|e| e.to_string())?;
+    let cid = ctx.company_id.0;
 
     let mut audit_filters = AuditFilters::default();
     if let Some(f) = filters {
@@ -836,8 +875,9 @@ pub async fn list_audit_logs(filters: Option<AuditLogFilters>, state: State<'_, 
 #[tauri::command]
 pub async fn get_audit_entry(id: String, state: State<'_, Mutex<AppState>>) -> Result<Option<AuditEntryView>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
-    let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
     let eid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let svc = MongoAuditService::new();
     svc.get_entry(db, eid).await.map_err(|e| e.to_string())
@@ -848,33 +888,31 @@ pub async fn get_audit_entry(id: String, state: State<'_, Mutex<AppState>>) -> R
 #[tauri::command]
 pub async fn list_permission_policies(state: State<'_, Mutex<AppState>>) -> Result<Vec<PermissionPolicy>, String> {
     let state = state.lock().await;
-    let _ = get_db!(state);
-    let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
-    PermissionPolicyService::list(get_db!(state)).await.map_err(|e| e.to_string())
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("roles.read").map_err(|e| e.to_string())?;
+    let db = get_db!(state);
+    PermissionPolicyService::list(db).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn create_permission_policy(input: CreatePermissionPolicyInput, state: State<'_, Mutex<AppState>>) -> Result<PermissionPolicy, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
-    let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
-    let actor = build_actor(&state);
-    let outcome = PermissionPolicyService::create(db, input, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::CreatePermissionPolicy,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
+    ctx.execute("roles.create", Scope::Company, AuditableAction::CreatePermissionPolicy, move |actor| async move {
+        PermissionPolicyService::create(&db, input, actor).await
+    }).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_permission_policy(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
-    let db = get_db!(state);
-    let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let _outcome = PermissionPolicyService::delete(db, uid, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeletePermissionPolicy, target_id = id);
-    Ok(())
+    ctx.execute("roles.delete", Scope::Company, AuditableAction::DeletePermissionPolicy, move |actor| async move {
+        PermissionPolicyService::delete(&db, uid, actor).await
+    }).await.map_err(|e| e.to_string()).map(|_| ())
 }
 
 // ── Roles (update) ─────────────────────────────────────────
@@ -882,13 +920,12 @@ pub async fn delete_permission_policy(id: String, state: State<'_, Mutex<AppStat
 #[tauri::command]
 pub async fn update_role(id: String, input: crate::role::UpdateRoleInput, state: State<'_, Mutex<AppState>>) -> Result<Role, String> {
     let state = state.lock().await;
-    let db = get_db!(state);
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    let db = ctx.db.clone();
     let rid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let outcome = RoleService::update(db, rid, input, actor).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::UpdateRole,
-        target_id = outcome.result._id.to_string());
-    Ok(outcome.result)
+    ctx.execute("roles.update", Scope::Company, AuditableAction::UpdateRole, move |actor| async move {
+        RoleService::update(&db, rid, input, actor).await
+    }).await.map_err(|e| e.to_string())
 }
 
 // ── Мой доступ ──────────────────────────────────────────────
@@ -924,17 +961,18 @@ pub async fn list_events(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<crate::events::EventPage, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
-    let company_id = state.current_company_id.as_ref()
-        .ok_or_else(|| "Не выбрана компания".to_string())?;
-    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let svc = crate::events::EventService::new();
-    svc.list(db, crate::core::CompanyId(cid), filters).await.map_err(|e| e.to_string())
+    svc.list(db, ctx.company_id, filters).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_event(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::events::Event, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let eid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let svc = crate::events::EventService::new();
@@ -948,6 +986,8 @@ pub async fn list_stream_events(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<crate::events::Event>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let st: crate::events::StreamType = stream_type.parse().map_err(|e: crate::core::PlatformError| e.to_string())?;
     let svc = crate::events::EventService::new();
@@ -959,6 +999,8 @@ pub async fn list_stream_events(
 #[tauri::command]
 pub async fn list_entity_types(state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityType>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let cid = state.current_company_id.as_ref()
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
@@ -969,6 +1011,8 @@ pub async fn list_entity_types(state: State<'_, Mutex<AppState>>) -> Result<Vec<
 #[tauri::command]
 pub async fn get_entity_type(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTypeService::get(db, uid).await.map_err(|e| e.to_string())
@@ -977,6 +1021,8 @@ pub async fn get_entity_type(id: String, state: State<'_, Mutex<AppState>>) -> R
 #[tauri::command]
 pub async fn create_entity_type(input: crate::meta::CreateEntityTypeInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let cid = state.current_company_id.as_ref()
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
@@ -987,6 +1033,8 @@ pub async fn create_entity_type(input: crate::meta::CreateEntityTypeInput, state
 #[tauri::command]
 pub async fn update_entity_type(id: String, input: crate::meta::UpdateEntityTypeInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityType, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTypeService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -995,6 +1043,8 @@ pub async fn update_entity_type(id: String, input: crate::meta::UpdateEntityType
 #[tauri::command]
 pub async fn delete_entity_type(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTypeService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1003,6 +1053,8 @@ pub async fn delete_entity_type(id: String, state: State<'_, Mutex<AppState>>) -
 #[tauri::command]
 pub async fn list_entity_fields(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityField>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFieldService::list_by_type(db, uid).await.map_err(|e| e.to_string())
@@ -1011,6 +1063,8 @@ pub async fn list_entity_fields(entity_type_id: String, state: State<'_, Mutex<A
 #[tauri::command]
 pub async fn create_entity_field(input: crate::meta::CreateEntityFieldInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityField, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     crate::meta::service::EntityFieldService::create(db, input).await.map_err(|e| e.to_string())
 }
@@ -1018,6 +1072,8 @@ pub async fn create_entity_field(input: crate::meta::CreateEntityFieldInput, sta
 #[tauri::command]
 pub async fn update_entity_field(id: String, input: crate::meta::UpdateEntityFieldInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityField, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFieldService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -1026,6 +1082,8 @@ pub async fn update_entity_field(id: String, input: crate::meta::UpdateEntityFie
 #[tauri::command]
 pub async fn delete_entity_field(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFieldService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1034,6 +1092,8 @@ pub async fn delete_entity_field(id: String, state: State<'_, Mutex<AppState>>) 
 #[tauri::command]
 pub async fn list_entity_states(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityState>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityStateService::list_by_type(db, uid).await.map_err(|e| e.to_string())
@@ -1042,6 +1102,8 @@ pub async fn list_entity_states(entity_type_id: String, state: State<'_, Mutex<A
 #[tauri::command]
 pub async fn create_entity_state(input: crate::meta::CreateEntityStateInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityState, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     crate::meta::service::EntityStateService::create(db, input).await.map_err(|e| e.to_string())
 }
@@ -1049,6 +1111,8 @@ pub async fn create_entity_state(input: crate::meta::CreateEntityStateInput, sta
 #[tauri::command]
 pub async fn update_entity_state(id: String, input: crate::meta::UpdateEntityStateInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityStateService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -1057,6 +1121,8 @@ pub async fn update_entity_state(id: String, input: crate::meta::UpdateEntitySta
 #[tauri::command]
 pub async fn delete_entity_state(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityStateService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1065,6 +1131,8 @@ pub async fn delete_entity_state(id: String, state: State<'_, Mutex<AppState>>) 
 #[tauri::command]
 pub async fn list_entity_transitions(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityTransition>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTransitionService::list_by_type(db, uid).await.map_err(|e| e.to_string())
@@ -1073,6 +1141,8 @@ pub async fn list_entity_transitions(entity_type_id: String, state: State<'_, Mu
 #[tauri::command]
 pub async fn create_entity_transition(input: crate::meta::CreateEntityTransitionInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityTransition, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     crate::meta::service::EntityTransitionService::create(db, input).await.map_err(|e| e.to_string())
 }
@@ -1080,6 +1150,8 @@ pub async fn create_entity_transition(input: crate::meta::CreateEntityTransition
 #[tauri::command]
 pub async fn update_entity_transition(id: String, input: crate::meta::UpdateEntityTransitionInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTransitionService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -1088,6 +1160,8 @@ pub async fn update_entity_transition(id: String, input: crate::meta::UpdateEnti
 #[tauri::command]
 pub async fn delete_entity_transition(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityTransitionService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1096,6 +1170,8 @@ pub async fn delete_entity_transition(id: String, state: State<'_, Mutex<AppStat
 #[tauri::command]
 pub async fn list_entity_forms(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityForm>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFormService::list_by_type(db, uid).await.map_err(|e| e.to_string())
@@ -1104,6 +1180,8 @@ pub async fn list_entity_forms(entity_type_id: String, state: State<'_, Mutex<Ap
 #[tauri::command]
 pub async fn create_entity_form(input: crate::meta::CreateEntityFormInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityForm, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     crate::meta::service::EntityFormService::create(db, input).await.map_err(|e| e.to_string())
 }
@@ -1111,6 +1189,8 @@ pub async fn create_entity_form(input: crate::meta::CreateEntityFormInput, state
 #[tauri::command]
 pub async fn update_entity_form(id: String, input: crate::meta::UpdateEntityFormInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFormService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -1119,6 +1199,8 @@ pub async fn update_entity_form(id: String, input: crate::meta::UpdateEntityForm
 #[tauri::command]
 pub async fn delete_entity_form(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityFormService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1127,6 +1209,8 @@ pub async fn delete_entity_form(id: String, state: State<'_, Mutex<AppState>>) -
 #[tauri::command]
 pub async fn list_entity_actions(entity_type_id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::meta::EntityAction>, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&entity_type_id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityActionService::list_by_type(db, uid).await.map_err(|e| e.to_string())
@@ -1135,6 +1219,8 @@ pub async fn list_entity_actions(entity_type_id: String, state: State<'_, Mutex<
 #[tauri::command]
 pub async fn create_entity_action(input: crate::meta::CreateEntityActionInput, state: State<'_, Mutex<AppState>>) -> Result<crate::meta::EntityAction, String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     crate::meta::service::EntityActionService::create(db, input).await.map_err(|e| e.to_string())
 }
@@ -1142,6 +1228,8 @@ pub async fn create_entity_action(input: crate::meta::CreateEntityActionInput, s
 #[tauri::command]
 pub async fn update_entity_action(id: String, input: crate::meta::UpdateEntityActionInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityActionService::update(db, uid, input).await.map_err(|e| e.to_string())
@@ -1150,6 +1238,8 @@ pub async fn update_entity_action(id: String, input: crate::meta::UpdateEntityAc
 #[tauri::command]
 pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("metadata.delete").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     crate::meta::service::EntityActionService::delete(db, uid).await.map_err(|e| e.to_string())
@@ -1160,9 +1250,8 @@ pub async fn delete_entity_action(id: String, state: State<'_, Mutex<AppState>>)
 #[tauri::command]
 pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::ObjectPage, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "read") {
-        return Err("Доступ запрещён: нет права documents.read".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or_else(|| "Не выбрана компания".to_string())?;
@@ -1173,9 +1262,8 @@ pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'
 #[tauri::command]
 pub async fn get_object(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "read") {
-        return Err("Доступ запрещён: нет права documents.read".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let company_id = state.current_company_id.as_ref()
@@ -1190,9 +1278,8 @@ pub async fn get_object(id: String, state: State<'_, Mutex<AppState>>) -> Result
 #[tauri::command]
 pub async fn create_object(input: crate::objects::CreateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "create") {
-        return Err("Доступ запрещён: нет права documents.create".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.create").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let company_id = state.current_company_id.as_ref()
         .ok_or_else(|| "Не выбрана компания".to_string())?;
@@ -1210,9 +1297,8 @@ pub async fn create_object(input: crate::objects::CreateObjectInput, state: Stat
 #[tauri::command]
 pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "update") {
-        return Err("Доступ запрещён: нет права documents.update".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1231,9 +1317,8 @@ pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput,
 #[tauri::command]
 pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "approve") {
-        return Err("Доступ запрещён: нет права documents.approve".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.approve").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1252,9 +1337,8 @@ pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppSta
 #[tauri::command]
 pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "cancel") {
-        return Err("Доступ запрещён: нет права documents.cancel".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.cancel").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1273,9 +1357,8 @@ pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppS
 #[tauri::command]
 pub async fn restore_object_version(id: String, target_version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "update") {
-        return Err("Доступ запрещён: нет права documents.update".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let user = state.current_user.as_ref()
@@ -1294,9 +1377,8 @@ pub async fn restore_object_version(id: String, target_version: i64, state: Stat
 #[tauri::command]
 pub async fn list_object_versions(id: String, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::objects::ObjectSnapshot>, String> {
     let state = state.lock().await;
-    if !state.check_access("documents", None, "read") {
-        return Err("Доступ запрещён: нет права documents.read".into());
-    }
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.read").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let company_id = state.current_company_id.as_ref()
