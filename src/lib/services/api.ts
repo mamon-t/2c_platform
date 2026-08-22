@@ -833,8 +833,8 @@ export const api = {
   async listWasmModules(): Promise<WasmModuleInfo[]> {
     return getAdapter().invoke<WasmModuleInfo[]>('wasm_list');
   },
-  async pluginCall(moduleId: string, function: string, argsJson: string): Promise<string> {
-    return getAdapter().invoke<string>('plugin_call', { moduleId, function, argsJson });
+  async pluginCall(moduleId: string, func: string, argsJson: string): Promise<string> {
+    return getAdapter().invoke<string>('plugin_call', { moduleId, func, argsJson });
   },
 
   // ── Печатные формы ──

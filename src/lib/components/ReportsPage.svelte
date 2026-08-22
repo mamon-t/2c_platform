@@ -173,11 +173,11 @@
             </thead>
             <tbody class="divide-y divide-surface-300-700/50">
               {#each recentObjects as obj}
+                {@const meta = OBJECT_STATE_META[obj.state as keyof typeof OBJECT_STATE_META]}
                 <tr class="hover:bg-surface-100-900/50">
                   <td class="py-1.5 font-mono text-surface-900-100">{obj.number ?? '—'}</td>
                   <td class="py-1.5 text-surface-600-400">{obj.typeName}</td>
                   <td class="py-1.5">
-                    {@const meta = OBJECT_STATE_META[obj.state as keyof typeof OBJECT_STATE_META]}
                     <span class="rounded-full px-1.5 py-0.5 text-[10px] font-medium preset-tonal-{meta?.color ?? 'primary'}">
                       {meta?.label ?? obj.state}
                     </span>

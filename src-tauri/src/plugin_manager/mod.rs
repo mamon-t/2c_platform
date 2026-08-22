@@ -145,7 +145,7 @@ extism::host_fn!(create_object_impl(user_data: HostData; entity_type_id: String,
             };
 
             match crate::objects::service::ObjectService::create(&db_client, input, company_id, user_id, actor).await {
-                Ok(obj) => ok_response(serde_json::json!({ "id": obj._id.to_string() })),
+                Ok(outcome) => ok_response(serde_json::json!({ "id": outcome.result._id.to_string() })),
                 Err(e) => error_response("CREATE_FAILED", &e.to_string()),
             }
         })
@@ -310,7 +310,7 @@ extism::host_fn!(update_object_impl(user_data: HostData; id: String, data: Strin
             };
 
             match crate::objects::service::ObjectService::update(&db, uuid, input, user_id, actor, company_id).await {
-                Ok(obj) => ok_response(serde_json::json!({ "id": obj._id.to_string(), "version": obj.version })),
+                Ok(outcome) => ok_response(serde_json::json!({ "id": outcome.result._id.to_string(), "version": outcome.result.version })),
                 Err(e) => error_response("UPDATE_FAILED", &e.to_string()),
             }
         })

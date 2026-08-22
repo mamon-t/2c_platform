@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AuthService;
-use crate::core::{Id, PlatformError, PlatformResult};
+use crate::audit::AuditChanges;
+use crate::core::{CompanyId, Id, PlatformError, PlatformResult, UserId};
+use crate::core::middleware::CommandOutcome;
 use crate::db::MongoClient;
+use crate::events::{ActorSnapshot, EventService, StreamType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserStatus {
@@ -172,9 +175,15 @@ impl UserService {
         db: &MongoClient,
         input: CreateUserInput,
         auth: &AuthService,
-    ) -> PlatformResult<UserPublic> {
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<UserPublic>> {
         let password_hash = auth.hash_password(&input.password)?;
         let now = Utc::now();
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
 
         let mut person_id: Option<Id> = None;
         let mut display_name = input.display_name.clone().unwrap_or_else(|| input.login.clone());
@@ -189,8 +198,7 @@ impl UserService {
                     middle_name: input.middle_name.clone(),
                     display_name: input.display_name.clone(),
                 },
-            )
-            .await?;
+            ).await?;
             display_name = person.display_name.clone();
             person_id = Some(person._id);
         }
@@ -218,16 +226,14 @@ impl UserService {
         doc.insert("status", &user.status);
 
         let col = db.collection::<Document>("users");
-        col.insert_one(doc).await.map_err(|e| {
-            if e.to_string().contains("duplicate key") {
-                PlatformError::Validation(format!(
-                    "Пользователь '{}' уже существует",
-                    user.login
-                ))
-            } else {
-                PlatformError::Database(e.to_string())
-            }
-        })?;
+        col.insert_one(doc).session(&mut session).await
+            .map_err(|e| {
+                if e.to_string().contains("duplicate key") {
+                    PlatformError::Validation(format!("Пользователь '{}' уже существует", user.login))
+                } else {
+                    PlatformError::Database(e.to_string())
+                }
+            })?;
 
         if let Some(ref email) = input.email {
             let _ = crate::user_contact::UserContactService::create(
@@ -240,8 +246,7 @@ impl UserService {
                     purposes: Some(vec!["login".to_string(), "notifications".to_string()]),
                     note: None,
                 },
-            )
-            .await;
+            ).await;
         }
 
         if let (Some(ref company_id), Some(ref role_id)) = (&input.company_id, &input.role_id) {
@@ -256,13 +261,27 @@ impl UserService {
                     employee_number: None,
                     is_primary: Some(true),
                 },
-            )
-            .await;
+            ).await;
         }
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({
+            "login": user.login,
+            "status": user.status,
+        });
+        let cid = actor.company_id.clone();
+        let _ = svc.append_with_session(db, &mut session, StreamType::User, &user._id.to_string(), "user.created", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
 
         let mut pub_user: UserPublic = user.into();
         pub_user.display_name = display_name;
-        Ok(pub_user)
+
+        let changes = AuditChanges::new()
+            .field_new("login", &pub_user.login);
+
+        Ok(CommandOutcome { result: pub_user, changes: Some(changes), event_id: None, signature_ref: None })
     }
 
     pub async fn update(
@@ -270,41 +289,83 @@ impl UserService {
         id: Id,
         input: UpdateUserInput,
         auth: &AuthService,
-    ) -> PlatformResult<()> {
-        let col = db.collection::<Document>("users");
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<()>> {
+        let old = Self::get(db, id).await?;
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let mut update_doc = doc! { "updated_at": mongodb::bson::to_bson(&Utc::now()).unwrap() };
-        if let Some(status) = input.status {
-            update_doc.insert("status", status);
-        }
-        if let Some(locale) = input.locale {
-            update_doc.insert("locale", locale);
-        }
-        if let Some(timezone) = input.timezone {
-            update_doc.insert("timezone", timezone);
-        }
-        if let Some(new_password) = input.new_password {
-            let hash = auth.hash_password(&new_password)?;
+        if let Some(ref status) = input.status { update_doc.insert("status", status.clone()); }
+        if let Some(ref locale) = input.locale { update_doc.insert("locale", locale.clone()); }
+        if let Some(ref timezone) = input.timezone { update_doc.insert("timezone", timezone.clone()); }
+        if let Some(ref new_password) = input.new_password {
+            let hash = auth.hash_password(new_password)?;
             update_doc.insert("password_hash", hash);
             update_doc.insert("password_changed_at", mongodb::bson::to_bson(&Utc::now()).unwrap());
         }
         if let Some(must) = input.must_change_password {
             update_doc.insert("must_change_password", must);
         }
+
+        let col = db.collection::<Document>("users");
         col.update_one(doc! { "_id": id.to_string() }, doc! { "$set": update_doc })
-            .await
+            .session(&mut session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
-        Ok(())
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({
+            "status": input.status,
+            "locale": input.locale,
+        });
+        let cid = actor.company_id.clone();
+        let _ = svc.append_with_session(db, &mut session, StreamType::User, &id.to_string(), "user.updated", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
+        let mut changes = AuditChanges::new();
+        if let Some(ref s) = input.status {
+            changes = changes.field("status", &old.status, s);
+        }
+
+        Ok(CommandOutcome { result: (), changes: Some(changes), event_id: None, signature_ref: None })
     }
 
-    pub async fn delete(db: &MongoClient, id: Id) -> PlatformResult<()> {
+    pub async fn delete(
+        db: &MongoClient,
+        id: Id,
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<()>> {
+        let old = Self::get(db, id).await?;
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let col = db.collection::<Document>("users");
         col.update_one(
             doc! { "_id": id.to_string() },
             doc! { "$set": { "status": "archived", "updated_at": mongodb::bson::to_bson(&Utc::now()).unwrap() } },
-        )
-        .await
-        .map_err(|e| PlatformError::Database(e.to_string()))?;
-        Ok(())
+        ).session(&mut session).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({ "login": old.login });
+        let cid = actor.company_id.clone();
+        let _ = svc.append_with_session(db, &mut session, StreamType::User, &id.to_string(), "user.deleted", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
+        let changes = AuditChanges::new()
+            .field("status", &old.status, "archived");
+
+        Ok(CommandOutcome { result: (), changes: Some(changes), event_id: None, signature_ref: None })
     }
 
     pub async fn has_users(db: &MongoClient) -> PlatformResult<bool> {

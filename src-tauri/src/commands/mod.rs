@@ -37,8 +37,8 @@ pub struct ModuleInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectInput {
-    pub uri: String,
-    pub db_name: String,
+    pub uri: Option<String>,
+    pub db_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,9 +127,18 @@ pub async fn get_diagnostics(state: State<'_, Mutex<AppState>>) -> Result<Diagno
 
 #[tauri::command]
 pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) -> Result<DiagnosticsInfo, String> {
-    let client = MongoClient::connect(&input.uri, &input.db_name).await.map_err(|e| e.to_string())?;
+    let uri = input.uri
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("MONGODB_URI").ok())
+        .ok_or("URI подключения не указан. Укажите в форме или в .env (MONGODB_URI)")?;
+    let db_name = input.db_name
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("MONGODB_DATABASE").ok())
+        .unwrap_or_else(|| "2c_platform".to_string());
+
+    let client = MongoClient::connect(&uri, &db_name).await.map_err(|e| e.to_string())?;
     let info = client.diagnostics().await;
-    { let mut state = state.lock().await; state.db = Some(client.clone()); state.config.mongodb_uri = Some(input.uri); state.config.mongodb_database = Some(input.db_name); }
+    { let mut state = state.lock().await; state.db = Some(client.clone()); state.config.mongodb_uri = Some(uri); state.config.mongodb_database = Some(db_name); }
     // Создаём индексы при подключении
     crate::audit::indexes::ensure_audit_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::events::indexes::ensure_event_indexes(&client).await.map_err(|e| e.to_string())?;
@@ -173,16 +182,23 @@ pub async fn get_company(id: String, state: State<'_, Mutex<AppState>>) -> Resul
 pub async fn create_company(input: CreateCompanyInput, state: State<'_, Mutex<AppState>>) -> Result<Company, String> {
     let state = state.lock().await;
     let db = get_db!(state);
-    let company = CompanyService::create(db, input).await.map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    let outcome = CompanyService::create(db, input, actor).await.map_err(|e| e.to_string())?;
     let _ = RoleService::create(db, CreateRoleInput {
-        company_id: crate::core::CompanyId(company._id),
+        company_id: crate::core::CompanyId(outcome.result._id),
         code: "ADMIN".to_string(), name: "Администратор".to_string(),
         description: Some("Администратор компании".to_string()),
         permission_policy_ids: None,
+    }, crate::events::ActorSnapshot {
+        user_id: crate::core::UserId(uuid::Uuid::nil()),
+        login: "system".to_string(),
+        full_name: Some("Система".to_string()),
+        position: None,
+        company_id: crate::core::CompanyId(outcome.result._id),
     }).await;
     crate::audit_log!(state, db, AuditableAction::CreateCompany,
-        target_id = company._id.to_string());
-    Ok(company)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -190,35 +206,11 @@ pub async fn update_company(id: String, input: UpdateCompanyInput, state: State<
     let state = state.lock().await;
     let db = get_db!(state);
     let cid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let old = CompanyService::get(db, cid).await.ok();
-    let result = CompanyService::update(db, cid, input.clone()).await.map_err(|e| e.to_string())?;
-    {
-        let mut changes = crate::audit::AuditChanges::new();
-        let mut has_changes = false;
-        if let Some(ref n) = input.name {
-            let old_val = old.as_ref().map(|c| c.name.as_str()).unwrap_or("");
-            changes = changes.field("name", old_val, n.as_str());
-            has_changes = true;
-        }
-        if let Some(ref inn) = input.inn {
-            let old_val = old.as_ref().and_then(|c| c.inn.as_deref()).unwrap_or("");
-            changes = changes.field("inn", old_val, inn.as_str());
-            has_changes = true;
-        }
-        if let Some(a) = input.active {
-            let old_val = old.as_ref().map(|c| c.active).unwrap_or(true);
-            changes = changes.field("active", if old_val { "true" } else { "false" }, if a { "true" } else { "false" });
-            has_changes = true;
-        }
-        if has_changes {
-            crate::audit::macros::fire_audit(
-                &state, db, AuditableAction::UpdateCompany,
-                Some(id.clone()), None, None,
-                Some(changes), None,
-            ).await;
-        }
-    }
-    Ok(result)
+    let actor = build_actor(&state);
+    let outcome = CompanyService::update(db, cid, input, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::UpdateCompany,
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -226,9 +218,11 @@ pub async fn delete_company(id: String, state: State<'_, Mutex<AppState>>) -> Re
     let state = state.lock().await;
     let db = get_db!(state);
     let cid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    let _outcome = CompanyService::delete(db, cid, actor).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::DeleteCompany,
-        target_id = id.clone());
-    CompanyService::delete(db, cid).await.map_err(|e| e.to_string())
+        target_id = id);
+    Ok(())
 }
 
 // ── Пользователи ──────────────────────────────────────────────
@@ -262,68 +256,29 @@ pub async fn get_user(id: String, state: State<'_, Mutex<AppState>>) -> Result<U
 pub async fn create_user(input: CreateUserInput, state: State<'_, Mutex<AppState>>) -> Result<UserPublic, String> {
     let state = state.lock().await;
     let db = get_db!(state);
-    let result = UserService::create(db, input, &state.auth).await.map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    let outcome = UserService::create(db, input, &state.auth, actor).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::CreateUser,
-        target_id = result._id.to_string());
-    Ok(result)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
 pub async fn update_user(id: String, input: UpdateUserInput, state: State<'_, Mutex<AppState>>) -> Result<(), String> {
-    let mut state = state.lock().await;
+    let state = state.lock().await;
     let db = get_db!(state);
-    let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     if let Some(ref status) = input.status {
         if status == "disabled" || status == "archived" {
-            if UserService::is_last_admin(db, id).await.map_err(|e| e.to_string())? {
+            if UserService::is_last_admin(db, uid).await.map_err(|e| e.to_string())? {
                 return Err("Невозможно заблокировать последнего администратора компании".to_string());
             }
         }
     }
-    let old_user = UserService::get(db, id).await.ok();
-    if let Some(ref s) = input.status {
-        if s == "disabled" || s == "archived" {
-            if UserService::is_last_admin(db, id).await.map_err(|e| e.to_string())? {
-                return Err("Невозможно заблокировать последнего администратора компании".to_string());
-            }
-        }
-    }
-    {
-        let mut changes = crate::audit::AuditChanges::new();
-        let mut has_changes = false;
-        if let Some(ref s) = input.status {
-            let old_val = old_user.as_ref().map(|u| u.status.as_str()).unwrap_or("unknown");
-            changes = changes.field("status", old_val, s.as_str());
-            has_changes = true;
-        }
-        if input.new_password.is_some() {
-            changes = changes.field("password", "***", "***");
-            has_changes = true;
-        }
-        if let Some(ref tz) = input.timezone {
-            let old_val = old_user.as_ref().and_then(|u| u.timezone.as_deref()).unwrap_or("");
-            changes = changes.field("timezone", old_val, tz.as_str());
-            has_changes = true;
-        }
-        if let Some(ref loc) = input.locale {
-            let old_val = old_user.as_ref().and_then(|u| u.locale.as_deref()).unwrap_or("");
-            changes = changes.field("locale", old_val, loc.as_str());
-            has_changes = true;
-        }
-        if let Some(mcp) = input.must_change_password {
-            let old_val = old_user.as_ref().map(|u| if u.must_change_password { "true" } else { "false" }).unwrap_or("false");
-            changes = changes.field("must_change_password", old_val, if mcp { "true" } else { "false" });
-            has_changes = true;
-        }
-        if has_changes {
-            crate::audit::macros::fire_audit(
-                &state, db, AuditableAction::UpdateUser,
-                Some(id.to_string()), None, None,
-                Some(changes), None,
-            ).await;
-        }
-    }
-    UserService::update(db, id, input, &state.auth).await.map_err(|e| e.to_string())
+    let actor = build_actor(&state);
+    let _outcome = UserService::update(db, uid, input, &state.auth, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::UpdateUser, target_id = id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -334,9 +289,10 @@ pub async fn delete_user(id: String, state: State<'_, Mutex<AppState>>) -> Resul
     if UserService::is_last_admin(db, uid).await.map_err(|e| e.to_string())? {
         return Err("Невозможно удалить последнего администратора компании".to_string());
     }
-    crate::audit_log!(state, db, AuditableAction::DeleteUser,
-        target_id = id.clone());
-    UserService::delete(db, uid).await.map_err(|e| e.to_string())
+    let actor = build_actor(&state);
+    let _outcome = UserService::delete(db, uid, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::DeleteUser, target_id = id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -351,7 +307,14 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
 
         let company = CompanyService::create(&db, CreateCompanyInput {
             code: "MAIN".to_string(), name: "Основная компания".to_string(), inn: None,
+        }, crate::events::ActorSnapshot {
+            user_id: crate::core::UserId(uuid::Uuid::nil()),
+            login: "system".to_string(),
+            full_name: Some("Система".to_string()),
+            position: None,
+            company_id: crate::core::CompanyId(uuid::Uuid::nil()),
         }).await.map_err(|e| format!("Ошибка создания компании: {e}"))?;
+        let company = company.result;
 
         RoleService::seed_roles_for_company(&db, crate::core::CompanyId(company._id)).await
             .map_err(|e| format!("Ошибка создания ролей: {e}"))?;
@@ -374,7 +337,14 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
             role_id: Some(role._id.to_string()),
             position: Some("Системный администратор".to_string()),
             department: None,
-        }, &state.auth).await.map_err(|e| format!("Ошибка создания пользователя: {e}"))?;
+        }, &state.auth, crate::events::ActorSnapshot {
+            user_id: crate::core::UserId(uuid::Uuid::nil()),
+            login: "system".to_string(),
+            full_name: Some("Система".to_string()),
+            position: None,
+            company_id: crate::core::CompanyId(uuid::Uuid::nil()),
+        }).await.map_err(|e| format!("Ошибка создания пользователя: {e}"))?;
+        let user = user.result;
 
         let companies = UserProfileService::list_with_details(&db, crate::core::UserId(user._id))
             .await.map_err(|e| e.to_string())?;
@@ -482,7 +452,7 @@ pub async fn update_person(id: String, input: UpdatePersonInput, state: State<'_
             crate::audit::macros::fire_audit(
                 &state, db, AuditableAction::UpdatePerson,
                 Some(result._id.to_string()), None, None,
-                Some(changes), None,
+                Some(changes), None, None,
             ).await;
         }
     }
@@ -512,7 +482,7 @@ pub async fn create_contact(input: CreateContactInput, state: State<'_, Mutex<Ap
         Some(crate::audit::AuditChanges::new()
             .field_new("channel_type", &channel_type)
             .field_new("value", &value)),
-        None,
+        None, None,
     ).await;
     Ok(result)
 }
@@ -546,7 +516,7 @@ pub async fn update_contact(id: String, input: UpdateContactInput, state: State<
             crate::audit::macros::fire_audit(
                 &state, db, AuditableAction::UpdateContact,
                 Some(result._id.to_string()), None, None,
-                Some(changes), None,
+                Some(changes), None, None,
             ).await;
         }
     }
@@ -565,7 +535,7 @@ pub async fn delete_contact(id: String, state: State<'_, Mutex<AppState>>) -> Re
         old.map(|c| crate::audit::AuditChanges::new()
             .field_old("channel_type", &c.channel_type)
             .field_old("value", &c.value)),
-        None,
+        None, None,
     ).await;
     UserContactService::delete(db, id).await.map_err(|e| e.to_string())
 }
@@ -595,7 +565,7 @@ pub async fn add_user_profile(input: CreateProfileInput, state: State<'_, Mutex<
             .field_new("company_id", &company_id_str)
             .field_new("role_id", &role_id_str)
             .field_new("position", &position_str)),
-        None,
+        None, None,
     ).await;
     let uid = profile.user_id;
     UserProfileService::list_with_details(db, uid).await
@@ -642,7 +612,7 @@ pub async fn update_user_profile(id: String, input: UpdateProfileInput, state: S
             crate::audit::macros::fire_audit(
                 &state, db, AuditableAction::UpdateUserProfile,
                 Some(id.to_string()), None, None,
-                Some(changes), None,
+                Some(changes), None, None,
             ).await;
         }
     }
@@ -661,7 +631,7 @@ pub async fn remove_user_profile(id: String, state: State<'_, Mutex<AppState>>) 
         old.map(|p| crate::audit::AuditChanges::new()
             .field_old("company_id", &p.company_id.0.to_string())
             .field_old("role_id", &p.role_id.0.to_string())),
-        None,
+        None, None,
     ).await;
     UserProfileService::remove(db, id).await.map_err(|e| e.to_string())
 }
@@ -745,10 +715,11 @@ pub async fn switch_company(input: SwitchCompanyInput, state: State<'_, Mutex<Ap
 pub async fn create_role(input: CreateRoleInput, state: State<'_, Mutex<AppState>>) -> Result<Role, String> {
     let state = state.lock().await;
     let db = get_db!(state);
-    let role = RoleService::create(db, input).await.map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    let outcome = RoleService::create(db, input, actor).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::CreateRole,
-        target_id = role._id.to_string());
-    Ok(role)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -764,9 +735,10 @@ pub async fn delete_role(id: String, state: State<'_, Mutex<AppState>>) -> Resul
     let state = state.lock().await;
     let db = get_db!(state);
     let rid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeleteRole,
-        target_id = id.clone());
-    RoleService::delete(db, rid).await.map_err(|e| e.to_string())
+    let actor = build_actor(&state);
+    let _outcome = RoleService::delete(db, rid, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::DeleteRole, target_id = id);
+    Ok(())
 }
 
 // ── Rhai ──────────────────────────────────────────────────────
@@ -886,10 +858,11 @@ pub async fn create_permission_policy(input: CreatePermissionPolicyInput, state:
     let state = state.lock().await;
     let db = get_db!(state);
     let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
-    let result = PermissionPolicyService::create(db, input).await.map_err(|e| e.to_string())?;
+    let actor = build_actor(&state);
+    let outcome = PermissionPolicyService::create(db, input, actor).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::CreatePermissionPolicy,
-        target_id = result._id.to_string());
-    Ok(result)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -898,9 +871,10 @@ pub async fn delete_permission_policy(id: String, state: State<'_, Mutex<AppStat
     let db = get_db!(state);
     let _ = state.current_user.as_ref().ok_or_else(|| "Необходима авторизация".to_string())?;
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::DeletePermissionPolicy,
-        target_id = id.clone());
-    PermissionPolicyService::delete(db, uid).await.map_err(|e| e.to_string())
+    let actor = build_actor(&state);
+    let _outcome = PermissionPolicyService::delete(db, uid, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::DeletePermissionPolicy, target_id = id);
+    Ok(())
 }
 
 // ── Roles (update) ─────────────────────────────────────────
@@ -910,35 +884,11 @@ pub async fn update_role(id: String, input: crate::role::UpdateRoleInput, state:
     let state = state.lock().await;
     let db = get_db!(state);
     let rid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let old = RoleService::get(db, rid).await.ok();
-    let result = RoleService::update(db, rid, input.clone()).await.map_err(|e| e.to_string())?;
-    {
-        let mut changes = crate::audit::AuditChanges::new();
-        let mut has_changes = false;
-        if let Some(ref n) = input.name {
-            let old_val = old.as_ref().map(|r| r.name.as_str()).unwrap_or("");
-            changes = changes.field("name", old_val, n.as_str());
-            has_changes = true;
-        }
-        if let Some(ref d) = input.description {
-            let old_val = old.as_ref().and_then(|r| r.description.as_deref()).unwrap_or("");
-            changes = changes.field("description", old_val, d.as_str());
-            has_changes = true;
-        }
-        if let Some(ref pids) = input.permission_policy_ids {
-            let old_val = old.as_ref().map(|r| r.permission_policy_ids.join(",")).unwrap_or_default();
-            changes = changes.field("permission_policy_ids", &old_val, &pids.join(","));
-            has_changes = true;
-        }
-        if has_changes {
-            crate::audit::macros::fire_audit(
-                &state, db, AuditableAction::UpdateRole,
-                Some(result._id.to_string()), None, None,
-                Some(changes), None,
-            ).await;
-        }
-    }
-    Ok(result)
+    let actor = build_actor(&state);
+    let outcome = RoleService::update(db, rid, input, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, AuditableAction::UpdateRole,
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 // ── Мой доступ ──────────────────────────────────────────────
@@ -1251,10 +1201,10 @@ pub async fn create_object(input: crate::objects::CreateObjectInput, state: Stat
         .ok_or_else(|| "Необходима авторизация".to_string())?;
     let user_id = crate::core::UserId(user._id);
     let actor = build_actor(&state);
-    let obj = crate::objects::service::ObjectService::create(db, input, crate::core::CompanyId(cid), user_id, actor).await.map_err(|e| e.to_string())?;
+    let outcome = crate::objects::service::ObjectService::create(db, input, crate::core::CompanyId(cid), user_id, actor).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::CreateDocument,
-        target_id = obj._id.to_string());
-    Ok(obj)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -1272,10 +1222,10 @@ pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput,
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    let obj = crate::objects::service::ObjectService::update(db, uid, input, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    let outcome = crate::objects::service::ObjectService::update(db, uid, input, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::UpdateDocument,
-        target_id = obj._id.to_string());
-    Ok(obj)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -1293,10 +1243,10 @@ pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppSta
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    let obj = crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    let outcome = crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::PostDocument,
-        target_id = obj._id.to_string());
-    Ok(obj)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -1314,10 +1264,10 @@ pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppS
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    let obj = crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    let outcome = crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::CancelDocument,
-        target_id = obj._id.to_string());
-    Ok(obj)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -1335,10 +1285,10 @@ pub async fn restore_object_version(id: String, target_version: i64, state: Stat
         .ok_or_else(|| "Не выбрана компания".to_string())?;
     let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
     let actor = build_actor(&state);
-    let obj = crate::objects::service::ObjectService::restore_version(db, uid, target_version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
+    let outcome = crate::objects::service::ObjectService::restore_version(db, uid, target_version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::RestoreDocument,
-        target_id = obj._id.to_string());
-    Ok(obj)
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -1358,7 +1308,7 @@ pub async fn list_object_versions(id: String, state: State<'_, Mutex<AppState>>)
     crate::objects::service::ObjectService::list_versions(db, uid).await.map_err(|e| e.to_string())
 }
 
-fn build_actor(state: &AppState) -> crate::events::ActorSnapshot {
+pub fn build_actor(state: &AppState) -> crate::events::ActorSnapshot {
     let user = state.current_user.as_ref();
     crate::events::ActorSnapshot {
         user_id: user.map(|u| crate::core::UserId(u._id)).unwrap_or(crate::core::UserId(uuid::Uuid::nil())),

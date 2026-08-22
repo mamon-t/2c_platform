@@ -4,8 +4,11 @@ use mongodb::bson::{doc, Document};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::core::{Id, PlatformError, PlatformResult};
+use crate::audit::AuditChanges;
+use crate::core::{CompanyId, Id, PlatformError, PlatformResult};
+use crate::core::middleware::CommandOutcome;
 use crate::db::MongoClient;
+use crate::events::{ActorSnapshot, EventService, StreamType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Company {
@@ -88,55 +91,139 @@ impl CompanyService {
         Ok(company)
     }
 
-    pub async fn create(db: &MongoClient, input: CreateCompanyInput) -> PlatformResult<Company> {
+    pub async fn create(
+        db: &MongoClient,
+        input: CreateCompanyInput,
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<Company>> {
         let company = Company::new(input);
+        let cid = CompanyId(company._id);
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let col = db.collection::<Document>("companies");
-        col.insert_one(company.to_document())
-            .await
-            .map_err(|e| {
+        let result = col.insert_one(company.to_document())
+            .session(&mut session).await;
+
+        match result {
+            Ok(_) => {
+                let svc = EventService::new();
+                let payload = serde_json::json!({
+                    "code": company.code,
+                    "name": company.name,
+                    "inn": company.inn,
+                });
+                let _ = svc.append_with_session(db, &mut session, StreamType::Object, &company._id.to_string(), "company.created", payload, actor, cid.clone(), None, None).await;
+
+                session.commit_transaction().await
+                    .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
+                let changes = AuditChanges::new()
+                    .field_new("code", &company.code)
+                    .field_new("name", &company.name);
+
+                Ok(CommandOutcome { result: company, changes: Some(changes), event_id: None, signature_ref: None })
+            }
+            Err(e) => {
+                session.abort_transaction().await.ok();
                 if e.to_string().contains("duplicate key") {
-                    PlatformError::Validation(format!(
-                        "Компания с кодом '{}' уже существует",
-                        company.code
-                    ))
+                    Err(PlatformError::Validation(format!(
+                        "Компания с кодом '{}' уже существует", company.code
+                    )))
                 } else {
-                    PlatformError::Database(e.to_string())
+                    Err(PlatformError::Database(e.to_string()))
                 }
-            })?;
-        Ok(company)
+            }
+        }
     }
 
     pub async fn update(
         db: &MongoClient,
         id: Id,
         input: UpdateCompanyInput,
-    ) -> PlatformResult<Company> {
-        let col = db.collection::<Document>("companies");
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<Company>> {
+        let old = Self::get(db, id).await?;
+        let cid = CompanyId(id);
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let mut update_doc = doc! { "updated_at": mongodb::bson::to_bson(&Utc::now()).unwrap() };
-        if let Some(name) = input.name {
-            update_doc.insert("name", name);
-        }
-        if let Some(inn) = input.inn {
-            update_doc.insert("inn", inn);
-        }
-        if let Some(active) = input.active {
-            update_doc.insert("active", active);
-        }
+        if let Some(ref name) = input.name { update_doc.insert("name", name.clone()); }
+        if let Some(ref inn) = input.inn { update_doc.insert("inn", inn.clone()); }
+        if let Some(active) = input.active { update_doc.insert("active", active); }
+
+        let col = db.collection::<Document>("companies");
         col.update_one(doc! { "_id": id.to_string() }, doc! { "$set": update_doc })
-            .await
+            .session(&mut session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
-        Self::get(db, id).await
+
+        let updated = Self::get(db, id).await?;
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({
+            "name": updated.name,
+            "inn": updated.inn,
+            "active": updated.active,
+        });
+        let _ = svc.append_with_session(db, &mut session, StreamType::Object, &id.to_string(), "company.updated", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
+        let mut changes = AuditChanges::new();
+        if old.name != updated.name {
+            changes = changes.field("name", &old.name, &updated.name);
+        }
+        if old.inn != updated.inn {
+            changes = changes.field("inn",
+                old.inn.as_deref().unwrap_or(""),
+                updated.inn.as_deref().unwrap_or(""));
+        }
+
+        Ok(CommandOutcome { result: updated, changes: Some(changes), event_id: None, signature_ref: None })
     }
 
-    pub async fn delete(db: &MongoClient, id: Id) -> PlatformResult<()> {
+    pub async fn delete(
+        db: &MongoClient,
+        id: Id,
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<()>> {
+        let old = Self::get(db, id).await?;
+        let cid = CompanyId(id);
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let col = db.collection::<Document>("companies");
-        let result = col
-            .delete_one(doc! { "_id": id.to_string() })
-            .await
+        let result = col.delete_one(doc! { "_id": id.to_string() })
+            .session(&mut session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
+
         if result.deleted_count == 0 {
+            session.abort_transaction().await.ok();
             return Err(PlatformError::NotFound(format!("Компания {id} не найдена")));
         }
-        Ok(())
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({ "code": old.code, "name": old.name });
+        let _ = svc.append_with_session(db, &mut session, StreamType::Object, &id.to_string(), "company.deleted", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
+        let changes = AuditChanges::new()
+            .field_old("code", &old.code)
+            .field_old("name", &old.name);
+
+        Ok(CommandOutcome { result: (), changes: Some(changes), event_id: None, signature_ref: None })
     }
 }

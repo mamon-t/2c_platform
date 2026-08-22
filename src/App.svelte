@@ -41,8 +41,8 @@
   let loginLoading = $state(false);
 
   // Connection
-  let dbUri = $state('mongodb://db_user:db_password@192.168.31.31:27017');
-  let dbName = $state('2c_platform');
+  let dbUri = $state('');
+  let dbName = $state('');
   let dbError = $state('');
   let dbLoading = $state(false);
 

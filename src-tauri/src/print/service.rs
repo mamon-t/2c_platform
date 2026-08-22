@@ -3,8 +3,11 @@ use futures::StreamExt;
 use mongodb::bson::{doc, Document};
 use tracing::info;
 
+use crate::audit::AuditChanges;
 use crate::core::{PlatformError, PlatformResult};
+use crate::core::middleware::CommandOutcome;
 use crate::db::MongoClient;
+use crate::events::{ActorSnapshot, EventService, StreamType};
 use super::*;
 
 const COLLECTION: &str = "print_templates";
@@ -66,7 +69,13 @@ impl PrintService {
         db: &MongoClient,
         input: CreatePrintTemplateInput,
         created_by: Option<String>,
-    ) -> PlatformResult<PrintTemplate> {
+        actor: ActorSnapshot,
+    ) -> PlatformResult<CommandOutcome<PrintTemplate>> {
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let now = Utc::now();
         let tmpl = PrintTemplate {
             _id: uuid::Uuid::new_v4(),
@@ -91,10 +100,21 @@ impl PrintService {
             updated_at: now,
         };
         let doc = serialize_template(&tmpl)?;
-        db.collection::<Document>(COLLECTION).insert_one(doc).await
+        db.collection::<Document>(COLLECTION).insert_one(doc).session(&mut session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({ "code": tmpl.code, "name": tmpl.name });
+        let cid = actor.company_id.clone();
+        let _ = svc.append_with_session(db, &mut session, StreamType::Object, &tmpl._id.to_string(), "print_template.created", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
         info!("PrintTemplate created: {} ({})", tmpl.code, tmpl._id);
-        Ok(tmpl)
+        let changes = AuditChanges::new()
+            .field_new("code", &tmpl.code);
+        Ok(CommandOutcome { result: tmpl, changes: Some(changes), event_id: None, signature_ref: None })
     }
 
     pub async fn update(
@@ -124,12 +144,30 @@ impl PrintService {
         Self::get(db, id).await
     }
 
-    pub async fn delete(db: &MongoClient, id: uuid::Uuid) -> PlatformResult<()> {
+    pub async fn delete(db: &MongoClient, id: uuid::Uuid, actor: ActorSnapshot) -> PlatformResult<CommandOutcome<()>> {
+        let old = Self::get(db, id).await?;
+
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
         let col = db.collection::<Document>(COLLECTION);
-        col.delete_one(doc! { "_id": id.to_string() }).await
+        col.delete_one(doc! { "_id": id.to_string() }).session(&mut session).await
             .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let svc = EventService::new();
+        let payload = serde_json::json!({ "code": old.code, "name": old.name });
+        let cid = actor.company_id.clone();
+        let _ = svc.append_with_session(db, &mut session, StreamType::Object, &id.to_string(), "print_template.deleted", payload, actor, cid, None, None).await;
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+
         info!("PrintTemplate deleted: {id}");
-        Ok(())
+        let changes = AuditChanges::new()
+            .field_new("code", &old.code);
+        Ok(CommandOutcome { result: (), changes: Some(changes), event_id: None, signature_ref: None })
     }
 
     // ── Render ────────────────────────────────────────────

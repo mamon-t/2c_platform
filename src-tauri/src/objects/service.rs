@@ -5,7 +5,9 @@ use tracing::info;
 
 use super::*;
 use super::validation::validate_data;
+use crate::audit::AuditChanges;
 use crate::core::{CompanyId, PlatformError, PlatformResult, UserId};
+use crate::core::middleware::CommandOutcome;
 use crate::db::MongoClient;
 use crate::events::{EventService, StreamType, ActorSnapshot};
 use crate::meta::service::EntityFieldService;
@@ -23,7 +25,7 @@ impl ObjectService {
         company_id: CompanyId,
         user_id: UserId,
         actor: ActorSnapshot,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<CommandOutcome<Object>> {
         let et_id = uuid::Uuid::parse_str(&input.entity_type_id)
             .map_err(|_| PlatformError::Validation("Невалидный entity_type_id".into()))?;
 
@@ -49,11 +51,11 @@ impl ObjectService {
         let result = Self::create_inner(db, &mut session, &input, &company_id, &user_id, &actor, &kind).await;
 
         match result {
-            Ok(obj) => {
+            Ok((obj, changes, event_id)) => {
                 session.commit_transaction().await
                     .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
                 info!("Object created: {} ({})", obj._id, obj.entity_type_id);
-                Ok(obj)
+                Ok(CommandOutcome { result: obj, changes: Some(changes), event_id, signature_ref: None })
             }
             Err(e) => {
                 session.abort_transaction().await.ok();
@@ -70,7 +72,7 @@ impl ObjectService {
         user_id: &UserId,
         actor: &ActorSnapshot,
         kind: &str,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<(Object, AuditChanges, Option<String>)> {
         let now = Utc::now();
         let obj = Object {
             _id: uuid::Uuid::new_v4(),
@@ -106,7 +108,11 @@ impl ObjectService {
         });
         let _ = svc.append_with_session(db, session, StreamType::Object, &obj._id.to_string(), "object.created", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        Ok(obj)
+        let changes = AuditChanges::new()
+            .field_new("entity_type_id", &obj.entity_type_id)
+            .field_new("state", "draft");
+
+        Ok((obj, changes, None))
     }
 
     /// Прочитать объект по ID
@@ -126,7 +132,7 @@ impl ObjectService {
         user_id: UserId,
         actor: ActorSnapshot,
         company_id: CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<CommandOutcome<Object>> {
         let old = Self::get(db, id).await?;
 
         if input.version != old.version {
@@ -151,10 +157,10 @@ impl ObjectService {
         let result = Self::update_inner(db, &mut session, &old, &input, &user_id, &actor, &company_id).await;
 
         match result {
-            Ok(obj) => {
+            Ok((obj, changes, event_id)) => {
                 session.commit_transaction().await
                     .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
-                Ok(obj)
+                Ok(CommandOutcome { result: obj, changes: Some(changes), event_id, signature_ref: None })
             }
             Err(e) => {
                 session.abort_transaction().await.ok();
@@ -171,7 +177,7 @@ impl ObjectService {
         user_id: &UserId,
         actor: &ActorSnapshot,
         company_id: &CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<(Object, AuditChanges, Option<String>)> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -206,7 +212,11 @@ impl ObjectService {
         });
         let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.updated", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        Ok(updated)
+        let changes = AuditChanges::new()
+            .field("version", old.version.to_string(), new_version.to_string())
+            .field("state", format!("{:?}", old.state), format!("{:?}", updated.state));
+
+        Ok((updated, changes, None))
     }
 
     /// Провести объект (Draft → Posted). Номер присваивается атомарно в транзакции.
@@ -217,7 +227,7 @@ impl ObjectService {
         user_id: UserId,
         actor: ActorSnapshot,
         company_id: CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<CommandOutcome<Object>> {
         let old = Self::get(db, id).await?;
         if old.state != ObjectState::Draft {
             return Err(PlatformError::Validation("Провести можно только черновик".into()));
@@ -234,11 +244,11 @@ impl ObjectService {
         let result = Self::post_inner(db, &mut session, &old, &user_id, &actor, &company_id).await;
 
         match result {
-            Ok(obj) => {
+            Ok((obj, changes, event_id)) => {
                 session.commit_transaction().await
                     .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
                 info!("Object posted: {} → №{}", id, obj.number.as_deref().unwrap_or("?"));
-                Ok(obj)
+                Ok(CommandOutcome { result: obj, changes: Some(changes), event_id, signature_ref: None })
             }
             Err(e) => {
                 session.abort_transaction().await.ok();
@@ -254,7 +264,7 @@ impl ObjectService {
         user_id: &UserId,
         actor: &ActorSnapshot,
         company_id: &CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<(Object, AuditChanges, Option<String>)> {
         let new_version = old.version + 1;
         let now = Utc::now();
         let number = crate::numbering::NumberingService::next_number_with_session(
@@ -290,7 +300,12 @@ impl ObjectService {
         });
         let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.posted", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        Ok(updated)
+        let changes = AuditChanges::new()
+            .field("state", "draft", "posted")
+            .field_new("number", &number)
+            .field("version", old.version.to_string(), new_version.to_string());
+
+        Ok((updated, changes, None))
     }
 
     /// Отменить проведение (Posted → Cancelled). Транзакция.
@@ -301,7 +316,7 @@ impl ObjectService {
         user_id: UserId,
         actor: ActorSnapshot,
         company_id: CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<CommandOutcome<Object>> {
         let old = Self::get(db, id).await?;
         if old.state != ObjectState::Posted {
             return Err(PlatformError::Validation("Отменить можно только проведённый документ".into()));
@@ -318,10 +333,10 @@ impl ObjectService {
         let result = Self::cancel_inner(db, &mut session, &old, &user_id, &actor, &company_id).await;
 
         match result {
-            Ok(obj) => {
+            Ok((obj, changes, event_id)) => {
                 session.commit_transaction().await
                     .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
-                Ok(obj)
+                Ok(CommandOutcome { result: obj, changes: Some(changes), event_id, signature_ref: None })
             }
             Err(e) => {
                 session.abort_transaction().await.ok();
@@ -337,7 +352,7 @@ impl ObjectService {
         user_id: &UserId,
         actor: &ActorSnapshot,
         company_id: &CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<(Object, AuditChanges, Option<String>)> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -364,7 +379,11 @@ impl ObjectService {
         let payload = serde_json::json!({ "version": new_version, "state": "cancelled" });
         let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.cancelled", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        Ok(updated)
+        let changes = AuditChanges::new()
+            .field("state", "posted", "cancelled")
+            .field("version", old.version.to_string(), new_version.to_string());
+
+        Ok((updated, changes, None))
     }
 
     /// Восстановить предыдущую версию. Транзакция.
@@ -375,7 +394,7 @@ impl ObjectService {
         user_id: UserId,
         actor: ActorSnapshot,
         company_id: CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<CommandOutcome<Object>> {
         let old = Self::get(db, id).await?;
 
         let snap_col = db.collection::<Document>(SNAPSHOTS);
@@ -398,10 +417,10 @@ impl ObjectService {
         let result = Self::restore_inner(db, &mut session, &old, target_version, snap_data, &user_id, &actor, &company_id).await;
 
         match result {
-            Ok(obj) => {
+            Ok((obj, changes, event_id)) => {
                 session.commit_transaction().await
                     .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
-                Ok(obj)
+                Ok(CommandOutcome { result: obj, changes: Some(changes), event_id, signature_ref: None })
             }
             Err(e) => {
                 session.abort_transaction().await.ok();
@@ -419,7 +438,7 @@ impl ObjectService {
         user_id: &UserId,
         actor: &ActorSnapshot,
         company_id: &CompanyId,
-    ) -> PlatformResult<Object> {
+    ) -> PlatformResult<(Object, AuditChanges, Option<String>)> {
         let new_version = old.version + 1;
         let now = Utc::now();
 
@@ -446,7 +465,11 @@ impl ObjectService {
         let payload = serde_json::json!({ "target_version": target_version, "new_version": new_version });
         let _ = svc.append_with_session(db, session, StreamType::Object, &old._id.to_string(), "object.restored", payload, actor.clone(), company_id.clone(), None, None).await;
 
-        Ok(updated)
+        let changes = AuditChanges::new()
+            .field("version", old.version.to_string(), new_version.to_string())
+            .field_new("restored_from", &target_version.to_string());
+
+        Ok((updated, changes, None))
     }
 
     /// Список объектов с фильтрами (company_id всегда на сервере)

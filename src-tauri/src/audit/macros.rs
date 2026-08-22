@@ -12,6 +12,7 @@ pub async fn fire_audit(
     object_id: Option<String>,
     changes: Option<AuditChanges>,
     event_id: Option<String>,
+    signature_ref: Option<String>,
 ) {
     if let Some(ref user) = state.current_user {
         let cid_str = state.current_company_id.as_deref().unwrap_or("");
@@ -26,7 +27,7 @@ pub async fn fire_audit(
             object_id,
             changes,
             event_id,
-            None,
+            signature_ref,
             None,
             None,
         );
@@ -53,6 +54,7 @@ macro_rules! audit_log {
         $(, entity_type = $et:expr )?
         $(, object_id = $oid:expr )?
         $(, event_id = $eid:expr )?
+        $(, signature_ref = $sr:expr )?
         $(, changes => { $($field:expr => $old:expr => $new:expr),* $(,)? } )?
     ) => {{
         let mut __c = $crate::audit::AuditChanges::new();
@@ -68,6 +70,7 @@ macro_rules! audit_log {
             $crate::__opt_string!($( $oid )?),
             __changes,
             $crate::__opt_string!($( $eid )?),
+            $crate::__opt_string!($( $sr )?),
         ).await;
     }};
 }

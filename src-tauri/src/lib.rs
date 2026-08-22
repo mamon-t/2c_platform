@@ -1,4 +1,5 @@
 mod auth;
+mod actions;
 mod audit;
 mod commands;
 mod company;
@@ -30,6 +31,7 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    dotenvy::dotenv().ok();
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_shell::init())

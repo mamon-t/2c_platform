@@ -40,6 +40,9 @@ pub enum AuditableAction {
     DeleteCatalogEntry,
     EmitEvent,
     ReplayEvent,
+    CreatePrintTemplate,
+    UpdatePrintTemplate,
+    DeletePrintTemplate,
     ExecuteScript,
 }
 
@@ -84,6 +87,9 @@ impl AuditableAction {
             Self::EmitEvent => "emit_event",
             Self::ReplayEvent => "replay_event",
             Self::ExecuteScript => "execute_script",
+            Self::CreatePrintTemplate => "create_print_template",
+            Self::UpdatePrintTemplate => "update_print_template",
+            Self::DeletePrintTemplate => "delete_print_template",
         }
     }
 
@@ -127,6 +133,9 @@ impl AuditableAction {
             Self::EmitEvent => "Эмиссия события",
             Self::ReplayEvent => "Повторная обработка события",
             Self::ExecuteScript => "Выполнение скрипта",
+            Self::CreatePrintTemplate => "Создание шаблона печати",
+            Self::UpdatePrintTemplate => "Обновление шаблона печати",
+            Self::DeletePrintTemplate => "Удаление шаблона печати",
         }
     }
 
@@ -170,6 +179,9 @@ impl AuditableAction {
             Self::EmitEvent => "fa-solid fa-bolt text-warn-500",
             Self::ReplayEvent => "fa-solid fa-rotate text-primary-500",
             Self::ExecuteScript => "fa-solid fa-code text-primary-500",
+            Self::CreatePrintTemplate => "fa-solid fa-print text-primary-500",
+            Self::UpdatePrintTemplate => "fa-solid fa-print text-primary-500",
+            Self::DeletePrintTemplate => "fa-solid fa-print text-error-500",
         }
     }
 
@@ -193,6 +205,8 @@ impl AuditableAction {
             Self::CreateCatalogEntry | Self::UpdateCatalogEntry
             | Self::DeleteCatalogEntry => "catalog_entry",
             Self::EmitEvent | Self::ReplayEvent => "event",
+            Self::CreatePrintTemplate | Self::UpdatePrintTemplate
+            | Self::DeletePrintTemplate => "print_template",
             Self::ExecuteScript => "rhai_script",
         }
     }
@@ -246,6 +260,9 @@ impl std::str::FromStr for AuditableAction {
             "emit_event" => Ok(Self::EmitEvent),
             "replay_event" => Ok(Self::ReplayEvent),
             "execute_script" => Ok(Self::ExecuteScript),
+            "create_print_template" => Ok(Self::CreatePrintTemplate),
+            "update_print_template" => Ok(Self::UpdatePrintTemplate),
+            "delete_print_template" => Ok(Self::DeletePrintTemplate),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }

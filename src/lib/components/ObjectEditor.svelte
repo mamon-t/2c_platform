@@ -428,7 +428,7 @@
                   {:else if field.field_kind === 'table'}
                     <textarea
                       class="textarea font-mono text-xs"
-                      placeholder='[{"col1": "val1", "col2": "val2"}]'
+                      placeholder='[{{"col1": "val1", "col2": "val2"}}]'
                       disabled={field.is_readonly || !isEditable}
                       value={JSON.stringify(data[field.code] ?? [], null, 2)}
                       oninput={(e) => {
@@ -440,7 +440,7 @@
                   {:else if field.field_kind === 'json'}
                     <textarea
                       class="textarea font-mono text-xs"
-                      placeholder="{}"
+                      placeholder={"{}"}
                       disabled={field.is_readonly || !isEditable}
                       value={JSON.stringify(data[field.code] ?? null, null, 2)}
                       oninput={(e) => {

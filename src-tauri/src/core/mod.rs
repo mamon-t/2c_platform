@@ -133,3 +133,5 @@ impl From<rhai::EvalAltResult> for PlatformError {
 }
 
 pub type PlatformResult<T> = Result<T, PlatformError>;
+
+pub mod middleware;

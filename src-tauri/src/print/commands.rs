@@ -48,8 +48,12 @@ pub async fn print_create_template(
         return Err("Доступ запрещён: нет права print.create".into());
     }
     let db = get_db!(state);
-    let user = state.current_user.as_ref().map(|u| u._id.to_string());
-    PrintService::create(db, input, user).await.map_err(|e| e.to_string())
+    let user_id = state.current_user.as_ref().map(|u| u._id.to_string());
+    let actor = crate::commands::build_actor(&state);
+    let outcome = PrintService::create(db, input, user_id, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, crate::audit::AuditableAction::CreatePrintTemplate,
+        target_id = outcome.result._id.to_string());
+    Ok(outcome.result)
 }
 
 #[tauri::command]
@@ -78,7 +82,11 @@ pub async fn print_delete_template(
     }
     let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    PrintService::delete(db, uid).await.map_err(|e| e.to_string())
+    let actor = crate::commands::build_actor(&state);
+    let _outcome = PrintService::delete(db, uid, actor).await.map_err(|e| e.to_string())?;
+    crate::audit_log!(state, db, crate::audit::AuditableAction::DeletePrintTemplate,
+        target_id = id);
+    Ok(())
 }
 
 #[tauri::command]
