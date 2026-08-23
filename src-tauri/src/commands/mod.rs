@@ -149,6 +149,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     crate::objects::indexes::ensure_object_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::modules::indexes::ensure_indexes(&client).await;
     crate::devices::indexes::ensure_indexes(&client).await;
+    crate::tx::indexes::ensure_indexes(&client).await;
     Ok(info)
 }
 

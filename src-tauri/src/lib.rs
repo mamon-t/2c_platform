@@ -22,6 +22,7 @@ mod rhai;
 mod role;
 mod settings;
 mod signing;
+mod tx;
 mod user;
 mod user_certificate;
 mod user_contact;
