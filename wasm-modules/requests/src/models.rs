@@ -42,6 +42,10 @@ pub struct RequestRoute {
     #[serde(default)]
     pub description: Option<String>,
     pub steps: Vec<RouteStep>,
+    /// Требовать квалифицированную подпись (submit/approve/reject).
+    /// Канцтовары — false, закупки на крупную сумму — true.
+    #[serde(default)]
+    pub requires_signature: bool,
     #[serde(default = "default_true")]
     pub is_active: bool,
 }
@@ -103,6 +107,9 @@ pub struct RequestApproval {
     /// Подпись инициатора при отправке (base64 DER)
     #[serde(default)]
     pub submit_signature_der: Option<String>,
+    /// Снимок требования подписи из маршрута на момент отправки
+    #[serde(default)]
+    pub requires_signature: bool,
     pub submitted_at: u64,
     #[serde(default)]
     pub completed_at: Option<u64>,

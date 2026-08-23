@@ -49,6 +49,7 @@
   function emptyRoute(): RequestRouteTS {
     return {
       code: '', name: '', description: null, is_active: true,
+      requires_signature: false,
       steps: [{ step_order: 1, approver_type: 'user', approver_id: '', approver_name: null, timeout_hours: 0, is_required: true }],
     };
   }
@@ -179,23 +180,33 @@
   }
 
   // ── Отправка на согласование ──
+  let submitNeedsSig = $derived(
+    routes.find(r => r.code === submitRouteCode)?.requires_signature ?? false
+  );
+
   function openSubmit(o: PlatformObject) {
     submitTarget = o;
-    submitRouteCode = routes.find(r => r.is_active)?.code ?? '';
+    const active = routes.filter(r => r.is_active);
+    // По умолчанию — маршрут без ЭЦП, если есть
+    submitRouteCode = (active.find(r => !r.requires_signature) ?? active[0])?.code ?? '';
     submitCertSha1 = '';
   }
 
   async function doSubmit() {
     if (!submitTarget) return;
     if (!submitRouteCode) { error = 'Выберите маршрут'; return; }
-    if (!submitCertSha1) { error = 'Подпись обязательна: выберите сертификат'; return; }
+    let sigB64: string | null = null;
+    if (submitNeedsSig) {
+      if (!submitCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
+      const sig = await api.signDocument(btoa(unescape(encodeURIComponent(requestPayload(submitTarget)))), submitCertSha1, true);
+      sigB64 = bytesToBase64(sig.signature_der);
+    }
     error = '';
     try {
-      const sig = await api.signDocument(btoa(unescape(encodeURIComponent(requestPayload(submitTarget)))), submitCertSha1, true);
       const env = await api.pluginCall(MODULE, 'submit', {
         request_id: submitTarget._id,
         route_code: submitRouteCode,
-        signature_der: bytesToBase64(sig.signature_der),
+        signature_der: sigB64,
       });
       unwrapPlugin(env);
       submitTarget = null;
@@ -215,10 +226,9 @@
 
   async function doDecide() {
     if (!decideTarget) return;
-    if (!decideCertSha1) { error = 'Подпись решения обязательна: выберите сертификат'; return; }
-    error = '';
-    try {
-      const fn = decideTarget.approve ? 'approve_step' : 'reject_step';
+    let sigB64: string | null = null;
+    if (decideTarget.approval.requires_signature) {
+      if (!decideCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
       const sig = await api.signDocument(
         btoa(unescape(encodeURIComponent(JSON.stringify({
           request_id: decideTarget.approval.request_id,
@@ -226,14 +236,19 @@
           comment: decideComment,
         })))),
         decideCertSha1, true);
+      sigB64 = bytesToBase64(sig.signature_der);
+    }
+    error = '';
+    try {
+      const fn = decideTarget.approve ? 'approve_step' : 'reject_step';
       const env = await api.pluginCall(MODULE, fn, {
         request_id: decideTarget.approval.request_id,
         comment: decideComment || null,
-        signature_der: bytesToBase64(sig.signature_der),
+        signature_der: sigB64 ?? '',
       });
       unwrapPlugin(env);
       decideTarget = null;
-      notice = decideTarget?.approve === false ? 'Решение принято' : 'Готово';
+      notice = 'Решение принято';
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка решения';
@@ -535,22 +550,30 @@
       <label class="label">Маршрут</label>
       <select class="select" bind:value={submitRouteCode}>
         {#each routes.filter(r => r.is_active) as r (r.code)}
-          <option value={r.code}>{r.name} ({r.steps.length} эт.)</option>
+          <option value={r.code}>{r.name} ({r.steps.length} эт.{r.requires_signature ? ' · ЭЦП' : ''})</option>
         {/each}
       </select>
-      <label class="label"><i class="fa-solid fa-signature"></i> Сертификат подписи (обязательно)</label>
-      <select class="select" bind:value={submitCertSha1}>
-        <option value="" disabled selected>— выберите сертификат —</option>
-        {#each certificates.filter(certOk) as c (c.sha1_hash)}
-          <option value={c.sha1_hash}>{c.subject_name}</option>
-        {/each}
-      </select>
-      {#if certificates.filter(certOk).length === 0}
-        <div class="text-xs text-warn-600">Не найдено валидных сертификатов с приватным ключом (КриптоПро).</div>
+
+      {#if submitNeedsSig}
+        <label class="label"><i class="fa-solid fa-signature"></i> Сертификат подписи (маршрут требует ЭЦП)</label>
+        <select class="select" bind:value={submitCertSha1}>
+          <option value="" disabled selected>— выберите сертификат —</option>
+          {#each certificates.filter(certOk) as c (c.sha1_hash)}
+            <option value={c.sha1_hash}>{c.subject_name}</option>
+          {/each}
+        </select>
+        {#if certificates.filter(certOk).length === 0}
+          <div class="text-xs text-warn-600">Не найдено валидных сертификатов с приватным ключом (КриптоПро).</div>
+        {/if}
+      {:else}
+        <div class="text-xs text-surface-400"><i class="fa-solid fa-circle-info"></i> Маршрут без электронной подписи</div>
       {/if}
+
       <div class="flex justify-end gap-2 pt-2">
         <button class="btn btn-outline" onclick={() => (submitTarget = null)}>Отмена</button>
-        <button class="btn btn-primary" onclick={doSubmit}><i class="fa-solid fa-paper-plane"></i> Подписать и отправить</button>
+        <button class="btn btn-primary" onclick={doSubmit}>
+          <i class="fa-solid fa-paper-plane"></i> {submitNeedsSig ? 'Подписать и отправить' : 'Отправить'}
+        </button>
       </div>
     </div>
   </div>
@@ -566,17 +589,23 @@
       <label class="label">Комментарий</label>
       <textarea class="textarea" rows="3" bind:value={decideComment}
         placeholder={decideTarget.approve ? 'Согласовано' : 'Причина отклонения…'}></textarea>
-      <label class="label"><i class="fa-solid fa-signature"></i> Сертификат подписи (обязательно)</label>
-      <select class="select" bind:value={decideCertSha1}>
-        <option value="" disabled selected>— выберите сертификат —</option>
-        {#each certificates.filter(certOk) as c (c.sha1_hash)}
-          <option value={c.sha1_hash}>{c.subject_name}</option>
-        {/each}
-      </select>
+      {#if decideTarget.approval.requires_signature}
+        <label class="label"><i class="fa-solid fa-signature"></i> Сертификат подписи (маршрут требует ЭЦП)</label>
+        <select class="select" bind:value={decideCertSha1}>
+          <option value="" disabled selected>— выберите сертификат —</option>
+          {#each certificates.filter(certOk) as c (c.sha1_hash)}
+            <option value={c.sha1_hash}>{c.subject_name}</option>
+          {/each}
+        </select>
+      {:else}
+        <div class="text-xs text-surface-400"><i class="fa-solid fa-circle-info"></i> Маршрут без электронной подписи</div>
+      {/if}
+
       <div class="flex justify-end gap-2 pt-2">
         <button class="btn btn-outline" onclick={() => (decideTarget = null)}>Отмена</button>
         <button class="btn {decideTarget.approve ? 'btn-success' : 'btn-error'}" onclick={doDecide}>
-          <i class="fa-solid fa-signature"></i> Подписать и {'согласовать'}
+          <i class="fa-solid {decideTarget.approval.requires_signature ? 'fa-signature' : 'fa-check'}"></i>
+          {decideTarget.approve ? 'Согласовать' : 'Отклонить'}
         </button>
       </div>
     </div>
@@ -600,6 +629,10 @@
       </div>
       <label class="flex items-center gap-2 text-sm">
         <input type="checkbox" class="checkbox" bind:checked={routeForm.is_active} /> Активен
+      </label>
+      <label class="flex items-center gap-2 text-sm" title="Submit/approve/reject потребуют квалифицированной ЭЦП">
+        <input type="checkbox" class="checkbox" bind:checked={routeForm.requires_signature} />
+        <i class="fa-solid fa-signature"></i> Требовать электронную подпись
       </label>
 
       <div class="divider">Этапы ({routeForm.steps.length})</div>

@@ -989,6 +989,8 @@ export interface RequestRouteTS {
   name: string;
   description?: string | null;
   steps: RouteStepTS[];
+  /** Требовать ЭЦП на submit/approve/reject (задаёт маршрут). */
+  requires_signature: boolean;
   is_active: boolean;
 }
 
@@ -1017,6 +1019,8 @@ export interface RequestApprovalTS {
   initiator_login: string;
   initiator_name?: string | null;
   submit_signature_der?: string | null;
+  /** Снимок requires_signature маршрута на момент отправки. */
+  requires_signature: boolean;
   submitted_at: number;
   completed_at?: number | null;
   last_comment?: string | null;

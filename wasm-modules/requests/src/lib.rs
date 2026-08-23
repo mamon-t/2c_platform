@@ -60,8 +60,8 @@ pub struct ModuleInfo {
     pub functions: Vec<PluginFunction>,
 }
 
-/// Политика подписи модуля (ТЗ разд. 12): submit/approve/reject — подпись обязательна.
-const REQUIRE_SIGNATURE: bool = true;
+/// Политика подписи задаётся МАРШРУТОМ (requires_signature),
+/// а не глобальной константой: канцтовары без ЭЦП, крупные закупки — с ЭЦП.
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -191,8 +191,8 @@ fn step_mine(step: &StepState, c: &Caller) -> bool {
     }
 }
 
-fn require_signature(sig: &Option<String>, what: &str) -> anyhow::Result<String> {
-    if !REQUIRE_SIGNATURE {
+fn require_signature(enabled: bool, sig: &Option<String>, what: &str) -> anyhow::Result<String> {
+    if !enabled {
         return Ok(String::new());
     }
     sig.clone()
@@ -255,9 +255,6 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
     let user_id = c.user_id.clone().unwrap();
     let ts = current_ms()?;
 
-    // Подпись инициатора (политика подписи)
-    let signature = require_signature(&input.signature_der, "Отправка заявки")?;
-
     // Заявка должна существовать и быть черновиком
     let obj_raw = unsafe { get_object(input.request_id.clone()) }?;
     let obj = unwrap_host(obj_raw)?;
@@ -266,18 +263,21 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         return Err(anyhow::anyhow!("VALIDATION: заявку можно отправить только в статусе draft (текущий: {state})").into());
     }
 
-    // Хук перед отправкой (strict — может отменить)
-    run_hook("before_submit", true, serde_json::json!({
-        "caller": { "user_id": user_id, "login": c.login },
-        "request": obj,
-    }))?;
-
-    // Маршрут
+    // Маршрут (подпись определяется ИМ, а не глобально)
     let route: RequestRoute = kv_get_value(&route_key(&input.route_code))?
         .ok_or_else(|| anyhow::anyhow!("NOT_FOUND: маршрут '{}' не найден", input.route_code))?;
     if !route.is_active {
         return Err(anyhow::anyhow!("VALIDATION: маршрут '{}' отключён", input.route_code).into());
     }
+
+    // Подпись инициатора — только если маршрут требует
+    let signature = require_signature(route.requires_signature, &input.signature_der, "Отправка заявки")?;
+
+    // Хук перед отправкой (strict — может отменить)
+    run_hook("before_submit", true, serde_json::json!({
+        "caller": { "user_id": user_id, "login": c.login },
+        "request": obj,
+    }))?;
 
     // Повторная отправка? Активное согласование уже есть
     let key = approval_key(&input.request_id);
@@ -309,6 +309,7 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         initiator_login: c.login.clone().unwrap_or_default(),
         initiator_name: c.display_name.clone(),
         submit_signature_der: if signature.is_empty() { None } else { Some(signature) },
+        requires_signature: route.requires_signature,
         submitted_at: ts,
         completed_at: None,
         last_comment: None,
@@ -362,10 +363,6 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
     let c = caller()?;
     let ts = current_ms()?;
 
-    // Подпись решения обязательна
-    let signature = require_signature(&Some(input.signature_der.clone()),
-        if approve { "Согласование" } else { "Отклонение" })?;
-
     let key = approval_key(&input.request_id);
     let mut a: RequestApproval = kv_get_value(&key)?
         .ok_or_else(|| anyhow::anyhow!("NOT_FOUND: активное согласование для заявки {} не найдено", input.request_id))?;
@@ -373,6 +370,10 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
     if a.status != ApprovalStatus::InProgress {
         return Err(anyhow::anyhow!("CONFLICT: согласование уже завершено (статус: {:?})", a.status));
     }
+
+    // Подпись решения — только если маршрут (снимок) требует
+    let signature = require_signature(a.requires_signature, &Some(input.signature_der.clone()),
+        if approve { "Согласование" } else { "Отклонение" })?;
 
     let idx = a.current_step;
     let step_is_mine = a.steps.get(idx).map(|s| step_mine(s, &c)).unwrap_or(false);
