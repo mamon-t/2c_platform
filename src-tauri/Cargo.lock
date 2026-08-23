@@ -6112,6 +6112,7 @@ dependencies = [
  "jsonwebtoken",
  "mongodb",
  "rand 0.8.7",
+ "regex",
  "rhai",
  "serde",
  "serde_json",

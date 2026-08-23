@@ -21,7 +21,7 @@ impl SerialScanner {
 }
 
 /// Человекочитаемая подсказка для частых ошибок Linux.
-fn friendly_error(port: &str, e: impl std::fmt::Display) -> String {
+pub fn scanner_friendly_error(port: &str, e: impl std::fmt::Display) -> String {
     let raw = e.to_string();
     if raw.contains("Permission denied") {
         format!(
@@ -64,7 +64,7 @@ impl DeviceDriver for SerialScanner {
         let mut stream = match open_result {
             Ok(s) => s,
             Err(e) => {
-                let msg = friendly_error(&port, &e);
+                let msg = scanner_friendly_error(&port, &e);
                 let _ = tx
                     .send(DeviceEvent::Error { device_id: port.clone(), message: msg.clone() })
                     .await;
@@ -107,7 +107,7 @@ impl DeviceDriver for SerialScanner {
                             Err(e) => {
                                 let _ = tx.send(DeviceEvent::Error {
                                     device_id: device_id.clone(),
-                                    message: friendly_error(&device_id, &e),
+                                    message: scanner_friendly_error(&device_id, &e),
                                 }).await;
                                 break;
                             }
@@ -153,7 +153,7 @@ impl DeviceDriver for SerialScanner {
                     "{port_name}: порт открыт, данных нет за 2с — отсканируйте тестовый штрихкод"
                 ))
             }
-            Err(e) => Err(friendly_error(&self.port, &e)),
+            Err(e) => Err(scanner_friendly_error(&self.port, &e)),
         }
     }
 }

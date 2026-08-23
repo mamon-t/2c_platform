@@ -8,6 +8,7 @@
     type FieldKind, type ObjectStateTS,
   } from '$lib/services/api';
   import { auth, hasPermission } from '$lib/stores/auth';
+  import { lastWeight, initDeviceEvents } from '$lib/stores/devices';
 
   interface Props {
     object: ObjectEntity;
@@ -185,6 +186,22 @@
     return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
+  /** Поле веса: код содержит weight / вес / mass. */
+  function isWeightField(code: string): boolean {
+    return /weight|вес|mass/i.test(code);
+  }
+
+  /** Подставить последнее показание весов (г → кг для kg-полей). */
+  function takeWeight(code: string, asKg: boolean) {
+    const w = $lastWeight;
+    if (!w) { return; }
+    if (asKg || /kg|килограмм/i.test(code)) {
+      setField(code, Math.round(w.grams) / 1000);
+    } else {
+      setField(code, Math.round(w.grams));
+    }
+  }
+
   function setField(code: string, value: unknown) {
     data = { ...data, [code]: value };
   }
@@ -192,6 +209,7 @@
   const isEditable = $derived(object.state === 'draft' || object.state === 'active');
 
   onMount(async () => {
+    initDeviceEvents();
     loading = true;
     initData();
     await loadMetadata();
@@ -305,24 +323,42 @@
                     ></textarea>
 
                   {:else if field.field_kind === 'integer'}
-                    <input
-                      class="input"
-                      type="number"
-                      step="1"
-                      disabled={field.is_readonly || !isEditable}
-                      value={data[field.code] ?? ''}
-                      oninput={(e) => setField(field.code, parseInt((e.target as HTMLInputElement).value) || 0)}
-                    />
+                    <div class="flex gap-1">
+                      <input
+                        class="input"
+                        type="number"
+                        step="1"
+                        disabled={field.is_readonly || !isEditable}
+                        value={data[field.code] ?? ''}
+                        oninput={(e) => setField(field.code, parseInt((e.target as HTMLInputElement).value) || 0)}
+                      />
+                      {#if isWeightField(field.code)}
+                        <button type="button" class="btn btn-sm btn-outline shrink-0" title="Взять вес с весов"
+                          disabled={field.is_readonly || !isEditable}
+                          onclick={() => takeWeight(field.code, false)}>
+                          <i class="fa-solid fa-weight-scale"></i>
+                        </button>
+                      {/if}
+                    </div>
 
                   {:else if field.field_kind === 'money'}
-                    <input
-                      class="input"
-                      type="number"
-                      step="0.01"
-                      disabled={field.is_readonly || !isEditable}
-                      value={data[field.code] ?? ''}
-                      oninput={(e) => setField(field.code, parseFloat((e.target as HTMLInputElement).value) || 0)}
-                    />
+                    <div class="flex gap-1">
+                      <input
+                        class="input"
+                        type="number"
+                        step="0.01"
+                        disabled={field.is_readonly || !isEditable}
+                        value={data[field.code] ?? ''}
+                        oninput={(e) => setField(field.code, parseFloat((e.target as HTMLInputElement).value) || 0)}
+                      />
+                      {#if isWeightField(field.code)}
+                        <button type="button" class="btn btn-sm btn-outline shrink-0" title="Взять вес с весов"
+                          disabled={field.is_readonly || !isEditable}
+                          onclick={() => takeWeight(field.code, true)}>
+                          <i class="fa-solid fa-weight-scale"></i>
+                        </button>
+                      {/if}
+                    </div>
 
                   {:else if field.field_kind === 'date'}
                     <input

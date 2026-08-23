@@ -131,14 +131,26 @@ impl DeviceService {
     // ── Драйверы ───────────────────────────────────────────
 
     pub fn build_driver(cfg: &DeviceConfig) -> Result<Arc<dyn DeviceDriver>, String> {
-        match &cfg.connection {
-            super::ConnectionKind::KeyboardWedge => {
-                Err("KeyboardWedge не требует подключения (слушает фронтенд)".into())
-            }
-            super::ConnectionKind::Serial { port, baud } => {
+        use super::ConnectionKind as CK;
+        match (&cfg.kind, &cfg.connection) {
+            (DeviceKind::BarcodeScanner, CK::Serial { port, baud }) => {
                 Ok(Arc::new(crate::devices::scanner::SerialScanner::new(port.clone(), *baud)))
             }
-            super::ConnectionKind::Tcp { .. } => Err("TCP-подключения пока не поддерживаются".into()),
+            (DeviceKind::Scale, CK::Serial { port, baud }) => {
+                let pattern = cfg.settings.get("pattern").and_then(|p| p.as_str());
+                let unit = cfg.settings.get("unit").and_then(|u| u.as_str());
+                Ok(Arc::new(crate::devices::scale::SerialScale::new(
+                    port.clone(),
+                    *baud,
+                    pattern,
+                    unit,
+                )?))
+            }
+            (DeviceKind::BarcodeScanner, CK::KeyboardWedge) | (DeviceKind::Scale, CK::KeyboardWedge) => {
+                Err("KeyboardWedge не требует подключения (слушает фронтенд)".into())
+            }
+            (_, CK::Tcp { .. }) => Err("TCP-подключения пока не поддерживаются".into()),
+            _ => Err("Такое сочетание типа устройства и подключения не поддерживается".into()),
         }
     }
 
@@ -206,14 +218,24 @@ impl DeviceService {
 
     /// Тест подключения/приёма данных.
     pub async fn test_driver(cfg: &DeviceConfig) -> Result<String, String> {
-        match &cfg.connection {
-            super::ConnectionKind::KeyboardWedge => Ok("KeyboardWedge готов: отсканируйте код в тестовом поле".into()),
-            super::ConnectionKind::Tcp { .. } => Err("TCP-подключения пока не поддерживаются".into()),
-            super::ConnectionKind::Serial { port, baud } => {
+        match (&cfg.kind, &cfg.connection) {
+            (_, super::ConnectionKind::KeyboardWedge) => {
+                Ok("KeyboardWedge готов: отсканируйте код в тестовом поле".into())
+            }
+            (DeviceKind::BarcodeScanner, super::ConnectionKind::Serial { port, baud }) => {
                 crate::devices::scanner::SerialScanner::new(port.clone(), *baud)
                     .test()
                     .await
             }
+            (DeviceKind::Scale, super::ConnectionKind::Serial { port, baud }) => {
+                let pattern = cfg.settings.get("pattern").and_then(|p| p.as_str());
+                let unit = cfg.settings.get("unit").and_then(|u| u.as_str());
+                crate::devices::scale::SerialScale::new(port.clone(), *baud, pattern, unit)
+                    .map_err(|e| e)?
+                    .test()
+                    .await
+            }
+            _ => Err("Тест для этого сочетания не поддерживается".into()),
         }
     }
 }
