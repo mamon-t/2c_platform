@@ -128,8 +128,13 @@ extism::host_fn!(pub run_script_impl(user_data: HostData; source: String, contex
 
     // Песочница: те же лимиты, что и в execute_rhai_script
     let sandbox = crate::rhai::Sandbox::new(10_000, 10_000_000);
-    // Скрипту передаём контекст через переменную ctx (JSON-строка)
-    let scope_source = format!("let ctx = parse_json({});\n{}", serde_json::to_string(&context_value).unwrap_or_else(|_| "null".into()), source);
+    // Контекст передаётся как СТРОКОВЫЙ литерал: parse_json("{"a":1}")
+    // (двойное кодирование — иначе рхай видит map-литерал и падает по синтаксису)
+    let ctx_literal = serde_json::to_string(
+        &serde_json::to_string(&context_value).unwrap_or_else(|_| "null".into()),
+    )
+    .unwrap_or_else(|_| "\"null\"".into());
+    let scope_source = format!("let ctx = parse_json({});\n{}", ctx_literal, source);
 
     match sandbox.execute(&scope_source, "{}") {
         Ok(result) => Ok(ok_response(serde_json::json!({ "result": result }))),

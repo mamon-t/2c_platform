@@ -163,12 +163,22 @@ fn run_hook(name: &str, strict: bool, context: serde_json::Value) -> anyhow::Res
         return Ok(()); // хук не задан — норма
     };
     match unsafe { run_script(source.to_string(), context.to_string()) } {
-        Ok(res_raw) => {
-            if let Ok(res) = unwrap_host(res_raw) {
+        Ok(res_raw) => match unwrap_host(res_raw) {
+            Ok(res) => {
                 let _ = unsafe { log_message(format!("[requests] hook {name} → {res}")) };
+                Ok(())
             }
-            Ok(())
-        }
+            // Конверт {ok:false} — ошибка скрипта (SCRIPT_FAILED)
+            Err(e) => {
+                if strict {
+                    Err(anyhow::anyhow!("Хук {name}: {e}"))
+                } else {
+                    let _ = unsafe { log_message(format!("[requests] hook {name} failed: {e}")) };
+                    Ok(())
+                }
+            }
+        },
+        // Внешний сбой вызова
         Err(e) => {
             if strict {
                 Err(anyhow::anyhow!("Хук {name}: {e}"))
@@ -391,6 +401,12 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
         a.current_step = idx + 1;
 
         if a.current_step >= a.steps.len() {
+            // Финальный шаг тоже фиксируем как согласованный
+            emit(&a.request_id, "request.step_approved", serde_json::json!({
+                "step_order": step_order,
+                "approver_id": c.user_id,
+                "comment": input.comment,
+            }), &a.initiator_id);
             // Все этапы пройдены → проводим заявку (номер присвоит нумерация)
             complete_approval(&mut a, ts)?;
             emit(&a.request_id, "request.completed", serde_json::json!({
