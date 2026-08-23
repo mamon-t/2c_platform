@@ -150,6 +150,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     crate::modules::indexes::ensure_indexes(&client).await;
     crate::devices::indexes::ensure_indexes(&client).await;
     crate::tx::indexes::ensure_indexes(&client).await;
+    crate::stock::indexes::ensure_indexes(&client).await;
     Ok(info)
 }
 

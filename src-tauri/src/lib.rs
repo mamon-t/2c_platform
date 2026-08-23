@@ -22,6 +22,7 @@ mod rhai;
 mod role;
 mod settings;
 mod signing;
+pub mod stock;
 pub mod tx;
 mod user;
 mod user_certificate;

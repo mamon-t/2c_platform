@@ -47,13 +47,27 @@ pub type ArcHandler = std::sync::Arc<dyn TxOpHandler>;
 fn registry() -> &'static HashMap<String, ArcHandler> {
     REGISTRY.get_or_init(|| {
         use super::handlers::{NoopHandler, ObjectCancelHandler, ObjectPostHandler};
+        use crate::stock::handlers::{
+            BalancesHandler, CountHandler, HandoverHandler, HandoverReturnHandler,
+            IssueHandler, ReceiptHandler, ReverseHandler, TransferHandler,
+        };
         let mut m: HashMap<String, ArcHandler> = HashMap::new();
-        let put = |m: &mut HashMap<String, ArcHandler>, k: &str, h: ArcHandler| {
+        let mut put = |m: &mut HashMap<String, ArcHandler>, k: &str, h: ArcHandler| {
             m.insert(k.to_string(), h);
         };
         put(&mut m, "test.noop", Arc::new(NoopHandler));
         put(&mut m, "object.post", Arc::new(ObjectPostHandler));
         put(&mut m, "object.cancel", Arc::new(ObjectCancelHandler));
+
+        // ── Склад ──
+        put(&mut m, "stock.receipt", Arc::new(ReceiptHandler));
+        put(&mut m, "stock.issue", Arc::new(IssueHandler));
+        put(&mut m, "stock.transfer", Arc::new(TransferHandler));
+        put(&mut m, "stock.handover", Arc::new(HandoverHandler));
+        put(&mut m, "stock.handover_return", Arc::new(HandoverReturnHandler));
+        put(&mut m, "stock.count", Arc::new(CountHandler));
+        put(&mut m, "stock.balances", Arc::new(BalancesHandler));
+        put(&mut m, "stock.reverse", Arc::new(ReverseHandler));
         m
     })
 }
