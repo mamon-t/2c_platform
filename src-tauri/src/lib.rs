@@ -20,6 +20,7 @@ mod print;
 mod rhai;
 mod role;
 mod settings;
+mod signing;
 mod user;
 mod user_certificate;
 mod user_contact;
@@ -139,6 +140,9 @@ pub fn run() {
             modules::commands::modules_enable,
             modules::commands::modules_disable,
             modules::commands::modules_update_settings,
+            signing::commands::list_crypto_certificates,
+            signing::commands::sign_document,
+            signing::commands::verify_document_signature,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

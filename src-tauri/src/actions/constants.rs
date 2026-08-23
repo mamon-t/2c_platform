@@ -216,6 +216,11 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "validate_entity_transition", permission: DOCUMENTS_READ, scope: ScopeTag::Object, audit: "" },
     CommandMapping { command: "execute_entity_action", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Object, audit: "execute_entity_action" },
 
+    // ── Криптографическая подпись ──
+    CommandMapping { command: "list_crypto_certificates", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "sign_document", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Company, audit: "sign_document" },
+    CommandMapping { command: "verify_document_signature", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
+
     // ── Объекты ──
     CommandMapping { command: "list_objects", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "get_object", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },

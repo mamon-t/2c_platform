@@ -45,6 +45,8 @@ pub enum AuditableAction {
     DeletePrintTemplate,
     ExecuteScript,
     ExecuteEntityAction,
+    SignDocument,
+    VerifySignature,
 }
 
 impl AuditableAction {
@@ -92,6 +94,8 @@ impl AuditableAction {
             Self::UpdatePrintTemplate => "update_print_template",
             Self::DeletePrintTemplate => "delete_print_template",
             Self::ExecuteEntityAction => "execute_entity_action",
+            Self::SignDocument => "sign_document",
+            Self::VerifySignature => "verify_signature",
         }
     }
 
@@ -139,6 +143,8 @@ impl AuditableAction {
             Self::UpdatePrintTemplate => "Обновление шаблона печати",
             Self::DeletePrintTemplate => "Удаление шаблона печати",
             Self::ExecuteEntityAction => "Выполнение действия над объектом",
+            Self::SignDocument => "Подписание документа",
+            Self::VerifySignature => "Проверка подписи",
         }
     }
 
@@ -186,6 +192,8 @@ impl AuditableAction {
             Self::UpdatePrintTemplate => "fa-solid fa-print text-primary-500",
             Self::DeletePrintTemplate => "fa-solid fa-print text-error-500",
             Self::ExecuteEntityAction => "fa-solid fa-play text-primary-500",
+            Self::SignDocument => "fa-solid fa-file-signature text-success-500",
+            Self::VerifySignature => "fa-solid fa-circle-check text-success-500",
         }
     }
 
@@ -213,6 +221,8 @@ impl AuditableAction {
             | Self::DeletePrintTemplate => "print_template",
             Self::ExecuteScript => "rhai_script",
             Self::ExecuteEntityAction => "document",
+            Self::SignDocument => "document",
+            Self::VerifySignature => "document",
         }
     }
 }
@@ -269,6 +279,8 @@ impl std::str::FromStr for AuditableAction {
             "update_print_template" => Ok(Self::UpdatePrintTemplate),
             "delete_print_template" => Ok(Self::DeletePrintTemplate),
             "execute_entity_action" => Ok(Self::ExecuteEntityAction),
+            "sign_document" => Ok(Self::SignDocument),
+            "verify_signature" => Ok(Self::VerifySignature),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }

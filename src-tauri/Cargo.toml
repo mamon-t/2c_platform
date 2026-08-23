@@ -40,3 +40,6 @@ thiserror = "2"
 extism = "1.4"
 handlebars = "6"
 dotenvy = "0.15"
+cpcsp = { path = "/home/mikhail/develop/cpcsp-rs/crates/cpcsp" }
+base64 = "0.22"
+hex = "0.4"

@@ -699,6 +699,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpcsp"
+version = "0.1.0"
+dependencies = [
+ "cpcsp-ffi-linux",
+ "cpcsp-ffi-windows",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "cpcsp-ffi-linux"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpcsp-ffi-windows"
+version = "0.1.0"
+
+[[package]]
 name = "cpp_demangle"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5973,11 +5994,14 @@ version = "0.0.1"
 dependencies = [
  "argon2",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
+ "cpcsp",
  "dotenvy",
  "extism",
  "futures",
  "handlebars",
+ "hex",
  "jsonwebtoken",
  "mongodb",
  "rand 0.8.7",
