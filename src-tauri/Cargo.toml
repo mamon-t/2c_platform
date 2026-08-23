@@ -43,3 +43,5 @@ dotenvy = "0.15"
 cpcsp = { path = "/home/mikhail/develop/cpcsp-rs/crates/cpcsp" }
 base64 = "0.22"
 hex = "0.4"
+tokio-serial = { version = "5", features = ["libudev"] }
+serialport = { version = "4", default-features = false, features = ["libudev"] }

@@ -222,6 +222,9 @@ impl PermissionPolicyService {
              ("numbering.manage".into(), "Управление нумерацией".into(), "numbering".into(), vec!["manage".into()], "company".into()),
              ("modules.read".into(), "Просмотр модулей".into(), "modules".into(), vec!["read".into()], "company".into()),
              ("modules.manage".into(), "Управление модулями".into(), "modules".into(), vec!["manage".into()], "company".into()),
+            ("devices.read".into(), "Просмотр оборудования".into(), "devices".into(), vec!["read".into()], "company".into()),
+            ("devices.manage".into(), "Настройка оборудования".into(), "devices".into(), vec!["manage".into()], "company".into()),
+            ("devices.use".into(), "Использование оборудования".into(), "devices".into(), vec!["use".into()], "company".into()),
         ]
     }
 

@@ -86,6 +86,11 @@ pub const NUMBERING_MANAGE: &str = "numbering.manage";
 pub const MODULES_READ: &str = "modules.read";
 pub const MODULES_MANAGE: &str = "modules.manage";
 
+// ── Оборудование ──
+pub const DEVICES_READ: &str = "devices.read";
+pub const DEVICES_MANAGE: &str = "devices.manage";
+pub const DEVICES_USE: &str = "devices.use";
+
 // ── Матрица: команда → (действие, scope, AuditableAction) ──────
 // scope: "C" = Company, "O" = Object, "M" = Metadata, "P" = Platform, "N" = None (public)
 
@@ -220,6 +225,17 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "list_crypto_certificates", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "sign_document", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Company, audit: "sign_document" },
     CommandMapping { command: "verify_document_signature", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
+
+    // ── Оборудование ──
+    CommandMapping { command: "devices_list", permission: DEVICES_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "devices_get", permission: DEVICES_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "devices_save", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "configure_device" },
+    CommandMapping { command: "devices_delete", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "configure_device" },
+    CommandMapping { command: "devices_connect", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "connect_device" },
+    CommandMapping { command: "devices_disconnect", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "disconnect_device" },
+    CommandMapping { command: "devices_test", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "test_device" },
+    CommandMapping { command: "devices_list_ports", permission: DEVICES_MANAGE, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "devices_wedge_scan", permission: DEVICES_USE, scope: ScopeTag::Company, audit: "" },
 
     // ── Объекты ──
     CommandMapping { command: "list_objects", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },

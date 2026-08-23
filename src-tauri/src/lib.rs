@@ -6,6 +6,7 @@ mod company;
 mod core;
 mod crypto;
 mod db;
+mod devices;
 mod events;
 mod ledger;
 mod meta;
@@ -145,6 +146,15 @@ pub fn run() {
             signing::commands::verify_document_signature,
             commands::notifications_list,
             commands::notifications_mark_read,
+            devices::commands::devices_list,
+            devices::commands::devices_get,
+            devices::commands::devices_save,
+            devices::commands::devices_delete,
+            devices::commands::devices_connect,
+            devices::commands::devices_disconnect,
+            devices::commands::devices_test,
+            devices::commands::devices_list_ports,
+            devices::commands::devices_wedge_scan,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

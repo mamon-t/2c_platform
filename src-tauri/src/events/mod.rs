@@ -13,6 +13,7 @@ pub enum StreamType {
     Object,
     User,
     Module,
+    Device,
 }
 
 impl std::fmt::Display for StreamType {
@@ -21,6 +22,7 @@ impl std::fmt::Display for StreamType {
             StreamType::Object => write!(f, "object"),
             StreamType::User => write!(f, "user"),
             StreamType::Module => write!(f, "module"),
+            StreamType::Device => write!(f, "device"),
         }
     }
 }
@@ -32,6 +34,7 @@ impl std::str::FromStr for StreamType {
             "object" => Ok(StreamType::Object),
             "user" => Ok(StreamType::User),
             "module" => Ok(StreamType::Module),
+            "device" => Ok(StreamType::Device),
             _ => Err(crate::core::PlatformError::Validation(format!("Неизвестный stream_type: {s}"))),
         }
     }

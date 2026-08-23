@@ -72,6 +72,7 @@ pub struct AppState {
     pub current_role_id: Option<String>,
     pub current_policies: Option<Vec<crate::permission_policy::PermissionPolicy>>,
     pub wasm_modules: Option<HashMap<String, Arc<std::sync::Mutex<WasmPlugin>>>>,
+    pub devices: HashMap<String, crate::devices::DeviceHandle>,
 }
 
 impl AppState {
@@ -88,6 +89,7 @@ impl AppState {
             current_role_id: None,
             current_policies: None,
             wasm_modules: None,
+            devices: HashMap::new(),
         }
     }
 
@@ -146,6 +148,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     crate::meta::indexes::ensure_meta_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::objects::indexes::ensure_object_indexes(&client).await.map_err(|e| e.to_string())?;
     crate::modules::indexes::ensure_indexes(&client).await;
+    crate::devices::indexes::ensure_indexes(&client).await;
     Ok(info)
 }
 

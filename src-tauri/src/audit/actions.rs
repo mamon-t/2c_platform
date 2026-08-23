@@ -47,6 +47,10 @@ pub enum AuditableAction {
     ExecuteEntityAction,
     SignDocument,
     VerifySignature,
+    ConfigureDevice,
+    ConnectDevice,
+    DisconnectDevice,
+    TestDevice,
 }
 
 impl AuditableAction {
@@ -96,6 +100,10 @@ impl AuditableAction {
             Self::ExecuteEntityAction => "execute_entity_action",
             Self::SignDocument => "sign_document",
             Self::VerifySignature => "verify_signature",
+            Self::ConfigureDevice => "configure_device",
+            Self::ConnectDevice => "connect_device",
+            Self::DisconnectDevice => "disconnect_device",
+            Self::TestDevice => "test_device",
         }
     }
 
@@ -145,6 +153,10 @@ impl AuditableAction {
             Self::ExecuteEntityAction => "Выполнение действия над объектом",
             Self::SignDocument => "Подписание документа",
             Self::VerifySignature => "Проверка подписи",
+            Self::ConfigureDevice => "Настройка оборудования",
+            Self::ConnectDevice => "Подключение устройства",
+            Self::DisconnectDevice => "Отключение устройства",
+            Self::TestDevice => "Тестирование устройства",
         }
     }
 
@@ -194,6 +206,10 @@ impl AuditableAction {
             Self::ExecuteEntityAction => "fa-solid fa-play text-primary-500",
             Self::SignDocument => "fa-solid fa-file-signature text-success-500",
             Self::VerifySignature => "fa-solid fa-circle-check text-success-500",
+            Self::ConfigureDevice => "fa-solid fa-gears text-primary-500",
+            Self::ConnectDevice => "fa-solid fa-plug-circle-check text-success-500",
+            Self::DisconnectDevice => "fa-solid fa-plug-circle-xmark text-warn-500",
+            Self::TestDevice => "fa-solid fa-vial text-primary-500",
         }
     }
 
@@ -223,6 +239,8 @@ impl AuditableAction {
             Self::ExecuteEntityAction => "document",
             Self::SignDocument => "document",
             Self::VerifySignature => "document",
+            Self::ConfigureDevice | Self::ConnectDevice
+            | Self::DisconnectDevice | Self::TestDevice => "device",
         }
     }
 }
@@ -281,6 +299,10 @@ impl std::str::FromStr for AuditableAction {
             "execute_entity_action" => Ok(Self::ExecuteEntityAction),
             "sign_document" => Ok(Self::SignDocument),
             "verify_signature" => Ok(Self::VerifySignature),
+            "configure_device" => Ok(Self::ConfigureDevice),
+            "connect_device" => Ok(Self::ConnectDevice),
+            "disconnect_device" => Ok(Self::DisconnectDevice),
+            "test_device" => Ok(Self::TestDevice),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }
