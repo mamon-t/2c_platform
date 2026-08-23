@@ -1,2 +1,8 @@
 [build]
 target = "wasm32-unknown-unknown"
+
+# См. requests/.cargo/config.toml: глобальный -fuse-ld=lld ломает rust-lld/wasm.
+# Пустой массив игнорируется — переопределяем реальным содержимым.
+[target.wasm32-unknown-unknown]
+linker = "rust-lld"
+rustflags = ["-C", "debuginfo=0"]

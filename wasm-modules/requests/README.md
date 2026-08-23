@@ -6,12 +6,14 @@ WASM-плагин платформы 2C: заявки с маршрутами с
 ## Сборка
 
 ```sh
-./build.sh
+cargo build --target wasm32-unknown-unknown --release
 # → target/wasm32-unknown-unknown/release/requests_plugin.wasm (~400KB)
 ```
 
-> RUSTFLAGS="" в скрипте перекрывает глобальный `-fuse-ld=lld`
-> из ~/.cargo/config.toml, который ломает rust-lld для wasm32.
+> Локальный `.cargo/config.toml` задаёт явный linker + rustflags для wasm32,
+> перекрывая глобальный `-fuse-ld=lld` из ~/.cargo/config.toml, который
+> ломает rust-lld (gcc-style аргумент в wasm-flavor lld). Пустой массив
+> cargo игнорирует — переопределение работает только с реальным содержимым.
 
 ## Манифест (get_info)
 

@@ -6,6 +6,8 @@
 //! Контракт Plugin SDK: единый конверт `{ok, data | error{code, message}}`.
 
 
+use mongodb::bson::{doc, Document};
+
 use super::{check_capability, err, error_response, ok_response, HostData};
 
 fn db_or_err(hd: &HostData) -> Result<crate::db::MongoClient, String> {
@@ -133,6 +135,83 @@ extism::host_fn!(pub run_script_impl(user_data: HostData; source: String, contex
         Ok(result) => Ok(ok_response(serde_json::json!({ "result": result }))),
         Err(e) => Ok(error_response(err::SCRIPT_FAILED, &e.to_string())),
     }
+});
+
+// ── whoami() ───────────────────────────────────────────────
+//
+// Идентичность вызывающего для гостя (обновляется при каждом plugin_call).
+// Без capability — только чтение контекста сессии.
+
+extism::host_fn!(pub whoami_impl(user_data: HostData;) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    let ctx = hd.ctx.read().unwrap();
+    Ok(serde_json::json!({
+        "company_id": ctx.company_id,
+        "user_id": ctx.user_id,
+        "login": ctx.user_login,
+        "display_name": ctx.display_name,
+        "role_id": ctx.role_id,
+    }).to_string())
+});
+
+// ── now_ms() ───────────────────────────────────────────────
+//
+// Текущее время в миллисекундах (гость не имеет доступа к часам).
+// Без capability — безопасно.
+
+extism::host_fn!(pub now_ms_impl(user_data: HostData;) -> String {
+    let _hd = user_data.get()?.lock().unwrap().clone();
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().to_string())
+        .unwrap_or_else(|_| "0".into()))
+});
+
+// ── module_settings() ──────────────────────────────────────
+//
+// Настройки модуля для текущей компании (CompanyModule.settings).
+// Свои настройки — без capability.
+
+extism::host_fn!(pub module_settings_impl(user_data: HostData;) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return e };
+            let module_code = match hd.module_code.as_deref() {
+                Some(c) => c,
+                None => return error_response(super::err::NO_MODULE_CODE, "Модуль без кода"),
+            };
+            let company_str = match hd.ctx.read().unwrap().company_id.clone() {
+                Some(c) => c,
+                None => return error_response(super::err::NO_COMPANY, "Компания не выбрана"),
+            };
+
+            // company_modules.module_id -> modules._id по коду или имени
+            let modules_col = db.collection::<Document>("modules");
+            let module_doc = match modules_col
+                .find_one(doc! { "$or": [doc! { "code": module_code }, doc! { "name": module_code }] })
+                .await
+            {
+                Ok(Some(m)) => m,
+                Ok(None) => return ok_response(serde_json::json!({})),
+                Err(e) => return error_response(super::err::DB_ERROR, &e.to_string()),
+            };
+            let module_id = module_doc.get_str("_id").unwrap_or("");
+
+            let cm_col = db.collection::<Document>("company_modules");
+            match cm_col.find_one(doc! { "module_id": module_id, "company_id": &company_str }).await {
+                Ok(Some(cm)) => {
+                    let settings = cm.get("settings").cloned().unwrap_or(mongodb::bson::Bson::Null);
+                    let value = mongodb::bson::from_bson::<serde_json::Value>(settings)
+                        .unwrap_or(serde_json::json!({}));
+                    ok_response(value)
+                }
+                Ok(None) => ok_response(serde_json::json!({})),
+                Err(e) => error_response(super::err::DB_ERROR, &e.to_string()),
+            }
+        })
+    });
+    Ok(result)
 });
 
 // ── notify_user(recipient_user_id, subject, body) ──────────
