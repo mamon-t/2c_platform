@@ -135,9 +135,8 @@ impl DeviceService {
             super::ConnectionKind::KeyboardWedge => {
                 Err("KeyboardWedge не требует подключения (слушает фронтенд)".into())
             }
-            super::ConnectionKind::Serial { .. } => {
-                // Драйвер добавляется в коммите Д2 (scanner.rs)
-                Err("Serial-драйвер будет доступен в следующей сборке модуля".into())
+            super::ConnectionKind::Serial { port, baud } => {
+                Ok(Arc::new(crate::devices::scanner::SerialScanner::new(port.clone(), *baud)))
             }
             super::ConnectionKind::Tcp { .. } => Err("TCP-подключения пока не поддерживаются".into()),
         }
@@ -210,8 +209,10 @@ impl DeviceService {
         match &cfg.connection {
             super::ConnectionKind::KeyboardWedge => Ok("KeyboardWedge готов: отсканируйте код в тестовом поле".into()),
             super::ConnectionKind::Tcp { .. } => Err("TCP-подключения пока не поддерживаются".into()),
-            super::ConnectionKind::Serial { .. } => {
-                Err("Serial-драйвер будет доступен в следующей сборке модуля".into())
+            super::ConnectionKind::Serial { port, baud } => {
+                crate::devices::scanner::SerialScanner::new(port.clone(), *baud)
+                    .test()
+                    .await
             }
         }
     }

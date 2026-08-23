@@ -4,6 +4,8 @@ export interface NavItem {
   icon: string;
   path: string;
   requiredPermission?: { subsystem: string; action: string };
+  /** Заголовок секции в сайдбаре (рисуется при смене группы у соседа). */
+  group?: string;
 }
 
 export const allNavItems: NavItem[] = [
@@ -23,5 +25,6 @@ export const allNavItems: NavItem[] = [
   { code: 'modules', label: 'Прикладные модули', icon: 'fa-solid fa-puzzle-piece', path: '/modules', requiredPermission: { subsystem: 'plugins', action: 'read' } },
   { code: 'print', label: 'Печатные формы', icon: 'fa-solid fa-print', path: '/print', requiredPermission: { subsystem: 'print', action: 'read' } },
   { code: 'numbering', label: 'Нумерация', icon: 'fa-solid fa-hashtag', path: '/numbering', requiredPermission: { subsystem: 'numbering', action: 'read' } },
-  { code: 'settings', label: 'Настройки', icon: 'fa-solid fa-gear', path: '/settings', requiredPermission: { subsystem: 'settings', action: 'manage' } },
+  { code: 'devices', label: 'Оборудование', icon: 'fa-solid fa-plug', path: '/devices', requiredPermission: { subsystem: 'devices', action: 'read' }, group: 'Настройки' },
+  { code: 'settings', label: 'Настройки', icon: 'fa-solid fa-gear', path: '/settings', requiredPermission: { subsystem: 'settings', action: 'manage' }, group: 'Настройки' },
 ];

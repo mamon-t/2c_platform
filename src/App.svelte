@@ -12,6 +12,7 @@
   import MetadataPage from '$lib/components/MetadataPage.svelte';
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
   import RequestsPage from '$lib/components/RequestsPage.svelte';
+  import DevicesPage from '$lib/components/DevicesPage.svelte';
   import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
@@ -885,6 +886,9 @@
       {:else if currentNav === 'requests'}
         <RequestsPage />
 
+      {:else if currentNav === 'devices'}
+        <DevicesPage />
+
       {:else if currentNav === 'events'}
         <EventsPage />
 
@@ -929,7 +933,10 @@
       </button>
     </div>
     <nav class="flex-1 overflow-y-auto p-2">
-      {#each filteredNavItems as item}
+      {#each filteredNavItems as item, i}
+        {#if item.group && filteredNavItems[i - 1]?.group !== item.group}
+          <div class="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-surface-400">{item.group}</div>
+        {/if}
         <button onclick={() => setNav(item.code)} class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {currentNav === item.code ? 'bg-primary-500/10 font-medium text-primary-600' : 'text-surface-600-400 hover:bg-surface-200-800'}">
           <i class="{item.icon} text-lg w-5 text-center"></i>
           {#if !sidebarCollapsed}<span>{item.label}</span>{/if}

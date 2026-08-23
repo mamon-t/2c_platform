@@ -31,11 +31,26 @@ async fn wedge_device_id(ctx: &CommandContext) -> String {
 // ── Чтение ─────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn devices_list(state: State<'_, Mutex<AppState>>) -> Result<Vec<DeviceConfig>, String> {
+pub async fn devices_list(state: State<'_, Mutex<AppState>>) -> Result<Vec<DeviceListItem>, String> {
     let state = state.lock().await;
     let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
     ctx.check_permission("devices.read").map_err(|e| e.to_string())?;
-    DeviceService::list(&ctx.db, &ctx.company_id).await.map_err(|e| e.to_string())
+    let configs = DeviceService::list(&ctx.db, &ctx.company_id).await.map_err(|e| e.to_string())?;
+    Ok(configs
+        .into_iter()
+        .map(|config| {
+            let connected = state.devices.contains_key(&config.id);
+            DeviceListItem { connected, config }
+        })
+        .collect())
+}
+
+/// Элемент списка: конфигурация + флаг живого подключения.
+#[derive(serde::Serialize)]
+pub struct DeviceListItem {
+    pub connected: bool,
+    #[serde(flatten)]
+    pub config: DeviceConfig,
 }
 
 #[tauri::command]

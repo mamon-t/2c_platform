@@ -920,6 +920,35 @@ export const api = {
       input: { data_base64: dataBase64, cert_sha1: certSha1, detached },
     });
   },
+
+  // ── Оборудование (devices) ──
+  async devicesList(): Promise<DeviceListItemTS[]> {
+    return getAdapter().invoke<DeviceListItemTS[]>('devices_list');
+  },
+  async devicesGet(id: string): Promise<DeviceConfigTS> {
+    return getAdapter().invoke<DeviceConfigTS>('devices_get', { id });
+  },
+  async devicesSave(id: string | null, input: DeviceConfigInputTS): Promise<DeviceConfigTS> {
+    return getAdapter().invoke<DeviceConfigTS>('devices_save', { id, input });
+  },
+  async devicesDelete(id: string): Promise<void> {
+    return getAdapter().invoke<void>('devices_delete', { id });
+  },
+  async devicesConnect(id: string): Promise<void> {
+    return getAdapter().invoke<void>('devices_connect', { id });
+  },
+  async devicesDisconnect(id: string): Promise<void> {
+    return getAdapter().invoke<void>('devices_disconnect', { id });
+  },
+  async devicesTest(id: string): Promise<string> {
+    return getAdapter().invoke<string>('devices_test', { id });
+  },
+  async devicesListPorts(): Promise<PortDtoTS[]> {
+    return getAdapter().invoke<PortDtoTS[]>('devices_list_ports');
+  },
+  async devicesWedgeScan(code: string): Promise<void> {
+    return getAdapter().invoke<void>('devices_wedge_scan', { code });
+  },
 };
 
 // ── Plugin SDK: универсальный конверт host/гостевых вызовов ──
@@ -1024,4 +1053,46 @@ export interface NotificationOutboxTS {
   status: 'pending' | 'sent' | 'failed' | 'read';
   attempts: number;
   created_at: string;
+}
+
+// ── Оборудование (модуль devices) ──
+
+export type DeviceKindTS = 'barcode_scanner' | 'scale' | 'fiscal_printer' | 'label_printer';
+
+export type ConnectionKindTS =
+  | { kind: 'keyboard_wedge' }
+  | { kind: 'serial'; port: string; baud: number }
+  | { kind: 'tcp'; host: string; port: number };
+
+export interface DeviceConfigTS {
+  id: string;
+  company_id: string;
+  kind: DeviceKindTS;
+  name: string;
+  connection: ConnectionKindTS;
+  settings: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DeviceConfigInputTS = Omit<DeviceConfigTS, 'id' | 'company_id' | 'created_at' | 'updated_at'>;
+
+export interface DeviceListItemTS extends DeviceConfigTS {
+  connected: boolean;
+}
+
+export interface PortDtoTS {
+  path: string;
+  description: string;
+}
+
+/** Событие устройства (tauri event 'device-event', поле event). */
+export interface DeviceEventTS {
+  type: 'scanned' | 'weighed' | 'connected' | 'disconnected' | 'error';
+  device_id?: string;
+  code?: string;
+  grams?: number;
+  stable?: boolean;
+  message?: string;
 }

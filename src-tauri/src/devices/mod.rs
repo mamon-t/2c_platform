@@ -12,6 +12,7 @@
 pub mod service;
 pub mod commands;
 pub mod indexes;
+pub mod scanner;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
