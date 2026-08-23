@@ -15,6 +15,7 @@ pub mod handlers;
 pub mod journal;
 pub mod registry;
 pub mod indexes;
+pub mod session;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

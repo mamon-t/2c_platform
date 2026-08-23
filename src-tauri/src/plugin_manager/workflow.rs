@@ -263,6 +263,109 @@ extism::host_fn!(pub module_settings_impl(user_data: HostData;) -> String {
     Ok(result)
 });
 
+// ── tx_begin / tx_add_op / tx_commit ───────────────────────
+//
+// Сборка транзакционной пачки из песочницы (capability: transactions).
+// Mongo-транзакция открывается только на tx_commit. Политики прав
+// загружаются на коммите по роли вызывающего (свежий снапшот).
+
+extism::host_fn!(pub tx_begin_impl(user_data: HostData; business_key: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "tx_begin") {
+        return Ok(e);
+    }
+
+    let ctx = hd.ctx.read().unwrap();
+    let company_id = match ctx.company_id.as_ref().and_then(|c| uuid::Uuid::parse_str(c).ok()) {
+        Some(u) => crate::core::CompanyId(u),
+        None => return Ok(error_response(err::NO_COMPANY, "Компания не выбрана")),
+    };
+    let actor = crate::events::ActorSnapshot {
+        user_id: crate::core::UserId(
+            ctx.user_id.as_ref().and_then(|u| uuid::Uuid::parse_str(u).ok()).unwrap_or_default(),
+        ),
+        login: ctx.user_login.clone().unwrap_or_default(),
+        full_name: ctx.display_name.clone(),
+        position: None,
+        company_id: company_id.clone(),
+    };
+
+    if business_key.trim().is_empty() {
+        return Ok(error_response(err::INVALID_JSON, "business_key обязателен"));
+    }
+
+    let handle = crate::tx::session::begin(
+        business_key,
+        company_id,
+        actor,
+        ctx.role_id.clone(),
+    );
+    Ok(ok_response(serde_json::json!({ "handle": handle })))
+});
+
+extism::host_fn!(pub tx_add_op_impl(user_data: HostData; handle: String, op_name: String, params_json: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "tx_add_op") {
+        return Ok(e);
+    }
+
+    match crate::tx::session::add_op(&handle, &op_name, &params_json) {
+        Ok(op_id) => Ok(ok_response(serde_json::json!({ "op_id": op_id }))),
+        Err(msg) => Ok(error_response("VALIDATION", &msg)),
+    }
+});
+
+extism::host_fn!(pub tx_commit_impl(user_data: HostData; handle: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "tx_commit") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return Ok(e) };
+
+            // Свежий снапшот политик по роли вызывающего
+            let role_id = hd.ctx.read().unwrap().role_id.clone();
+            let policies = load_policies(&db, role_id).await;
+
+            let pkg = match crate::tx::session::take_and_build(&handle, policies) {
+                Ok(p) => p,
+                Err(msg) => return Ok(error_response("NOT_FOUND", &msg)),
+            };
+
+            let outcome = match crate::tx::executor::execute(&db, pkg).await {
+                Ok(tx_result) => match serde_json::to_value(&tx_result) {
+                    Ok(v) => ok_response(v),
+                    Err(e) => error_response(err::INVALID_JSON, &format!("результат: {e}")),
+                },
+                Err(tx_err) => error_response(
+                    if tx_err.failed_op.is_some() { "TX_OP_FAILED" } else { "TX_FAILED" },
+                    &tx_err.to_string(),
+                ),
+            };
+            Ok(outcome)
+        })
+    });
+    result
+});
+
+/// Загрузить политики роли (свежие, на момент коммита).
+async fn load_policies(
+    db: &crate::db::MongoClient,
+    role_id: Option<String>,
+) -> Vec<crate::permission_policy::PermissionPolicy> {
+    use crate::role::RoleService;
+
+    let Some(rid) = role_id.and_then(|s| uuid::Uuid::parse_str(&s).ok()) else {
+        return Vec::new();
+    };
+    match RoleService::get(db, rid).await {
+        Ok(role) => RoleService::get_policies(db, &role).await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
 // ── notify_user(recipient_user_id, subject, body) ──────────
 //
 // Записывает in-app уведомление в общий outbox платформы.

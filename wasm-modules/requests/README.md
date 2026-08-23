@@ -57,7 +57,26 @@ NOT_FOUND, DB_ERROR, SCRIPT_FAILED, CAPABILITY_DENIED.
 transition_object(post|cancel), kv_put/kv_get/kv_list/kv_delete,
 run_script(source, ctx_json), notify_user(recipient, subject, body),
 whoami(), now_ms(), module_settings(), log_message(msg), get_entity_type,
-list_entity_fields.
+list_entity_fields, emit_event(stream_id, event_type, payload_json),
+**tx_begin / tx_add_op / tx_commit** (capability `transactions`).
+
+### Транзакционные пачки (Plugin SDK ≥1.1)
+
+Сборка атомарной пачки из песочницы — три вызова, Mongo-транзакция
+открывается только на commit:
+
+```rhai
+// псевдо-код гостя
+let h   = tx_begin("receipt-2024-001");        // business_key = ключ идемпотентности
+let id1 = tx_add_op(h, "stock.issue", ...);    // op_id раздаёт ядро: "op_1"
+let id2 = tx_add_op(h, "object.post", ...);    // "op_2"
+tx_commit(h);                                  // атомарно; повтор по ключу безопасен
+```
+
+- op_id присваивает хост → связывание через `{"$ref": "op_1.field"}`;
+- брошенная сессия вычищается через 10 минут;
+- права: право на пачку не требуется, каждый обработчик проверяет свой
+  subsystem.action по свежим политикам роли вызывающего.
 
 ### KV-хранилище
 
