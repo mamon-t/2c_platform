@@ -21,6 +21,7 @@ pub async fn wasm_load(
             user_id: s.current_user.as_ref().map(|u| u._id.to_string()),
             user_login: s.current_user.as_ref().map(|u| u.login.clone()),
             display_name: s.current_user.as_ref().map(|u| u.display_name.clone()),
+            role_id: s.current_role_id.clone(),
         }));
         (ctx, s.db.clone())
     };
@@ -75,7 +76,7 @@ pub async fn plugin_call(
     args_json: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<String, String> {
-    let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display) = {
+    let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display, fresh_role) = {
         let s = state.lock().await;
         let modules = s.wasm_modules.as_ref().ok_or("Нет загруженных WASM-модулей")?;
         let arc = modules.get(&module_id)
@@ -85,17 +86,19 @@ pub async fn plugin_call(
         let uid = s.current_user.as_ref().map(|u| u._id.to_string());
         let login = s.current_user.as_ref().map(|u| u.login.clone());
         let display = s.current_user.as_ref().map(|u| u.display_name.clone());
-        (arc, company, uid, login, display)
+        let role = s.current_role_id.clone();
+        (arc, company, uid, login, display, role)
     };
 
     {
         let mut plugin = plugin_arc.lock().unwrap();
-        plugin.update_context(fresh_company.clone(), fresh_user_id.clone(), fresh_login.clone(), fresh_display.clone());
+        plugin.update_context(fresh_company.clone(), fresh_user_id.clone(), fresh_login.clone(), fresh_display.clone(), fresh_role.clone());
         let mut ctx = plugin.ctx.write().unwrap();
         ctx.company_id = fresh_company;
         ctx.user_id = fresh_user_id;
         ctx.user_login = fresh_login;
         ctx.display_name = fresh_display;
+        ctx.role_id = fresh_role;
     }
 
     let function_clone = function.clone();

@@ -143,6 +143,8 @@ pub fn run() {
             signing::commands::list_crypto_certificates,
             signing::commands::sign_document,
             signing::commands::verify_document_signature,
+            commands::notifications_list,
+            commands::notifications_mark_read,
         ])
         .setup(|app| {
             tracing::info!("2C Platform запускается...");

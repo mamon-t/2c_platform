@@ -61,6 +61,9 @@ impl ModuleService {
         let now = Utc::now();
         let module_id = uuid::Uuid::new_v4();
 
+        // ── RBAC-сид: создаём политики из манифеста (permissions: ["subsystem.action"]) ──
+        let seeded = Self::seed_permissions(db, &manifest).await;
+
         let manifest_value = serde_json::to_value(&manifest).unwrap_or_default();
 
         let installed = InstalledModule {
@@ -71,8 +74,8 @@ impl ModuleService {
             version: manifest.version,
             author: manifest.author,
             api_version: manifest.api_version,
-            capabilities: manifest.capabilities,
-            functions: manifest.functions,
+            capabilities: manifest.capabilities.clone(),
+            functions: manifest.functions.clone(),
             status: ModuleStatus::Enabled,
             wasm_bytes,
             manifest: manifest_value,
@@ -95,13 +98,70 @@ impl ModuleService {
         company_modules.insert_one(&company_module).await?;
 
         tracing::info!(
-            "[Module installed] {} v{} — capabilities: [{}]",
+            "[Module installed] {} v{} — capabilities: [{}], permissions seeded: {}",
             installed.code,
             installed.version,
-            installed.capabilities.join(", ")
+            installed.capabilities.join(", "),
+            seeded,
         );
 
         Ok(installed)
+    }
+
+    /// Создать недостающие PermissionPolicy из списка permissions манифеста.
+    /// Формат записи: "subsystem.action". Существующие коды не трогаем.
+    /// Возвращает количество созданных политик.
+    async fn seed_permissions(db: &MongoClient, manifest: &ModuleManifest) -> usize {
+        use mongodb::bson::Document;
+
+        let col = db.collection::<Document>("permission_policies");
+        let mut created = 0usize;
+
+        for perm in &manifest.permissions {
+            let Some((subsystem, action)) = perm.split_once('.') else {
+                tracing::warn!(
+                    "[Module:{}] Некорректная permission '{}', ожидается 'subsystem.action'",
+                    manifest.code,
+                    perm
+                );
+                continue;
+            };
+
+            // Пропускаем уже существующие (не перезаписываем настройки админа)
+            match col.count_documents(doc! { "code": perm }).await {
+                Ok(n) if n > 0 => continue,
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("[Module:{}] Проверка policy '{}': {}", manifest.code, perm, e);
+                    continue;
+                }
+            }
+
+            let now = Utc::now();
+            let policy_doc = doc! {
+                "_id": uuid::Uuid::new_v4().to_string(),
+                "code": perm,
+                "name": format!("{} — {}", manifest.name, action),
+                "description": bson::Bson::Null,
+                "scope_type": "subsystem",
+                "subsystem_code": subsystem,
+                "entity_type": bson::Bson::Null,
+                "actions": [action],
+                "record_scope": "company",
+                "deny": false,
+                "priority": 0,
+                "created_at": mongodb::bson::Bson::DateTime(mongodb::bson::DateTime::from_millis(now.timestamp_millis())),
+                "updated_at": mongodb::bson::Bson::DateTime(mongodb::bson::DateTime::from_millis(now.timestamp_millis())),
+            };
+
+            if let Err(e) = col.insert_one(policy_doc).await {
+                tracing::warn!("[Module:{}] Создание policy '{}': {}", manifest.code, perm, e);
+            } else {
+                created += 1;
+            }
+        }
+
+        created
     }
 
     // ── Uninstall ──────────────────────────────────────────

@@ -76,15 +76,19 @@ pub async fn modules_install(
     let wasm_info: super::super::plugin_manager::WasmModuleInfo = serde_json::from_str(&info_json)
         .map_err(|e| format!("get_info() вернул невалидный JSON: {}", e))?;
 
-    // Собираем манифест из get_info() + default capabilities
+    // Собираем манифест ИСКЛЮЧИТЕЛЬНО из get_info() модуля
+    // (модуль сам декларирует capabilities и permissions)
     let manifest = ModuleManifest {
-        code: wasm_info.name.clone(),
+        code: wasm_info.code.clone().unwrap_or_else(|| wasm_info.name.clone()),
         name: wasm_info.name.clone(),
         version: wasm_info.version.clone(),
-        api_version: crate::modules::CURRENT_API_VERSION.into(),
-        author: "Unknown".into(),
-        description: format!("WASM модуль {} v{}", wasm_info.name, wasm_info.version),
-        capabilities: vec!["objects.create".into(), "objects.read".into(), "logging".into()],
+        api_version: wasm_info.api_version.clone()
+            .unwrap_or_else(|| crate::modules::CURRENT_API_VERSION.into()),
+        author: wasm_info.author.clone().unwrap_or_else(|| "Unknown".into()),
+        description: wasm_info.description.clone()
+            .unwrap_or_else(|| format!("WASM модуль {} v{}", wasm_info.name, wasm_info.version)),
+        capabilities: wasm_info.capabilities.clone(),
+        permissions: wasm_info.permissions.clone(),
         functions: wasm_info.functions.into_iter().map(|f| super::ModuleFunction {
             name: f.name,
             label: f.label,

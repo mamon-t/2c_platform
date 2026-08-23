@@ -1,4 +1,6 @@
 pub mod commands;
+pub mod storage;
+pub mod workflow;
 
 use extism::*;
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,26 @@ pub struct ModuleInfo {
     pub functions: Vec<PluginFunction>,
 }
 
+/// Единые коды ошибок host-функций (контракт Plugin SDK).
+/// Любая host-функция возвращает конверт:
+///   успех:  {"ok": true,  "data": ...}
+///   ошибка: {"ok": false, "error": {"code": "...", "message": "..."}}
+pub mod err {
+    pub const NO_DATABASE: &str = "NO_DATABASE";
+    pub const NO_COMPANY: &str = "NO_COMPANY";
+    pub const INVALID_COMPANY: &str = "INVALID_COMPANY";
+    pub const NO_USER: &str = "NO_USER";
+    pub const INVALID_USER: &str = "INVALID_USER";
+    pub const NO_MODULE_CODE: &str = "NO_MODULE_CODE";
+    pub const INVALID_UUID: &str = "INVALID_UUID";
+    pub const INVALID_JSON: &str = "INVALID_JSON";
+    pub const INVALID_VERSION: &str = "INVALID_VERSION";
+    pub const INVALID_ACTION: &str = "INVALID_ACTION";
+    pub const NOT_FOUND: &str = "NOT_FOUND";
+    pub const DB_ERROR: &str = "DB_ERROR";
+    pub const SCRIPT_FAILED: &str = "SCRIPT_FAILED";
+}
+
 pub struct WasmPlugin {
     plugin: Plugin,
     pub info: ModuleInfo,
@@ -40,6 +62,7 @@ pub struct PluginContext {
     pub user_id: Option<String>,
     pub user_login: Option<String>,
     pub display_name: Option<String>,
+    pub role_id: Option<String>,
 }
 
 // ── HostData (только db + общий контекст) ──────────────────
@@ -52,9 +75,9 @@ pub struct HostData {
     pub capabilities: Vec<String>,
 }
 
-// ── Error response helper ──────────────────────────────────
+// ── Response envelope (контракт Plugin SDK) ────────────────
 
-fn error_response(code: &str, message: &str) -> String {
+pub(crate) fn error_response(code: &str, message: &str) -> String {
     serde_json::json!({
         "ok": false,
         "error": {
@@ -65,7 +88,7 @@ fn error_response(code: &str, message: &str) -> String {
     .to_string()
 }
 
-fn ok_response(data: serde_json::Value) -> String {
+pub(crate) fn ok_response(data: serde_json::Value) -> String {
     serde_json::json!({
         "ok": true,
         "data": data,
@@ -73,7 +96,7 @@ fn ok_response(data: serde_json::Value) -> String {
     .to_string()
 }
 
-fn check_capability(hd: &HostData, function_name: &str) -> Result<(), String> {
+pub(crate) fn check_capability(hd: &HostData, function_name: &str) -> Result<(), String> {
     if let Some(required) = required_capability(function_name) {
         if !hd.capabilities.iter().any(|c| c == required) {
             let module_code = hd.module_code.as_deref().unwrap_or("unknown");
@@ -424,9 +447,16 @@ impl WasmPlugin {
             .with_function("list_objects",  [PTR, PTR], [PTR], UserData::new(host_data.clone()), list_objects_impl)
             .with_function("get_object",    [PTR],      [PTR], UserData::new(host_data.clone()), get_object_impl)
             .with_function("update_object", [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), update_object_impl)
+            .with_function("transition_object", [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::transition_object_impl)
             .with_function("log_message",   [PTR],      [],    UserData::new(host_data.clone()), log_message_impl)
             .with_function("get_entity_type",    [PTR], [PTR], UserData::new(host_data.clone()), get_entity_type_impl)
             .with_function("list_entity_fields", [PTR], [PTR], UserData::new(host_data.clone()), list_entity_fields_impl)
+            .with_function("kv_put",    [PTR, PTR], [PTR], UserData::new(host_data.clone()), storage::kv_put_impl)
+            .with_function("kv_get",    [PTR],      [PTR], UserData::new(host_data.clone()), storage::kv_get_impl)
+            .with_function("kv_list",   [PTR],      [PTR], UserData::new(host_data.clone()), storage::kv_list_impl)
+            .with_function("kv_delete", [PTR],      [PTR], UserData::new(host_data.clone()), storage::kv_delete_impl)
+            .with_function("run_script",  [PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::run_script_impl)
+            .with_function("notify_user", [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::notify_user_impl)
             .with_fuel_limit(10_000_000)
             .build()
             .map_err(|e| format!("Ошибка загрузки плагина: {}", e))?;
@@ -455,12 +485,20 @@ impl WasmPlugin {
         Ok(Self { plugin, info, ctx, capabilities })
     }
 
-    pub fn update_context(&self, company_id: Option<String>, user_id: Option<String>, user_login: Option<String>, display_name: Option<String>) {
+    pub fn update_context(
+        &self,
+        company_id: Option<String>,
+        user_id: Option<String>,
+        user_login: Option<String>,
+        display_name: Option<String>,
+        role_id: Option<String>,
+    ) {
         if let Ok(mut ctx) = self.ctx.write() {
             ctx.company_id = company_id;
             ctx.user_id = user_id;
             ctx.user_login = user_login;
             ctx.display_name = display_name;
+            ctx.role_id = role_id;
         }
     }
 
@@ -473,9 +511,28 @@ impl WasmPlugin {
 
 // ── Deserialization helper for get_info() ──────────────────
 
+/// Манифест, возвращаемый модулем из get_info().
+/// Единственный источник правды о модуле: код, версия,
+/// запрашиваемые capabilities и требуемые RBAC-политики.
 #[derive(Deserialize)]
 pub struct WasmModuleInfo {
     pub name: String,
     pub version: String,
     pub functions: Vec<PluginFunction>,
+    /// Код модуля (если не указан — используется name).
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Требуемая версия API хост-функций (по умолчанию текущая).
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// Запрашиваемые capabilities (валидируются хостом при установке).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Требуемые RBAC-политики ("subsystem.action"), создаются при install.
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }

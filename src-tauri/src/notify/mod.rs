@@ -1,3 +1,5 @@
+pub mod service;
+
 use crate::core::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -25,6 +25,8 @@ pub const VALID_CAPABILITIES: &[&str] = &[
     "numbering.next",
     "logging",
     "notifications",
+    "storage",
+    "scripts",
 ];
 
 /// Маппинг: имя host-функции → требуемая capability.
@@ -35,11 +37,14 @@ pub fn required_capability(function_name: &str) -> Option<&'static str> {
         "get_object" | "list_objects" => Some("objects.read"),
         "update_object" => Some("objects.update"),
         "delete_object" => Some("objects.delete"),
+        "transition_object" => Some("objects.update"),
         "get_entity_type" | "list_entity_fields" => Some("metadata.read"),
         "emit_event" => Some("events.emit"),
         "next_number" => Some("numbering.next"),
         "log_message" => Some("logging"),
         "notify_user" => Some("notifications"),
+        "kv_put" | "kv_get" | "kv_list" | "kv_delete" => Some("storage"),
+        "run_script" => Some("scripts"),
         _ => None,
     }
 }
@@ -80,6 +85,11 @@ pub struct ModuleManifest {
     pub author: String,
     pub description: String,
     pub capabilities: Vec<String>,
+    /// RBAC-политики, которые модуль требует для работы.
+    /// Формат каждой записи: "subsystem.action" (например "requests.approve").
+    /// При install хост создаёт недостающие PermissionPolicy.
+    #[serde(default)]
+    pub permissions: Vec<String>,
     pub functions: Vec<ModuleFunction>,
 }
 

@@ -40,4 +40,33 @@ pub async fn ensure_indexes(db: &MongoClient) {
     {
         warn!("Индекс company_modules.company_id: {}", e);
     }
+
+    // module_store (KV-хранилище модулей): уникальный ns_key
+    let module_store = db.collection::<mongodb::bson::Document>(crate::plugin_manager::storage::COLLECTION_MODULE_STORE);
+    if let Err(e) = module_store
+        .create_index(
+            IndexModel::builder()
+                .keys(doc! { "ns_key": 1 })
+                .options(mongodb::options::IndexOptions::builder().unique(true).build())
+                .build(),
+        )
+        .await
+    {
+        warn!("Индекс module_store.ns_key: {}", e);
+    }
+    if let Err(e) = module_store
+        .create_index(IndexModel::builder().keys(doc! { "company_id": 1, "module_code": 1 }).build())
+        .await
+    {
+        warn!("Индекс module_store.company+module: {}", e);
+    }
+
+    // notifications: получатель + время
+    let notifications = db.collection::<mongodb::bson::Document>(crate::notify::service::NotificationStore::COLLECTION);
+    if let Err(e) = notifications
+        .create_index(IndexModel::builder().keys(doc! { "recipient_user_id": 1, "created_at": -1 }).build())
+        .await
+    {
+        warn!("Индекс notifications.recipient: {}", e);
+    }
 }
