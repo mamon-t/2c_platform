@@ -893,4 +893,135 @@ export const api = {
   async modulesUpdateSettings(moduleId: string, settings: Record<string, unknown>): Promise<void> {
     return getAdapter().invoke<void>('modules_update_settings', { moduleId, settings });
   },
+
+  // ── Универсальный мост к WASM-модулям ──
+  async pluginCall<T = unknown>(moduleId: string, fnName: string, args: Record<string, unknown> = {}): Promise<PluginEnvelope<T>> {
+    return getAdapter().invoke<PluginEnvelope<T>>('plugin_call', {
+      moduleId,
+      function: fnName,
+      argsJson: JSON.stringify(args),
+    });
+  },
+
+  // ── Уведомления (in-app outbox) ──
+  async notificationsList(limit?: number): Promise<NotificationOutboxTS[]> {
+    return getAdapter().invoke<NotificationOutboxTS[]>('notifications_list', { limit: limit ?? null });
+  },
+  async notificationsMarkRead(notificationId?: string): Promise<number> {
+    return getAdapter().invoke<number>('notifications_mark_read', { notificationId: notificationId ?? null });
+  },
+
+  // ── Криптоподпись (host-side CryptoPro) ──
+  async listCryptoCertificates(): Promise<CertificateInfo[]> {
+    return getAdapter().invoke<CertificateInfo[]>('list_crypto_certificates');
+  },
+  async signDocument(dataBase64: string, certSha1: string, detached = true): Promise<SignatureResult> {
+    return getAdapter().invoke<SignatureResult>('sign_document', {
+      input: { data_base64: dataBase64, cert_sha1: certSha1, detached },
+    });
+  },
 };
+
+// ── Plugin SDK: универсальный конверт host/гостевых вызовов ──
+
+export interface PluginError {
+  code: string;
+  message: string;
+}
+
+export interface PluginEnvelope<T> {
+  ok: boolean;
+  data?: T;
+  error?: PluginError;
+}
+
+/** Разворачивает конверт плагина; при ошибке бросает исключение с кодом. */
+export function unwrapPlugin<T>(envelope: PluginEnvelope<T>): T {
+  if (envelope.ok) return envelope.data as T;
+  const err = envelope.error;
+  throw new Error(err ? `${err.code}: ${err.message}` : 'Неизвестная ошибка модуля');
+}
+
+// ── Модуль «Заявки» (WASM requests-plugin) ──
+
+export type ApproverTypeTS = 'user' | 'role';
+
+export interface RouteStepTS {
+  step_order: number;
+  approver_type: ApproverTypeTS;
+  approver_id: string;
+  approver_name?: string | null;
+  timeout_hours: number;
+  is_required: boolean;
+}
+
+export interface RequestRouteTS {
+  code: string;
+  name: string;
+  description?: string | null;
+  steps: RouteStepTS[];
+  is_active: boolean;
+}
+
+export type StepStatusTS = 'pending' | 'approved' | 'rejected' | 'skipped';
+export type ApprovalStatusTS = 'in_progress' | 'approved' | 'rejected' | 'cancelled';
+
+export interface StepStateTS {
+  step_order: number;
+  approver_type: ApproverTypeTS;
+  approver_id: string;
+  approver_name?: string | null;
+  status: StepStatusTS;
+  decided_at?: number | null;
+  comment?: string | null;
+  signature_der?: string | null;
+}
+
+export interface RequestApprovalTS {
+  request_id: string;
+  route_code: string;
+  route_name: string;
+  status: ApprovalStatusTS;
+  current_step: number;
+  steps: StepStateTS[];
+  initiator_id: string;
+  initiator_login: string;
+  initiator_name?: string | null;
+  submit_signature_der?: string | null;
+  submitted_at: number;
+  completed_at?: number | null;
+  last_comment?: string | null;
+}
+
+// ── Криптоподпись ──
+
+export interface CertificateInfo {
+  subject_name: string;
+  issuer_name: string;
+  sha1_hash: string;
+  has_private_key: boolean;
+  is_valid: boolean;
+}
+
+export interface SignatureResult {
+  signature_der: number[];
+  signer_subject: string;
+  signer_issuer: string;
+  signer_sha1: string;
+  is_detached: boolean;
+}
+
+// ── Уведомления ──
+
+export interface NotificationOutboxTS {
+  _id: string;
+  company_id: string;
+  template_code: string;
+  channel: 'in_app' | 'email';
+  recipient_user_id: string;
+  subject?: string | null;
+  body: string;
+  status: 'pending' | 'sent' | 'failed' | 'read';
+  attempts: number;
+  created_at: string;
+}

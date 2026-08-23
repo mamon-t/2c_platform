@@ -11,6 +11,7 @@
   import EventsPage from '$lib/components/EventsPage.svelte';
   import MetadataPage from '$lib/components/MetadataPage.svelte';
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
+  import RequestsPage from '$lib/components/RequestsPage.svelte';
   import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
@@ -880,6 +881,9 @@
 
       {:else if currentNav === 'objects' || currentNav === 'documents' || currentNav === 'catalogs'}
         <ObjectsPage />
+
+      {:else if currentNav === 'requests'}
+        <RequestsPage />
 
       {:else if currentNav === 'events'}
         <EventsPage />
