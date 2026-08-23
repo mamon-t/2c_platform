@@ -7,6 +7,7 @@
 //! Реестр принадлежит ядру (v0.1). Расширяемость для модулей — на потом.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use async_trait::async_trait;
@@ -33,20 +34,27 @@ pub trait TxOpHandler: Send + Sync {
 
     async fn execute(
         &self,
-        op: &TxOpCtx<'_>,
+        op: &mut TxOpCtx<'_>,
         params: Value,
     ) -> PlatformResult<Value>;
 }
 
-/// Стартовый реестр (X2 наполнит: test.noop, object.transition).
+/// Стартовый реестр операций.
 static REGISTRY: std::sync::OnceLock<HashMap<String, ArcHandler>> = std::sync::OnceLock::new();
 
 pub type ArcHandler = std::sync::Arc<dyn TxOpHandler>;
 
 fn registry() -> &'static HashMap<String, ArcHandler> {
     REGISTRY.get_or_init(|| {
-        // X2: REGISTRY.insert("test.noop", ...); и т.д.
-        HashMap::new()
+        use super::handlers::{NoopHandler, ObjectCancelHandler, ObjectPostHandler};
+        let mut m: HashMap<String, ArcHandler> = HashMap::new();
+        let put = |m: &mut HashMap<String, ArcHandler>, k: &str, h: ArcHandler| {
+            m.insert(k.to_string(), h);
+        };
+        put(&mut m, "test.noop", Arc::new(NoopHandler));
+        put(&mut m, "object.post", Arc::new(ObjectPostHandler));
+        put(&mut m, "object.cancel", Arc::new(ObjectCancelHandler));
+        m
     })
 }
 

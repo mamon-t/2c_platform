@@ -50,7 +50,7 @@ pub async fn execute(
             "[tx] идемпотентный повтор {}: возврат сохранённого результата",
             pkg.idempotency_key
         );
-        return Ok(TxResult { op_results: serde_json::from_value(result).unwrap_or_default() });
+        return Ok(TxResult { op_results: results_from_saved(result) });
     }
 
     // Право на шаблон пачки (цельное бизнес-действие).
@@ -58,8 +58,47 @@ pub async fn execute(
         ctx.check_permission(perm).map_err(TxError::from)?;
     }
 
-    // ── Фаза 2–4: одна транзакция на всю пачку ──
+    // ── Фазы 2–4 с ретраем transient-конфликтов ──
+    // (создание коллекций внутри txn и конкурентные записи дают
+    // WriteConflict; идемпотентность делает повтор безопасным)
+    const MAX_TRANSIENT_RETRIES: usize = 3;
+    let mut result = run_transaction(db, &pkg).await;
+    for attempt in 1..MAX_TRANSIENT_RETRIES {
+        if let Err(ref e) = result {
+            if is_transient(&e.message) {
+                warn!(
+                    "[tx] transient-конфликт (попытка {attempt}/{}): {} — повторяю",
+                    MAX_TRANSIENT_RETRIES, e.message
+                );
+                // Перечитываем журнал: возможно, конкурент уже закоммитился
+                if let Some(saved) =
+                    TxJournal::find_committed(db, &ctx.company_id, &pkg.idempotency_key)
+                        .await
+                        .map_err(TxError::from)?
+                {
+                    return Ok(TxResult { op_results: results_from_saved(saved) });
+                }
+                result = run_transaction(db, &pkg).await;
+                continue;
+            }
+        }
+        break;
+    }
+    result
+}
 
+fn is_transient(msg: &str) -> bool {
+    msg.contains("TransientTransactionError")
+        || msg.contains("WriteConflict")
+        || msg.contains("Please retry your operation")
+}
+
+/// Фазы 2–4 одной попытки: открыть txn, выполнить, журнал, коммит.
+async fn run_transaction(
+    db: &crate::db::MongoClient,
+    pkg: &TransactionPackage,
+) -> Result<TxResult, TxError> {
+    let ctx = &pkg.context;
     let mut session = db
         .client()
         .start_session()
@@ -105,6 +144,17 @@ pub async fn execute(
         Err(tx_err) => {
             // ── Фаза 5: откат ──
             session.abort_transaction().await.ok();
+
+            // Проиграли конкурентную гонку? Победитель мог закоммититься
+            // между нашим стартом и ошибкой — тогда возвращаем ЕГО результат.
+            if let Some(saved) = TxJournal::find_committed(db, &ctx.company_id, &pkg.idempotency_key)
+                .await
+                .map_err(TxError::from)?
+            {
+                info!("[tx] конкурентный повтор {}: возвращён результат победителя", pkg.idempotency_key);
+                return Ok(TxResult { op_results: results_from_saved(saved) });
+            }
+
             warn!(
                 "[tx] rollback {}: {}",
                 pkg.idempotency_key,
@@ -167,12 +217,19 @@ async fn finish_on_duplicate(
     match TxJournal::find_committed(db, &ctx.company_id, key).await {
         Ok(Some(result)) => {
             info!("[tx] конкурентный повтор {key}: возвращён результат победителя");
-            Ok(TxResult { op_results: serde_json::from_value(result).unwrap_or_default() })
+            Ok(TxResult { op_results: results_from_saved(result) })
         }
         _ => Err(TxError::new(format!(
             "конкурентный конфликт: пачка {key:?} выполняется параллельно"
         ))),
     }
+}
+
+/// Журнал хранит сериализованный TxResult {"op_results": {...}}.
+fn results_from_saved(saved: serde_json::Value) -> HashMap<String, serde_json::Value> {
+    serde_json::from_value::<TxResult>(saved)
+        .map(|r| r.op_results)
+        .unwrap_or_default()
 }
 
 fn is_duplicate_key(msg: &str) -> bool {

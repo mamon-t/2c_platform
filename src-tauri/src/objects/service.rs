@@ -345,6 +345,69 @@ impl ObjectService {
         }
     }
 
+    /// Провести объект ВНУТРИ ВНЕШНЕЙ транзакции (для tx_exec).
+    /// Проверки состояния/версии — на входе; запись через переданную сессию.
+    pub async fn post_with_session(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        id: uuid::Uuid,
+        expected_version: i64,
+        user_id: UserId,
+        actor: ActorSnapshot,
+        company_id: CompanyId,
+    ) -> PlatformResult<serde_json::Value> {
+        let old = Self::get(db, id).await?;
+        if old.state != ObjectState::Draft {
+            return Err(PlatformError::Validation("Провести можно только черновик".into()));
+        }
+        if expected_version != old.version {
+            return Err(PlatformError::Validation(format!(
+                "Конфликт версий: ожидается v{}, получен v{expected_version}", old.version
+            )));
+        }
+
+        let (obj, _changes, _event_id) =
+            Self::post_inner(db, session, &old, &user_id, &actor, &company_id).await?;
+
+        Ok(serde_json::json!({
+            "id": obj._id.to_string(),
+            "version": obj.version,
+            "state": "posted",
+            "number": obj.number,
+        }))
+    }
+
+    /// Отменить проведение ВНУТРИ ВНЕШНЕЙ транзакции (для tx_exec).
+    pub async fn cancel_with_session(
+        db: &MongoClient,
+        session: &mut mongodb::ClientSession,
+        id: uuid::Uuid,
+        expected_version: i64,
+        user_id: UserId,
+        actor: ActorSnapshot,
+        company_id: CompanyId,
+    ) -> PlatformResult<serde_json::Value> {
+        let old = Self::get(db, id).await?;
+        if old.state != ObjectState::Posted {
+            return Err(PlatformError::Validation("Отменить можно только проведённый документ".into()));
+        }
+        if expected_version != old.version {
+            return Err(PlatformError::Validation(format!(
+                "Конфликт версий: ожидается v{}, получен v{expected_version}", old.version
+            )));
+        }
+
+        let (obj, _changes, _event_id) =
+            Self::cancel_inner(db, session, &old, &user_id, &actor, &company_id).await?;
+
+        Ok(serde_json::json!({
+            "id": obj._id.to_string(),
+            "version": obj.version,
+            "state": "cancelled",
+            "number": obj.number,
+        }))
+    }
+
     async fn cancel_inner(
         db: &MongoClient,
         session: &mut mongodb::ClientSession,

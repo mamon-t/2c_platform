@@ -11,6 +11,7 @@
 //! - права двух уровней: право на пачку + право каждого обработчика.
 
 pub mod executor;
+pub mod handlers;
 pub mod journal;
 pub mod registry;
 pub mod indexes;
@@ -50,7 +51,11 @@ pub struct TxContext {
 
 impl TxContext {
     /// Deny-by-default проверка права из снапшота политик.
+    /// Пустое право = проверка не требуется (как в middleware).
     pub fn check_permission(&self, permission: &str) -> Result<(), PlatformError> {
+        if permission.is_empty() {
+            return Ok(());
+        }
         let parts: Vec<&str> = permission.split('.').collect();
         if parts.len() != 2 {
             return Err(PlatformError::PermissionDenied(format!(
