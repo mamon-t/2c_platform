@@ -920,6 +920,10 @@ export const api = {
       input: { data_base64: dataBase64, cert_sha1: certSha1, detached },
     });
   },
+  /** Тестовый самоподписанный сертификат (settings.manage). Возвращает "контейнер|subject|sha1". */
+  async createTestCertificate(name: string): Promise<string> {
+    return getAdapter().invoke<string>('create_test_certificate', { name });
+  },
 
   // ── Оборудование (devices) ──
   async devicesList(): Promise<DeviceListItemTS[]> {

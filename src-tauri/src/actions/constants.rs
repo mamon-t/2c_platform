@@ -225,6 +225,7 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "list_crypto_certificates", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "sign_document", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Company, audit: "sign_document" },
     CommandMapping { command: "verify_document_signature", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "create_test_certificate", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "create_test_certificate" },
 
     // ── Оборудование ──
     CommandMapping { command: "devices_list", permission: DEVICES_READ, scope: ScopeTag::Company, audit: "" },

@@ -148,6 +148,23 @@
     return c.has_private_key && c.is_valid;
   }
 
+  // Тестовый сертификат (когда в MY пусто)
+  let makingCert = $state(false);
+  async function makeTestCert() {
+    const name = prompt('Имя владельца (латиницей):', 'Test User');
+    if (!name?.trim()) return;
+    makingCert = true; error = ''; notice = '';
+    try {
+      const info = await api.createTestCertificate(name.trim());
+      notice = `Тестовый сертификат создан: ${info.split('|')[1]}`;
+      certificates = await api.listCryptoCertificates();
+    } catch (e: any) {
+      error = typeof e === 'string' ? e : e?.message ?? 'Ошибка создания сертификата';
+    } finally {
+      makingCert = false;
+    }
+  }
+
   // ── Создание ──
   async function createRequest() {
     const rt = requestType();
@@ -563,7 +580,12 @@
           {/each}
         </select>
         {#if certificates.filter(certOk).length === 0}
-          <div class="text-xs text-warn-600">Не найдено валидных сертификатов с приватным ключом (КриптоПро).</div>
+          <div class="text-xs text-warn-600">
+            Не найдено валидных сертификатов с приватным ключом (КриптоПро).
+            <button class="underline hover:text-warn-700" onclick={makeTestCert} disabled={makingCert}>
+              {makingCert ? 'Создание…' : 'Создать тестовый'}
+            </button>
+          </div>
         {/if}
       {:else}
         <div class="text-xs text-surface-400"><i class="fa-solid fa-circle-info"></i> Маршрут без электронной подписи</div>

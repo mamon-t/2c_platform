@@ -144,6 +144,7 @@ pub fn run() {
             signing::commands::list_crypto_certificates,
             signing::commands::sign_document,
             signing::commands::verify_document_signature,
+            signing::commands::create_test_certificate,
             commands::notifications_list,
             commands::notifications_mark_read,
             devices::commands::devices_list,

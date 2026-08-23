@@ -51,6 +51,7 @@ pub enum AuditableAction {
     ConnectDevice,
     DisconnectDevice,
     TestDevice,
+    CreateTestCertificate,
 }
 
 impl AuditableAction {
@@ -104,6 +105,7 @@ impl AuditableAction {
             Self::ConnectDevice => "connect_device",
             Self::DisconnectDevice => "disconnect_device",
             Self::TestDevice => "test_device",
+            Self::CreateTestCertificate => "create_test_certificate",
         }
     }
 
@@ -157,6 +159,7 @@ impl AuditableAction {
             Self::ConnectDevice => "Подключение устройства",
             Self::DisconnectDevice => "Отключение устройства",
             Self::TestDevice => "Тестирование устройства",
+            Self::CreateTestCertificate => "Создание тестового сертификата",
         }
     }
 
@@ -210,6 +213,7 @@ impl AuditableAction {
             Self::ConnectDevice => "fa-solid fa-plug-circle-check text-success-500",
             Self::DisconnectDevice => "fa-solid fa-plug-circle-xmark text-warn-500",
             Self::TestDevice => "fa-solid fa-vial text-primary-500",
+            Self::CreateTestCertificate => "fa-solid fa-certificate text-warn-500",
         }
     }
 
@@ -241,6 +245,7 @@ impl AuditableAction {
             Self::VerifySignature => "document",
             Self::ConfigureDevice | Self::ConnectDevice
             | Self::DisconnectDevice | Self::TestDevice => "device",
+            Self::CreateTestCertificate => "user_certificate",
         }
     }
 }
@@ -303,6 +308,7 @@ impl std::str::FromStr for AuditableAction {
             "connect_device" => Ok(Self::ConnectDevice),
             "disconnect_device" => Ok(Self::DisconnectDevice),
             "test_device" => Ok(Self::TestDevice),
+            "create_test_certificate" => Ok(Self::CreateTestCertificate),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }

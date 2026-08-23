@@ -2,6 +2,7 @@ use serde::Deserialize;
 use tauri::State;
 use tokio::sync::Mutex;
 
+use crate::audit::AuditableAction;
 use crate::commands::AppState;
 use crate::core::middleware::CommandContext;
 
@@ -104,4 +105,76 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(input)
         .map_err(|e| format!("Невалидный Base64: {e}"))
+}
+
+// ── Тестовый сертификат (для проверки подписей без УЭЦП) ──
+
+/// Создать самоподписанный сертификат ГОСТ Р 34.10-2012 и установить в MY.
+/// Контейнер: 2c_test_<8 hex>. Имя — латиницей (ANSI API КриптоПро).
+#[tauri::command]
+pub async fn create_test_certificate(
+    name: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<String, String> {
+    let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+
+    // ANSI-безопасное имя
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '-' || *c == '.')
+        .take(40)
+        .collect();
+    if safe.trim().is_empty() {
+        return Err("Имя должно содержать латинские буквы/цифры".into());
+    }
+    let subject = format!("CN={}, O=2C-Test", safe.trim());
+    let container = format!("2c_test_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
+    let container_out = container.clone();
+    let subject_out = subject.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        use cpcsp::cpcsp_ffi_linux::raw_constants::*;
+        use cpcsp::key::Key;
+        use cpcsp::pki::Pki;
+        use cpcsp::provider::Provider;
+        use cpcsp::selfsign;
+
+        let prov = Provider::acquire(Some(&container), None, PROV_GOST_2012_256, CRYPT_NEWKEYSET)
+            .map_err(|e| format!("Контейнер {container}: {e}"))?;
+
+        let _key = Key::gen(prov.raw_handle(), CALG_GOST_2012_256, 0)
+            .map_err(|e| format!("Генерация ключа: {e}"))?;
+
+        let cert = selfsign::create_self_signed(
+            &prov,
+            &subject,
+            AT_KEYEXCHANGE,
+            szOID_GOST_R3411_2012_256,
+            1,
+        )
+        .map_err(|e| format!("Создание сертификата: {e}"))?;
+
+        let der = cert.to_der().map_err(|e| format!("Кодирование DER: {e}"))?;
+
+        Pki::install_certificate(prov.raw_handle(), AT_KEYEXCHANGE, &der, "MY", 0, true)
+            .map_err(|e| format!("Установка в MY: {e}"))?;
+
+        let sha1 = cert.sha1_hash()
+            .map(|h| hex::encode(h))
+            .unwrap_or_default();
+        Ok(sha1)
+    })
+    .await
+    .map_err(|e| format!("Ошибка блокирующего вызова: {e}"))??;
+
+    crate::audit_log!(state, get_db(&state), AuditableAction::CreateTestCertificate,
+        target_id = container_out.clone());
+
+    Ok(format!("{container_out}|{subject_out}|{result}"))
+}
+
+fn get_db(s: &tokio::sync::MutexGuard<'_, AppState>) -> crate::db::MongoClient {
+    s.db.clone().expect("БД не подключена")
 }
