@@ -33,6 +33,7 @@ extern "ExtismHost" {
     fn whoami() -> String;
     fn now_ms() -> String;
     fn module_settings() -> String;
+    fn emit_event(stream_id: String, event_type: String, payload_json: String) -> String;
     fn log_message(msg: String);
 }
 
@@ -106,6 +107,34 @@ fn current_ms() -> anyhow::Result<u64> {
 
 fn route_key(code: &str) -> String { format!("route:{code}") }
 fn approval_key(request_id: &str) -> String { format!("approval:{request_id}") }
+
+/// Бизнес-событие в «Трубу». Не критично для процесса: ошибка — только лог.
+fn emit(request_id: &str, event_type: &str, extra: serde_json::Value, initiator: &str) {
+    let mut payload = serde_json::json!({
+        "request_id": request_id,
+        "initiator": initiator,
+    });
+    if let (serde_json::Value::Object(extra), serde_json::Value::Object(base)) = (&extra, &mut payload) {
+        for (k, v) in extra {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    let call = unsafe { emit_event(
+        request_id.to_string(),
+        event_type.to_string(),
+        payload.to_string(),
+    ) };
+    match call {
+        Ok(raw) => {
+            if let Err(e) = unwrap_host(raw) {
+                let _ = unsafe { log_message(format!("[requests] emit {event_type}: {e}")) };
+            }
+        }
+        Err(e) => {
+            let _ = unsafe { log_message(format!("[requests] emit {event_type}: {e}")) };
+        }
+    }
+}
 
 fn kv_put_value(key: &str, value: &impl Serialize) -> anyhow::Result<()> {
     let json = serde_json::to_string(value)?;
@@ -290,6 +319,11 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
     // Уведомить первого утверждающего
     notify_current_approver(&approval)?;
 
+    // Событие в «Трубу»
+    emit(&input.request_id, "request.submitted", serde_json::json!({
+        "route_code": route.code,
+    }), &user_id);
+
     let _ = unsafe { log_message(format!(
         "[requests] заявка {} отправлена по маршруту {}", input.request_id, route.code
     )) };
@@ -345,27 +379,35 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
     if !step_is_mine {
         return Err(anyhow::anyhow!("FORBIDDEN: текущий этап назначен другому утверждающему"));
     }
+    let step_order = a.steps[idx].step_order;
 
-    let step = &mut a.steps[idx];
-    step.decided_at = Some(ts);
-    step.comment = input.comment.clone();
-    step.signature_der = if signature.is_empty() { None } else { Some(signature) };
+    a.steps[idx].decided_at = Some(ts);
+    a.steps[idx].comment = input.comment.clone();
+    a.steps[idx].signature_der = if signature.is_empty() { None } else { Some(signature) };
 
     if approve {
-        step.status = StepStatus::Approved;
+        a.steps[idx].status = StepStatus::Approved;
         a.current_step = idx + 1;
 
         if a.current_step >= a.steps.len() {
             // Все этапы пройдены → проводим заявку (номер присвоит нумерация)
             complete_approval(&mut a, ts)?;
+            emit(&a.request_id, "request.completed", serde_json::json!({
+                "completed_at": ts,
+            }), &a.initiator_id);
             run_hook("on_complete", false, serde_json::json!({ "approval": a }))?;
         } else {
             a.last_comment = input.comment.clone();
             notify_current_approver(&a)?;
+            emit(&a.request_id, "request.step_approved", serde_json::json!({
+                "step_order": step_order,
+                "approver_id": c.user_id,
+                "comment": input.comment,
+            }), &a.initiator_id);
             run_hook("after_approve", false, serde_json::json!({ "approval": a }))?;
         }
     } else {
-        step.status = StepStatus::Rejected;
+        a.steps[idx].status = StepStatus::Rejected;
         a.status = ApprovalStatus::Rejected;
         a.completed_at = Some(ts);
         a.last_comment = input.comment.clone();
@@ -375,10 +417,15 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
             a.initiator_id.clone(),
             "Заявка отклонена".to_string(),
             format!("Заявка {} отклонена на этапе {}. Комментарий: {}",
-                a.request_id, step.step_order,
+                a.request_id, step_order,
                 input.comment.as_deref().unwrap_or("—")),
         )}?;
 
+        emit(&a.request_id, "request.rejected", serde_json::json!({
+            "step_order": step_order,
+            "approver_id": c.user_id,
+            "comment": input.comment,
+        }), &a.initiator_id);
         run_hook("on_reject", false, serde_json::json!({ "approval": a }))?;
     }
 
@@ -447,6 +494,11 @@ pub fn cancel_request(Json(input): Json<serde_json::Value>) -> FnResult<Json<Req
     }
 
     kv_put_value(&key, &a)?;
+
+    emit(&request_id, "request.cancelled", serde_json::json!({
+        "by": c.user_id,
+    }), &c.user_id.clone().unwrap_or_default());
+
     Ok(Json(a))
 }
 
@@ -536,6 +588,7 @@ pub fn get_info() -> FnResult<Json<ModuleInfo>> {
             "scripts".into(),
             "notifications".into(),
             "logging".into(),
+            "events.emit".into(),
         ],
         permissions: vec![
             "requests.create".into(),

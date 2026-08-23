@@ -137,6 +137,50 @@ extism::host_fn!(pub run_script_impl(user_data: HostData; source: String, contex
     }
 });
 
+// ── emit_event(stream_id, event_type, payload_json) ────────
+//
+// Модуль пишет собственное бизнес-событие в Event Store
+// (StreamType::Module, stream_id = "{module}:{stream}").
+// capability: events.emit.
+
+extism::host_fn!(pub emit_event_impl(user_data: HostData; stream_id: String, event_type: String, payload_json: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "emit_event") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return e };
+            let cctx = match call_ctx(&hd) { Ok(c) => c, Err(e) => return e };
+            let module_code = hd.module_code.clone().unwrap_or_else(|| "module".into());
+
+            if event_type.is_empty() || stream_id.is_empty() {
+                return error_response(super::err::INVALID_JSON, "stream_id и event_type обязательны");
+            }
+            let payload: serde_json::Value = serde_json::from_str(&payload_json)
+                .unwrap_or(serde_json::Value::Null);
+
+            let svc = crate::events::EventService::new();
+            match svc.append(
+                &db,
+                crate::events::StreamType::Module,
+                &format!("{module_code}:{stream_id}"),
+                &event_type,
+                payload,
+                cctx.actor,
+                cctx.company_id,
+                None,
+                None,
+            ).await {
+                Ok(_) => ok_response(serde_json::json!({ "emitted": true })),
+                Err(e) => error_response(super::err::DB_ERROR, &e.to_string()),
+            }
+        })
+    });
+    Ok(result)
+});
+
 // ── whoami() ───────────────────────────────────────────────
 //
 // Идентичность вызывающего для гостя (обновляется при каждом plugin_call).
