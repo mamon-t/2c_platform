@@ -6,7 +6,7 @@
   import {
     api,
     type EntityType, type EntityField, type EntityState, type EntityTransition,
-    type ObjectEntity, type ObjectSnapshot,
+    type ObjectEntity, type ObjectSnapshot, type User, type Company,
     FIELD_KIND_META, OBJECT_STATE_META,
     type FieldKind, type ObjectStateTS,
   } from '$lib/services/api';
@@ -40,6 +40,8 @@
   let jsonText = $state('');
 
   let referenceOptions: Record<string, ObjectEntity[]> = $state({});
+  let allUsers = $state<User[]>([]);
+  let allCompanies = $state<Company[]>([]);
   let loadingReferences: Record<string, boolean> = $state({});
 
   const entityType = $derived(entityTypes.find(t => t._id === object.entity_type_id));
@@ -73,6 +75,8 @@
         api.listEntityTransitions(object.entity_type_id),
       ]);
       await loadReferences();
+      api.listUsers().then((u) => (allUsers = u)).catch(() => {});
+      api.listCompanies().then((c) => (allCompanies = c)).catch(() => {});
     } catch (e: any) {
       error = e?.toString() || 'Ошибка загрузки метаданных';
     }
@@ -509,24 +513,30 @@
                     {/if}
 
                   {:else if field.field_kind === 'user'}
-                    <input
-                      class="input"
-                      type="text"
-                      placeholder="UUID пользователя"
+                    <select
+                      class="select"
                       disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
-                      oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value || null)}
-                    />
+                      onchange={(e) => setField(field.code, (e.target as HTMLSelectElement).value || null)}
+                    >
+                      <option value="">— не задано —</option>
+                      {#each allUsers as u (u._id)}
+                        <option value={u._id}>{u.display_name || u.login}</option>
+                      {/each}
+                    </select>
 
                   {:else if field.field_kind === 'company'}
-                    <input
-                      class="input"
-                      type="text"
-                      placeholder="UUID компании"
+                    <select
+                      class="select"
                       disabled={field.is_readonly || !isEditable}
                       value={String(data[field.code] ?? '')}
-                      oninput={(e) => setField(field.code, (e.target as HTMLInputElement).value || null)}
-                    />
+                      onchange={(e) => setField(field.code, (e.target as HTMLSelectElement).value || null)}
+                    >
+                      <option value="">— не задано —</option>
+                      {#each allCompanies as c (c._id)}
+                        <option value={c._id}>{c.name}</option>
+                      {/each}
+                    </select>
 
                   {:else if field.field_kind === 'array'}
                     <textarea
