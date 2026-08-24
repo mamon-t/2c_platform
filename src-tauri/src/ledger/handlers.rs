@@ -45,8 +45,8 @@ impl TxOpHandler for AccountingPostHandler {
 
     async fn execute(&self, op: &mut TxOpCtx<'_>, params: Value) -> PlatformResult<Value> {
         let date = params.get("date").and_then(|v| v.as_str())
-            .ok_or_else(|| PlatformError::Validation("требуется date (YYYY-MM-DD)".into()))?
-            .to_string();
+            .map(String::from)
+            .unwrap_or_else(|| chrono::Utc::now().date_naive().to_string());
         let lines = parse_lines(&params)?;
         let (company, user, _actor) = actor_of(op.ctx);
 
