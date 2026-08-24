@@ -959,6 +959,49 @@ export const api = {
     return getAdapter().invoke<string>('stock_seed_metadata');
   },
 
+  // ── Учёт (ledger) ──
+  async ledgerOsv(periodFrom?: string, periodTo?: string): Promise<LedgerOsvTS> {
+    return getAdapter().invoke<LedgerOsvTS>('ledger_osv', {
+      periodFrom: periodFrom ?? null,
+      periodTo: periodTo ?? null,
+    });
+  },
+  async ledgerJournal(opts: { dateFrom?: string; dateTo?: string; accountCode?: string; docId?: string; limit?: number } = {}): Promise<LedgerJournalEntryTS[]> {
+    return getAdapter().invoke<LedgerJournalEntryTS[]>('ledger_journal', {
+      dateFrom: opts.dateFrom ?? null,
+      dateTo: opts.dateTo ?? null,
+      accountCode: opts.accountCode ?? null,
+      docId: opts.docId ?? null,
+      limit: opts.limit ?? null,
+    });
+  },
+  async ledgerCard(accountCode: string, dateFrom?: string, dateTo?: string): Promise<LedgerCardTS> {
+    return getAdapter().invoke<LedgerCardTS>('ledger_card', {
+      accountCode,
+      dateFrom: dateFrom ?? null,
+      dateTo: dateTo ?? null,
+    });
+  },
+  async ledgerPeriodsList(): Promise<unknown[]> {
+    return getAdapter().invoke<unknown[]>('ledger_periods_list');
+  },
+  async ledgerPeriodSetState(year: number, month: number, opened: boolean, closed: boolean, reopen?: boolean): Promise<void> {
+    return getAdapter().invoke<void>('ledger_period_set_state', { year, month, opened, closed, reopen: reopen ?? false });
+  },
+  async ledgerAccountsList(): Promise<unknown[]> {
+    return getAdapter().invoke<unknown[]>('ledger_accounts_list');
+  },
+
+  // ── Торговля (trade) ──
+  async tradeSeedMetadata(): Promise<string> {
+    return getAdapter().invoke<string>('trade_seed_metadata');
+  },
+  async tradeGetPrice(nomenclatureId: string, priceTypeId: string, onDate?: string): Promise<PriceOnDateTS | null> {
+    return getAdapter().invoke<PriceOnDateTS | null>('trade_get_price', {
+      nomenclatureId, priceTypeId, onDate: onDate ?? null,
+    });
+  },
+
   // ── Оборудование (devices) ──
   async devicesList(): Promise<DeviceListItemTS[]> {
     return getAdapter().invoke<DeviceListItemTS[]>('devices_list');
@@ -1164,4 +1207,60 @@ export interface StockHandoverItemTS {
 
 export interface StockHandoverReportTS {
   items: StockHandoverItemTS[];
+}
+
+
+// ── Учёт (ledger) ──
+
+export interface LedgerOsvRowTS {
+  code: string;
+  name: string;
+  type: string;
+  debit_turnover: number;
+  credit_turnover: number;
+  balance: number;
+}
+
+export interface LedgerOsvTS {
+  rows: LedgerOsvRowTS[];
+}
+
+export interface LedgerJournalEntryTS {
+  id: string;
+  date: string;
+  posting_id: string;
+  doc_kind?: string | null;
+  doc_id?: string | null;
+  debit_code: string;
+  credit_code: string;
+  amount: number;
+  nomenclature_id?: string | null;
+  description?: string | null;
+  is_reversal: boolean;
+}
+
+export interface LedgerCardTS {
+  account_code: string;
+  sign: number;
+  entries: Array<{
+    date: string;
+    doc_id?: string | null;
+    description?: string | null;
+    debit_code: string;
+    credit_code: string;
+    amount: number;
+    is_debit: boolean;
+    running_balance: number;
+  }>;
+  final_balance: number;
+}
+
+// ── Торговля ──
+
+export interface PriceOnDateTS {
+  object_id: string;
+  nomenclature_id: string;
+  price_type_id: string;
+  value: number;
+  valid_from: string;
 }
