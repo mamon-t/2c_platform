@@ -924,8 +924,8 @@ export const api = {
   },
 
   // ── Уведомления (in-app outbox) ──
-  async notificationsList(limit?: number): Promise<NotificationOutboxTS[]> {
-    return getAdapter().invoke<NotificationOutboxTS[]>('notifications_list', { limit: limit ?? null });
+  async notificationsList(limit?: number): Promise<NotificationItemTS[]> {
+    return getAdapter().invoke<NotificationItemTS[]>('notifications_list', { limit: limit ?? null });
   },
   async notificationsCountUnread(): Promise<number> {
     return getAdapter().invoke<number>('notifications_count_unread');
