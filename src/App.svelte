@@ -13,6 +13,7 @@
   import ObjectsPage from '$lib/components/ObjectsPage.svelte';
   import RequestsPage from '$lib/components/RequestsPage.svelte';
   import DevicesPage from '$lib/components/DevicesPage.svelte';
+import StockPage from '$lib/components/StockPage.svelte';
   import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
@@ -888,6 +889,9 @@
 
       {:else if currentNav === 'devices'}
         <DevicesPage />
+
+      {:else if currentNav === 'stock'}
+        <StockPage />
 
       {:else if currentNav === 'events'}
         <EventsPage />

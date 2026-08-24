@@ -925,6 +925,23 @@ export const api = {
     return getAdapter().invoke<string>('create_test_certificate', { name });
   },
 
+  // ── Склад (stock) ──
+  async stockBalances(locationId?: string, nomenclatureId?: string): Promise<StockBalancesTS> {
+    return getAdapter().invoke<StockBalancesTS>('stock_balances', {
+      locationId: locationId ?? null,
+      nomenclatureId: nomenclatureId ?? null,
+    });
+  },
+  async stockReportHandover(): Promise<StockHandoverReportTS> {
+    return getAdapter().invoke<StockHandoverReportTS>('stock_report_handover');
+  },
+  async stockReportOverdue(): Promise<StockHandoverReportTS> {
+    return getAdapter().invoke<StockHandoverReportTS>('stock_report_overdue');
+  },
+  async stockSeedMetadata(): Promise<string> {
+    return getAdapter().invoke<string>('stock_seed_metadata');
+  },
+
   // ── Оборудование (devices) ──
   async devicesList(): Promise<DeviceListItemTS[]> {
     return getAdapter().invoke<DeviceListItemTS[]>('devices_list');
@@ -1103,4 +1120,31 @@ export interface DeviceEventTS {
   grams?: number;
   stable?: boolean;
   message?: string;
+}
+
+
+// ── Склад ──
+
+export interface StockBalanceTS {
+  location_id: string;
+  nomenclature_id: string;
+  quantity: number;
+}
+
+export interface StockBalancesTS {
+  balances: StockBalanceTS[];
+}
+
+export interface StockHandoverItemTS {
+  location_id: string;
+  custodian_name?: string;
+  responsible_user_id?: string;
+  expected_return_date?: string;
+  nomenclature_id: string;
+  qty_on_hand: number;
+  issued_at_ms?: number;
+}
+
+export interface StockHandoverReportTS {
+  items: StockHandoverItemTS[];
 }
