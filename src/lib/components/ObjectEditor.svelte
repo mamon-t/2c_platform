@@ -9,6 +9,9 @@
   } from '$lib/services/api';
   import { auth, hasPermission } from '$lib/stores/auth';
   import { lastWeight, initDeviceEvents } from '$lib/stores/devices';
+  import { parseFile, serializeFile, downloadText, readFileAsText,
+    type FileFormat, type ParseResult } from '$lib/utils/fileConverter';
+  import FieldMappingDialog from '$lib/components/FieldMappingDialog.svelte';
 
   interface Props {
     object: ObjectEntity;
@@ -208,6 +211,62 @@
 
   const isEditable = $derived(object.state === 'draft' || object.state === 'active');
 
+  // Импорт/экспорт табличных данных
+  let importTargetField = $state<string | null>(null);
+  let importParsed = $state<ParseResult | null>(null);
+  let showMapping = $state(false);
+
+  function openImport(fieldCode: string, file: File) {
+    const fmt: FileFormat = file.name.endsWith('.json') ? 'json' :
+      file.name.endsWith('.xml') ? 'xml' : 'csv';
+    readFileAsText(file).then((text) => {
+      try {
+        const parsed = parseFile(text, fmt);
+        if (!parsed.rows.length) { error = 'Файл пуст или не распознан'; return; }
+        importTargetField = fieldCode;
+        importParsed = parsed;
+        showMapping = true;
+      } catch (e: any) {
+        error = 'Ошибка парсинга: ' + (e?.message ?? String(e));
+      }
+    });
+  }
+
+  function applyImport(mapping: Record<string, string>) {
+    if (!importParsed || !importTargetField) return;
+    const mapped = importParsed.rows.map((row: Record<string, unknown>) => {
+      const out: Record<string, unknown> = {};
+      for (const [src, tgt] of Object.entries(mapping)) {
+        if (tgt) out[tgt] = row[src];
+      }
+      return out;
+    });
+    setField(importTargetField, mapped);
+    showMapping = false;
+    importTargetField = null;
+    importParsed = null;
+  }
+
+  function exportTable(fieldCode: string, format: FileFormat) {
+    const val = data[fieldCode];
+    const rows = Array.isArray(val) ? val as Record<string, unknown>[] : [];
+    if (!rows.length) return;
+    const content = serializeFile(rows, format);
+    downloadText(content, `${object._id.slice(0,8)}_${fieldCode}.${format}`,
+      format === 'csv' ? 'text/csv' : format === 'json' ? 'application/json' : 'text/xml');
+  }
+
+  function exportDocument(format: FileFormat) {
+    const content = JSON.stringify({
+      _id: object._id, entity_type_id: object.entity_type_id,
+      state: object.state, number: object.number,
+      date: object.date, data: object.data, version: object.version,
+    }, null, 2);
+    const ext = format === 'xml' ? 'xml' : 'json';
+    downloadText(content, `${object._id.slice(0,8)}.${ext}`,
+      format === 'xml' ? 'text/xml' : 'application/json');
+  }
+
   onMount(async () => {
     initDeviceEvents();
     loading = true;
@@ -280,6 +339,14 @@
 
   <!-- Content -->
   <div class="flex-1 overflow-y-auto p-3">
+    {#if !loading && isEditable}
+      <div class="flex gap-2 mb-2">
+        <span class="text-xs text-surface-400 self-center"><i class="fa-solid fa-download mr-1"></i>Выгрузить:</span>
+        <button class="btn btn-xs btn-outline" onclick={() => exportDocument('json')}>JSON</button>
+        <button class="btn btn-xs btn-outline" onclick={() => exportDocument('xml')}>XML</button>
+      </div>
+    {/if}
+
     {#if loading}
       <div class="text-center py-8 text-surface-500 text-sm"><i class="fa-solid fa-spinner fa-spin mr-1"></i>Загрузка...</div>
 
@@ -462,6 +529,20 @@
                     ></textarea>
 
                   {:else if field.field_kind === 'table'}
+                    <div class="flex gap-1 mb-1">
+                      <label class="btn btn-xs btn-outline cursor-pointer" title="Импорт табличных данных из файла">
+                        <i class="fa-solid fa-file-import"></i> Загрузить
+                        <input type="file" accept=".csv,.json,.xml,.txt" class="hidden"
+                          onchange={(e) => {
+                            const f = (e.target as HTMLInputElement).files?.[0];
+                            if (f) openImport(field.code, f);
+                          }} />
+                      </label>
+                      <button type="button" class="btn btn-xs btn-outline" title="Экспорт таблицы в файл"
+                        onclick={() => exportTable(field.code, 'json')}>
+                        <i class="fa-solid fa-file-export"></i> Выгрузить
+                      </button>
+                    </div>
                     <textarea
                       class="textarea font-mono text-xs"
                       placeholder='[{{"col1": "val1", "col2": "val2"}}]'
@@ -540,3 +621,20 @@
     {/if}
   </div>
 </div>
+
+{#if showMapping && importParsed}
+  <FieldMappingDialog
+    columns={importParsed.columns.map((c) => ({
+      source: c,
+      sample_value: String(importParsed!.rows[0]?.[c] ?? ''),
+      matched_target: null,
+    }))}
+    targets={(fields.find((f) => f.code === importTargetField)?.field_kind === 'table')
+      ? [{ code: 'nomenclature_id', name: 'Номенклатура' }, { code: 'qty', name: 'Количество' }, { code: 'price', name: 'Цена' }, { code: 'comment', name: 'Комментарий' }]
+      : Object.keys(data).map((k) => ({ code: k, name: k }))
+    }
+    title="Сопоставление колонок"
+    onApply={applyImport}
+    onCancel={() => { showMapping = false; importTargetField = null; importParsed = null; }}
+  />
+{/if}
