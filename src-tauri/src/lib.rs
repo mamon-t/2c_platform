@@ -23,6 +23,7 @@ mod role;
 mod settings;
 mod signing;
 pub mod stock;
+pub mod trade;
 pub mod tx;
 mod user;
 mod user_certificate;
@@ -160,6 +161,8 @@ pub fn run() {
             ledger::commands::ledger_account_update,
             ledger::commands::ledger_periods_list,
             ledger::commands::ledger_period_set_state,
+            trade::commands::trade_seed_metadata,
+            trade::commands::trade_get_price,
             commands::notifications_list,
             commands::notifications_mark_read,
             devices::commands::devices_list,

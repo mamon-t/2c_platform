@@ -231,6 +231,9 @@ impl PermissionPolicyService {
             ("accounting.read".into(), "Просмотр учёта".into(), "accounting".into(), vec!["read".into()], "company".into()),
             ("accounting.post".into(), "Проводки учёта".into(), "accounting".into(), vec!["post".into()], "company".into()),
             ("accounting.manage".into(), "Управление учётом".into(), "accounting".into(), vec!["manage".into()], "company".into()),
+            ("trade.read".into(), "Просмотр торговли".into(), "trade".into(), vec!["read".into()], "company".into()),
+            ("trade.use".into(), "Торговые операции".into(), "trade".into(), vec!["use".into()], "company".into()),
+            ("trade.manage".into(), "Управление торговлей".into(), "trade".into(), vec!["manage".into()], "company".into()),
         ]
     }
 
