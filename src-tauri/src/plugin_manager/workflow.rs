@@ -373,6 +373,45 @@ async fn load_policies(
     }
 }
 
+// ── signature_required(module, action, object_id) ──────────
+//
+// Оценка политики подписи для действия над документом.
+// capability: signature.
+
+extism::host_fn!(pub signature_required_impl(user_data: HostData; module: String, action: String, object_id: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "signature_required") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return e };
+            let company_id = match hd.ctx.read().unwrap().company_id.as_ref()
+                .and_then(|c| uuid::Uuid::parse_str(c).ok()) {
+                Some(u) => crate::core::CompanyId(u),
+                None => return error_response(err::NO_COMPANY, "Компания не выбрана"),
+            };
+
+            let oid = match uuid::Uuid::parse_str(&object_id) {
+                Ok(u) => u,
+                Err(e) => return error_response(err::INVALID_UUID, &format!("object_id: {e}")),
+            };
+            let obj = match crate::objects::service::ObjectService::get(&db, oid).await {
+                Ok(o) => o.data,
+                Err(e2) => return error_response(err::NOT_FOUND, &e2.to_string()),
+            };
+
+            match crate::stock::signature::SignatureService::evaluate(
+                &db, &company_id, &module, &action, &obj).await {
+                Ok(required) => ok_response(serde_json::json!({ "required": required })),
+                Err(e) => error_response(err::DB_ERROR, &e.to_string()),
+            }
+        })
+    });
+    Ok(result)
+});
+
 // ── notify_user(recipient_user_id, subject, body) ──────────
 //
 // Записывает in-app уведомление в общий outbox платформы.

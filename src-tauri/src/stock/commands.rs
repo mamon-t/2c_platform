@@ -320,3 +320,81 @@ pub async fn stock_report_overdue(state: State<'_, Mutex<AppState>>) -> Result<s
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "items": items, "today": today }))
 }
+
+// ── Политики подписи (settings.manage) ─────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct UpsertSignaturePolicyInput {
+    pub module: String,
+    pub action: String,
+    pub name: String,
+    #[serde(default)]
+    pub condition: serde_json::Value,
+    pub required: bool,
+}
+
+#[tauri::command]
+pub async fn signature_policies_list(
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<super::signature::SignaturePolicy>, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+    super::signature::SignatureService::list(&s.db.as_ref().unwrap(), &ctx.company_id, None)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn signature_policies_upsert(
+    input: UpsertSignaturePolicyInput,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+
+    let policy = super::signature::SignaturePolicy {
+        id: uuid::Uuid::new_v4().to_string(),
+        company_id: ctx.company_id.0.to_string(),
+        module: input.module,
+        action: input.action,
+        name: input.name,
+        condition: input.condition,
+        required: input.required,
+    };
+    super::signature::SignatureService::upsert(&s.db.as_ref().unwrap(), &ctx.company_id, policy)
+        .await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn signature_policies_delete(
+    module: String,
+    action: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<u64, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+    super::signature::SignatureService::delete(&s.db.as_ref().unwrap(), &ctx.company_id, &module, &action)
+        .await.map_err(|e| e.to_string())
+}
+
+/// Требуется ли подпись для действия над документом (для фронта до поста).
+#[tauri::command]
+pub async fn signature_required_for_doc(
+    module: String,
+    action: String,
+    doc_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<bool, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("stock.read").map_err(|e| e.to_string())?;
+    let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
+    drop(s);
+
+    let uid = uuid::Uuid::parse_str(&doc_id).map_err(|e| e.to_string())?;
+    let obj = crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string())?;
+    super::signature::SignatureService::evaluate(&db, &ctx.company_id, &module, &action, &obj.data)
+        .await.map_err(|e| e.to_string())
+}

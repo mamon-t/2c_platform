@@ -174,6 +174,8 @@ impl Orch {
                 "transactions".into(),
                 "objects.read".into(),
                 "metadata.read".into(),
+                "signature".into(),
+                "metadata.read".into(),
                 "logging".into(),
             ],
         };
@@ -184,6 +186,7 @@ impl Orch {
             .with_function("tx_begin",     [PTR], [PTR], UserData::new(host.clone()), wf::tx_begin_impl)
             .with_function("tx_add_op",    [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::tx_add_op_impl)
             .with_function("tx_commit",    [PTR], [PTR], UserData::new(host.clone()), wf::tx_commit_impl)
+            .with_function("signature_required", [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::signature_required_impl)
             .with_function("log_message",  [PTR], [], UserData::new(host.clone()), pm::log_message_impl)
             .with_fuel_limit(50_000_000)
             .build()
@@ -271,6 +274,90 @@ async fn plugin_post_and_cancel_move_atomically() {
     // Остатки вернулись на исходный склад, с приёмника ушли
     assert_eq!(bal(wh.clone()).await, 5.0);
     assert_eq!(bal(wh_b.clone()).await, 0.0);
+
+    db.client().database(&db_name).drop().await.expect("cleanup");
+}
+
+// ── Политики подписи: оборудование да, канцтовары нет ──────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signature_policy_by_category() {
+    if !mongo_enabled() { eprintln!("SKIP: TX_TEST_MONGO=1"); return; }
+    let (db, db_name) = connect().await;
+    let company = uuid::Uuid::new_v4();
+    let role = seed_role(&db, company).await;
+    let _user = uuid::Uuid::new_v4();
+
+    // Номенклатура: монитор (equipment) и степлер (канцтовары)
+    let col = db.collection::<Document>("objects");
+    for (id, cat) in [("nom-monitor", "equipment"), ("nom-stapler", "stationery")] {
+        col.insert_one(doc! {
+            "_id": id, "entity_type_id": "NOM", "kind": "catalog",
+            "company_id": company.to_string(), "state": "active",
+            "data": { "type": "item", "category": cat },
+            "version": 1i64,
+        }).await.expect("номенклатура");
+    }
+    // Локации
+    for id in ["loc-wh", "loc-iv"] {
+        col.insert_one(doc! {
+            "_id": id, "entity_type_id": "NOM", "kind": "catalog",
+            "company_id": company.to_string(), "state": "active",
+            "data": { "type": if id.contains("iv") { "custodian" } else { "warehouse" } },
+            "version": 1i64,
+        }).await.expect("локация");
+    }
+
+    // Политика: выдача оборудования — подпись обязательна
+    db.collection::<Document>(app_lib::stock::signature::COLLECTION)
+        .insert_one(doc! {
+            "_id": uuid::Uuid::new_v4().to_string(),
+            "company_id": company.to_string(),
+            "module": "stock",
+            "action": "handover.post",
+            "name": "Оборудование под подпись",
+            "condition": { "nomenclature_category": "equipment" },
+            "required": true,
+        }).await.expect("политика");
+
+    let mk_handover = |doc_id: &str, nom: &str| {
+        serde_json::json!({ "id": doc_id })
+    };
+    async fn seed_doc(db: &MongoClient, doc_id: &str, data: serde_json::Value) -> String {
+        let et_id = uuid::Uuid::new_v4().to_string();
+        let col = db.collection::<Document>("objects");
+        db.collection::<Document>("entity_types").insert_one(doc! {
+            "_id": &et_id, "code": "MOVE_X", "name": "X", "kind": "document",
+        }).await.ok();
+        col.insert_one(doc! {
+            "_id": doc_id, "entity_type_id": &et_id, "kind": "document",
+            "company_id": "x", "state": "draft", "data":
+                mongodb::bson::to_bson(&data).unwrap(), "version": 1i64,
+        }).await.expect("документ");
+        // company_id поправим реальным ниже через параметр? упрощаем: тест использует один company
+        doc_id.to_string()
+    }
+    let _ = mk_handover;
+
+    // Оценка напрямую через сервис (без wasm): оборудование → required
+    let eval = |data: serde_json::Value| {
+        let db = db.clone();
+        async move {
+            app_lib::stock::signature::SignatureService::evaluate(
+                &db, &CompanyId(company), "stock", "handover.post", &data,
+            ).await.unwrap()
+        }
+    };
+    assert!(eval(serde_json::json!({"lines":[{"nomenclature_id":"nom-monitor"}]})).await);
+    assert!(!eval(serde_json::json!({"lines":[{"nomenclature_id":"nom-stapler"}]})).await);
+    // Смешанная строка: есть оборудование → требуется
+    assert!(
+        eval(serde_json::json!({"lines":[
+            {"nomenclature_id":"nom-stapler"},{"nomenclature_id":"nom-monitor"}
+        ]})).await
+    );
+    // Нет строк → условие не выполнено
+    assert!(!eval(serde_json::json!({"lines":[]})).await);
 
     db.client().database(&db_name).drop().await.expect("cleanup");
 }

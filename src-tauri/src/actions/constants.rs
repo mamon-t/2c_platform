@@ -236,6 +236,10 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "stock_balances", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "stock_report_handover", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "stock_report_overdue", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "signature_policies_list", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "signature_policies_upsert", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "signature_policies_delete", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "signature_required_for_doc", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "create_test_certificate", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "create_test_certificate" },
 
     // ── Оборудование ──

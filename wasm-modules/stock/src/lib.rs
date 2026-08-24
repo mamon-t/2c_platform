@@ -21,6 +21,7 @@ extern "ExtismHost" {
     fn tx_begin(business_key: String) -> String;
     fn tx_add_op(handle: String, op_name: String, params_json: String) -> String;
     fn tx_commit(handle: String) -> String;
+    fn signature_required(module: String, action: String, object_id: String) -> String;
     fn log_message(msg: String);
 }
 
@@ -94,6 +95,7 @@ pub fn get_info() -> FnResult<Json<ModuleInfo>> {
             "objects.update".into(),
             "metadata.read".into(),
             "transactions".into(),
+            "signature".into(),
             "logging".into(),
         ],
         permissions: vec![
@@ -153,7 +155,29 @@ fn add(handle: &str, op: &str, params: serde_json::Value) -> anyhow::Result<Stri
 #[plugin_fn]
 pub fn on_post(Json(input): Json<DocInput>) -> FnResult<Json<serde_json::Value>> {
     let (doc, type_code) = load_doc(&input.id)?;
-    let data = doc.get("data").cloned().unwrap_or_default();
+    let mut data = doc.get("data").cloned().unwrap_or_default();
+
+    // Политика подписи: ядро оценивает применимость по категориям строк
+    if type_code == "HANDOVER" {
+        let raw = unsafe { signature_required(
+            "stock".to_string(),
+            "handover.post".to_string(),
+            input.id.clone(),
+        ) }?;
+        let required = unwrap_host(raw)?
+            ["required"].as_bool().unwrap_or(false);
+        let has_sig = data["signature_der"].as_str()
+            .map(|s| !s.is_empty()).unwrap_or(false);
+        if required && !has_sig {
+            return Err(anyhow::anyhow!(
+                "SIGNATURE_REQUIRED: политика требует квалифицированную подпись для этой выдачи"
+            ).into());
+        }
+        let _ = unsafe { log_message(format!(
+            "[stock] HANDOVER {}: подпись {}",
+            input.id, if required { if has_sig {"есть"} else {"НУЖНА"} } else {"не требуется"}
+        )) };
+    }
 
     let handle_raw = unsafe { tx_begin(format!("post-{}", input.id)) }?;
     let handle = unwrap_host(handle_raw)?;

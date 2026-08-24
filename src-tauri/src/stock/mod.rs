@@ -17,6 +17,7 @@ pub mod commands;
 pub mod engine;
 pub mod handlers;
 pub mod indexes;
+pub mod signature;
 
 use serde::{Deserialize, Serialize};
 

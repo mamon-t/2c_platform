@@ -28,6 +28,7 @@ pub const VALID_CAPABILITIES: &[&str] = &[
     "storage",
     "scripts",
     "transactions",
+    "signature",
 ];
 
 /// Маппинг: имя host-функции → требуемая capability.
@@ -47,6 +48,7 @@ pub fn required_capability(function_name: &str) -> Option<&'static str> {
         "kv_put" | "kv_get" | "kv_list" | "kv_delete" => Some("storage"),
         "run_script" => Some("scripts"),
         "tx_begin" | "tx_add_op" | "tx_commit" => Some("transactions"),
+        "signature_required" => Some("signature"),
         _ => None,
     }
 }
