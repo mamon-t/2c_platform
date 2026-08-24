@@ -225,6 +225,9 @@ impl PermissionPolicyService {
             ("devices.read".into(), "Просмотр оборудования".into(), "devices".into(), vec!["read".into()], "company".into()),
             ("devices.manage".into(), "Настройка оборудования".into(), "devices".into(), vec!["manage".into()], "company".into()),
             ("devices.use".into(), "Использование оборудования".into(), "devices".into(), vec!["use".into()], "company".into()),
+            ("stock.read".into(), "Просмотр склада".into(), "stock".into(), vec!["read".into()], "company".into()),
+            ("stock.use".into(), "Складские операции".into(), "stock".into(), vec!["use".into()], "company".into()),
+            ("stock.manage".into(), "Управление складом".into(), "stock".into(), vec!["manage".into()], "company".into()),
         ]
     }
 

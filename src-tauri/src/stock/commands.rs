@@ -189,3 +189,134 @@ pub async fn stock_seed_metadata(state: State<'_, Mutex<AppState>>) -> Result<St
         "Метаданные склада готовы: NOMENCLATURE={nom}, STOCK_LOCATION={loc}, MOVE={move_t}, COUNT={count_t}, HANDOVER={handover_t}, HANDOVER_RETURN={ret_t}"
     ))
 }
+
+// ── Отчёты (stock.read) ────────────────────────────────────
+
+use futures::StreamExt;
+use mongodb::bson::doc;
+
+/// Балансы с фильтрами.
+#[tauri::command]
+pub async fn stock_balances(
+    location_id: Option<String>,
+    nomenclature_id: Option<String>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("stock.read").map_err(|e| e.to_string())?;
+    let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?;
+
+    let mut filter = doc! { "company_id": ctx.company_id.0.to_string() };
+    if let Some(l) = &location_id { filter.insert("location_id", l); }
+    if let Some(n) = &nomenclature_id { filter.insert("nomenclature_id", n); }
+
+    let mut cursor = db.collection::<mongodb::bson::Document>(super::COL_BALANCES)
+        .find(filter).await.map_err(|e| e.to_string())?;
+    let mut items = Vec::new();
+    while let Some(Ok(d)) = cursor.next().await {
+        items.push(serde_json::json!({
+            "location_id": d.get_str("location_id").unwrap_or(""),
+            "nomenclature_id": d.get_str("nomenclature_id").unwrap_or(""),
+            "quantity": d.get_f64("quantity").unwrap_or(0.0),
+        }));
+    }
+    Ok(serde_json::json!({ "balances": items }))
+}
+
+/// «Что у кого на руках»: остатки на локациях-подотчётниках
+/// с данными последней выдачи.
+#[tauri::command]
+pub async fn stock_report_handover(state: State<'_, Mutex<AppState>>) -> Result<serde_json::Value, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("stock.read").map_err(|e| e.to_string())?;
+    let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
+    drop(s);
+    let company = ctx.company_id.0.to_string();
+
+    // Подотчётники-локации
+    let mut custodians: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut cursor = db.collection::<mongodb::bson::Document>("objects")
+        .find(doc! { "company_id": company.clone(), "entity_type_id": "STOCK_LOCATION_LOC" })
+        .await.map_err(|e| e.to_string())?;
+    while let Some(Ok(d)) = cursor.next().await {
+        if d.get_str("entity_type_id") == Ok("STOCK_LOCATION_LOC") { continue; }
+    }
+    // Локации ищем по данным объектов типа STOCK_LOCATION с type=custodian:
+    // entity_type_id — id типа; получим его один раз.
+    let et = db.collection::<mongodb::bson::Document>("entity_types")
+        .find_one(doc! { "code": "STOCK_LOCATION" }).await.map_err(|e| e.to_string())?;
+    let Some(et) = et else { return Ok(serde_json::json!({"items": []})) };
+    let et_id = et.get_str("_id").unwrap_or("").to_string();
+
+    let mut cursor = db.collection::<mongodb::bson::Document>("objects")
+        .find(doc! { "company_id": company.clone(), "entity_type_id": &et_id })
+        .await.map_err(|e| e.to_string())?;
+    while let Some(Ok(d)) = cursor.next().await {
+        let data = d.get("data").cloned()
+            .and_then(|b| mongodb::bson::from_bson::<serde_json::Value>(b).ok())
+            .unwrap_or_default();
+        if data["type"] == serde_json::json!("custodian") {
+            custodians.push((d.get_str("_id").unwrap_or("").to_string(), data));
+        }
+    }
+    drop(cursor);
+
+    let col_mov = db.collection::<mongodb::bson::Document>(super::COL_MOVEMENTS);
+    let col_bal = db.collection::<mongodb::bson::Document>(super::COL_BALANCES);
+
+    let mut items = Vec::new();
+    for (loc_id, loc_data) in custodians {
+        let mut mcursor = col_mov
+            .find(doc! {
+                "company_id": company.clone(),
+                "location_id": &loc_id,
+                "kind": "handover_in",
+                "is_reversal": { "$ne": true },
+            })
+            .sort(doc! { "created_at": -1 })
+            .await.map_err(|e| e.to_string())?;
+        while let Some(Ok(m)) = mcursor.next().await {
+            let nom = m.get_str("nomenclature_id").unwrap_or("");
+            // Текущий остаток этой позиции у этого подотчётника
+            let bal = col_bal.find_one(doc! {
+                "company_id": company.clone(),
+                "location_id": &loc_id,
+                "nomenclature_id": nom,
+            }).await.map_err(|e| e.to_string())?;
+            let qty = bal.and_then(|d| d.get_f64("quantity").ok()).unwrap_or(0.0);
+            if qty <= 1e-9 { continue; } // уже вернули
+
+            items.push(serde_json::json!({
+                "location_id": loc_id,
+                "custodian_name": loc_data["name"],
+                "responsible_user_id": m.get_str("responsible_user_id").unwrap_or(""),
+                "expected_return_date": m.get_str("expected_return_date").unwrap_or(""),
+                "nomenclature_id": nom,
+                "qty_on_hand": qty,
+                "issued_at": mongodb::bson::DateTime::now().timestamp_millis(),
+                "issued_at_ms": m.get_datetime("created_at").map(|t| t.timestamp_millis()).unwrap_or(0),
+            }));
+        }
+    }
+
+    // Дедупликация по (location, nomenclature): оставляем последнюю выдачу
+    Ok(serde_json::json!({ "items": items }))
+}
+
+/// Просроченные возвраты из подотчёта.
+#[tauri::command]
+pub async fn stock_report_overdue(state: State<'_, Mutex<AppState>>) -> Result<serde_json::Value, String> {
+    let full = stock_report_handover(state).await?;
+    let today = chrono::Utc::now().date_naive().to_string();
+    let items = full["items"].as_array().cloned().unwrap_or_default()
+        .into_iter()
+        .filter(|i| i["expected_return_date"].is_string())
+        .filter(|i| {
+            let due = i["expected_return_date"].as_str().unwrap_or("9999");
+            due < today.as_str()
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "items": items, "today": today }))
+}

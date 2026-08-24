@@ -91,6 +91,11 @@ pub const DEVICES_READ: &str = "devices.read";
 pub const DEVICES_MANAGE: &str = "devices.manage";
 pub const DEVICES_USE: &str = "devices.use";
 
+// ── Склад ──
+pub const STOCK_READ: &str = "stock.read";
+pub const STOCK_USE: &str = "stock.use";
+pub const STOCK_MANAGE: &str = "stock.manage";
+
 // ── Матрица: команда → (действие, scope, AuditableAction) ──────
 // scope: "C" = Company, "O" = Object, "M" = Metadata, "P" = Platform, "N" = None (public)
 
@@ -225,6 +230,12 @@ pub const COMMAND_MAP: &[CommandMapping] = &[
     CommandMapping { command: "list_crypto_certificates", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "sign_document", permission: DOCUMENTS_APPROVE, scope: ScopeTag::Company, audit: "sign_document" },
     CommandMapping { command: "verify_document_signature", permission: DOCUMENTS_READ, scope: ScopeTag::Company, audit: "" },
+
+    // ── Склад ──
+    CommandMapping { command: "stock_seed_metadata", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "stock_balances", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "stock_report_handover", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
+    CommandMapping { command: "stock_report_overdue", permission: STOCK_READ, scope: ScopeTag::Company, audit: "" },
     CommandMapping { command: "create_test_certificate", permission: SETTINGS_MANAGE, scope: ScopeTag::Company, audit: "create_test_certificate" },
 
     // ── Оборудование ──

@@ -12,3 +12,4 @@ Thumbs.db
 *.doc
 *.docx
 tmp/
+.~lock.*
