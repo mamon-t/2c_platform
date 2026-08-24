@@ -153,6 +153,7 @@ pub async fn connect_db(input: ConnectInput, state: State<'_, Mutex<AppState>>) 
     crate::stock::indexes::ensure_indexes(&client).await;
     crate::ledger::indexes::ensure_indexes(&client).await;
     crate::trade::indexes::ensure_indexes(&client).await;
+    crate::messaging::indexes::ensure_indexes(&client).await;
     Ok(info)
 }
 

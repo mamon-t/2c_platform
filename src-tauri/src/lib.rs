@@ -22,6 +22,7 @@ mod rhai;
 mod role;
 mod settings;
 mod signing;
+pub mod messaging;
 pub mod stock;
 pub mod trade;
 pub mod tx;
@@ -160,6 +161,14 @@ pub fn run() {
             notify::commands::notification_subscriptions_list,
             notify::commands::notification_subscriptions_upsert,
             notify::commands::notification_templates_list,
+            messaging::commands::messaging_rooms_list,
+            messaging::commands::messaging_rooms_create,
+            messaging::commands::messaging_rooms_archive,
+            messaging::commands::messaging_messages_send,
+            messaging::commands::messaging_messages_list,
+            messaging::commands::messaging_messages_edit,
+            messaging::commands::messaging_messages_delete,
+            messaging::commands::messaging_reads_update,
             ledger::commands::ledger_accounts_list,
             ledger::commands::ledger_account_create,
             ledger::commands::ledger_account_update,

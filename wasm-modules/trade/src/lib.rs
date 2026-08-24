@@ -487,10 +487,11 @@ pub fn on_cancel(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Valu
     add(h, "stock.reverse", serde_json::json!({ "target_doc_id": input.id }))?;
     add(h, "accounting.reverse_by_doc", serde_json::json!({ "target_doc_id": input.id }))?;
 
-    let ver = input.expected_version.unwrap_or(0);
+    // Читаем актуальную версию из документа
+    let cur_ver = _doc["version"].as_i64().unwrap_or(1);
     add(h, "object.cancel", serde_json::json!({
         "object_id": input.id,
-        "expected_version": ver,
+        "expected_version": cur_ver,
     }))?;
 
     let commit_raw = unsafe { tx_commit(h.to_string()) }?;
