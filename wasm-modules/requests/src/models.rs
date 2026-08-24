@@ -87,6 +87,19 @@ pub struct StepState {
     /// DER-подпись в base64 (если требовалась)
     #[serde(default)]
     pub signature_der: Option<String>,
+    /// Слепок: каноничная строка, которая была подписана
+    #[serde(default)]
+    pub signed_payload: Option<String>,
+    #[serde(default)]
+    pub payload_sha256: Option<String>,
+    /// SHA1 сертификата подписанта (из верификации)
+    #[serde(default)]
+    pub signer_sha1: Option<String>,
+    #[serde(default)]
+    pub signer_subject: Option<String>,
+    /// Подпись прошла серверную верификацию CMS
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// Активное согласование заявки.
@@ -107,6 +120,16 @@ pub struct RequestApproval {
     /// Подпись инициатора при отправке (base64 DER)
     #[serde(default)]
     pub submit_signature_der: Option<String>,
+    /// Слепок данных на момент отправки
+    #[serde(default)]
+    pub submitted_payload: Option<String>,
+    #[serde(default)]
+    pub submitted_payload_sha256: Option<String>,
+    #[serde(default)]
+    pub submitted_signer_sha1: Option<String>,
+    /// Подпись инициатора верифицирована хостом
+    #[serde(default)]
+    pub submit_verified: bool,
     /// Снимок требования подписи из маршрута на момент отправки
     #[serde(default)]
     pub requires_signature: bool,

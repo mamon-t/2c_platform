@@ -466,6 +466,7 @@ impl WasmPlugin {
             .with_function("module_settings", [], [PTR], UserData::new(host_data.clone()), workflow::module_settings_impl)
             .with_function("emit_event", [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::emit_event_impl)
             .with_function("signature_required", [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::signature_required_impl)
+            .with_function("cms_verify", [PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::cms_verify_impl)
             .with_function("tx_begin",   [PTR],           [PTR], UserData::new(host_data.clone()), workflow::tx_begin_impl)
             .with_function("tx_add_op",  [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::tx_add_op_impl)
             .with_function("tx_commit",  [PTR],           [PTR], UserData::new(host_data.clone()), workflow::tx_commit_impl)

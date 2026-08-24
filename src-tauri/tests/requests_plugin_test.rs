@@ -46,6 +46,10 @@ struct Harness {
     settings: Value,
     /// Принудительная ошибка следующего run_script
     script_fail: Option<String>,
+    /// Принудительный результат следующего cms_verify
+    verify_invalid: bool,
+    /// Зафиксированные вызовы cms_verify: (data, sig)
+    cms_calls: Vec<(String, String)>,
     clock: u64,
 }
 
@@ -195,6 +199,21 @@ extism::host_fn!(pub mock_run_script(user_data: H; source: String, context_json:
     }
 });
 
+extism::host_fn!(pub mock_cms_verify(user_data: H; data_b64: String, sig_b64: String) -> String {
+    let hd = clone_h!(user_data);
+    let mut h = hd.lock().unwrap();
+    h.cms_calls.push((data_b64.clone(), sig_b64.clone()));
+    if h.verify_invalid {
+        Ok(envelope_ok(serde_json::json!({ "valid": false, "message": "подпись не соответствует данным" })))
+    } else {
+        Ok(envelope_ok(serde_json::json!({
+            "valid": true,
+            "signer_subject": "CN=Test Signer",
+            "signer_sha1": "aabbccdd00112233445566778899aabbccddeeff",
+        })))
+    }
+});
+
 extism::host_fn!(pub mock_notify(user_data: H; recipient: String, subject: String, body: String) -> String {
     let hd = clone_h!(user_data);
     hd.lock().unwrap().notifications.push((recipient, subject, body));
@@ -208,7 +227,10 @@ extism::host_fn!(pub mock_emit_event(user_data: H; stream_id: String, event_type
     Ok(envelope_ok(json!({ "emitted": true })))
 });
 
-extism::host_fn!(pub mock_log(_user_data: H; _msg: String) -> String { Ok(envelope_ok(json!({}))) });
+extism::host_fn!(pub mock_log(_user_data: H; msg: String) -> String {
+    eprintln!("[guest] {msg}");
+    Ok(envelope_ok(json!({})))
+});
 
 // ── Тестовое приложение ────────────────────────────────────
 
@@ -238,6 +260,7 @@ impl TestApp {
             .with_function("run_script", [PTR, PTR], [PTR], UserData::new(harness.clone()), mock_run_script)
             .with_function("notify_user", [PTR, PTR, PTR], [PTR], UserData::new(harness.clone()), mock_notify)
             .with_function("emit_event", [PTR, PTR, PTR], [PTR], UserData::new(harness.clone()), mock_emit_event)
+            .with_function("cms_verify", [PTR, PTR], [PTR], UserData::new(harness.clone()), mock_cms_verify)
             .with_function("log_message", [PTR], [], UserData::new(harness.clone()), mock_log)
             .with_fuel_limit(50_000_000)
             .build()
@@ -599,3 +622,68 @@ fn approval_get_unknown_returns_null() {
     assert!(a.is_null());
 }
 
+
+// ── RQ1: верификация подписи и слепок ──────────────────────
+
+#[test]
+fn invalid_signature_aborts_and_records_nothing() {
+    let mut app = TestApp::new(U1, None).unwrap();
+    app.save_route("SIGNED", true, &[U2]);
+    app.seed_object("req-sig");
+
+    // Подписанная отправка проходит и фиксирует слепок
+    let a = app.call("submit", json!({
+        "request_id": "req-sig", "route_code": "SIGNED",
+        "signature_der": "QUJDREVG",
+    }));
+    assert_eq!(a["submit_verified"], true);
+    assert_eq!(
+        a["submitted_payload_sha256"].as_str().map(|s| s.len()),
+        Some(64),
+        "sha256 слепка обязателен"
+    );
+    let payload = a["submitted_payload"].as_str().unwrap().to_string();
+    assert!(payload.starts_with("requests.submit|req-sig|1|draft"), "{payload}");
+
+    // Ломаем верификацию решения
+    app.switch_user(U2, None);
+    app.harness.lock().unwrap().verify_invalid = true;
+    let err = app.call_err("approve_step", json!({
+        "request_id": "req-sig", "comment": "", "signature_der": "QUJDREVG",
+    }));
+    assert!(err.contains("SIGNATURE_INVALID"), "{err}");
+
+    // Решение НЕ записано: шаг остался pending, процесс жив
+    app.harness.lock().unwrap().verify_invalid = false;
+    let a = app.call("approval_get", json!({"request_id": "req-sig"}));
+    assert_eq!(a["status"], "in_progress");
+    assert_eq!(a["steps"][0]["status"], "pending");
+    assert_eq!(a["steps"][0]["verified"], false);
+
+    // После восстановления верификации решение проходит С ПОДПИСЬЮ
+    let a = app.call("approve_step", json!({
+        "request_id": "req-sig", "comment": "", "signature_der": "QUJDREVG",
+    }));
+    let step = &a["steps"][0];
+    assert_eq!(step["status"], "approved");
+    assert_eq!(step["verified"], true);
+    assert_eq!(step["payload_sha256"].as_str().map(|s| s.len()), Some(64));
+    assert_eq!(step["signer_subject"], "CN=Test Signer");
+    assert!(step["signed_payload"]
+        .as_str()
+        .unwrap()
+        .starts_with("requests.decide|req-sig|approve|"));
+}
+
+#[test]
+fn unsigned_route_rejects_unexpected_signature() {
+    let mut app = TestApp::new(U1, None).unwrap();
+    app.save_route("SIMPLE", false, &[U2]);
+    app.seed_object("req-u");
+
+    let err = app.call_err("submit", json!({
+        "request_id": "req-u", "route_code": "SIMPLE",
+        "signature_der": "QUJD",
+    }));
+    assert!(err.contains("CONTRACT"), "{err}");
+}

@@ -49,6 +49,7 @@ pub fn required_capability(function_name: &str) -> Option<&'static str> {
         "run_script" => Some("scripts"),
         "tx_begin" | "tx_add_op" | "tx_commit" => Some("transactions"),
         "signature_required" => Some("signature"),
+        "cms_verify" => Some("signature"),
         _ => None,
     }
 }

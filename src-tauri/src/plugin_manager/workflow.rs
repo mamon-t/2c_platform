@@ -412,6 +412,52 @@ extism::host_fn!(pub signature_required_impl(user_data: HostData; module: String
     Ok(result)
 });
 
+// ── cms_verify(data_b64, sig_b64) ──────────────────────────
+//
+// Верификация отсоединённой CMS-подписи через КриптоПро.
+// Возвращает ОК-конверт с {valid:false,...} при криптографическом
+// несовпадении (это НЕ ошибка вызова). capability: signature.
+
+extism::host_fn!(pub cms_verify_impl(user_data: HostData; data_b64: String, sig_b64: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "cms_verify") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            use base64::Engine;
+            let engine = base64::engine::general_purpose::STANDARD;
+            let data = match engine.decode(data_b64.trim()) {
+                Ok(d) => d,
+                Err(e) => return Err(error_response(err::INVALID_JSON, &format!("data base64: {e}"))),
+            };
+            let sig = match engine.decode(sig_b64.trim()) {
+                Ok(d) => d,
+                Err(e) => return Err(error_response(err::INVALID_JSON, &format!("sig base64: {e}"))),
+            };
+
+            match crate::signing::service::SigningService::verify_detached(&sig, &data) {
+                Ok(v) => Ok(ok_response(serde_json::json!({
+                    "valid": v.valid,
+                    "signer_subject": v.signer_subject,
+                    "signer_issuer": v.signer_issuer,
+                    "signer_sha1": v.signer_sha1,
+                    "message": v.message,
+                }))),
+                Err(e) => Ok(ok_response(serde_json::json!({
+                    "valid": false,
+                    "message": format!("{e}"),
+                }))),
+            }
+        })
+    });
+    match result {
+        Ok(s) => Ok(s),
+        Err(msg) => Err(extism::Error::msg(msg)),
+    }
+});
+
 // ── notify_user(recipient_user_id, subject, body) ──────────
 //
 // Записывает in-app уведомление в общий outbox платформы.

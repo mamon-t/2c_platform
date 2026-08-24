@@ -139,11 +139,6 @@
     return btoa(bin);
   }
 
-  /** Каноничные данные заявки для подписи. */
-  function requestPayload(o: PlatformObject): string {
-    return JSON.stringify({ id: o._id, version: o.version, date: o.date ?? '', data: o.data });
-  }
-
   function certOk(c: CertificateInfo): boolean {
     return c.has_private_key && c.is_valid;
   }
@@ -215,7 +210,12 @@
     let sigB64: string | null = null;
     if (submitNeedsSig) {
       if (!submitCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
-      const sig = await api.signDocument(btoa(unescape(encodeURIComponent(requestPayload(submitTarget)))), submitCertSha1, true);
+      const payload = canonicalSubmitPayload({
+        id: submitTarget._id,
+        version: submitTarget.version,
+        state: submitTarget.state,
+      });
+      const sig = await api.signDocument(btoa(unescape(encodeURIComponent(payload))), submitCertSha1, true);
       sigB64 = bytesToBase64(sig.signature_der);
     }
     error = '';
@@ -247,11 +247,11 @@
     if (decideTarget.approval.requires_signature) {
       if (!decideCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
       const sig = await api.signDocument(
-        btoa(unescape(encodeURIComponent(JSON.stringify({
-          request_id: decideTarget.approval.request_id,
-          decision: decideTarget.approve ? 'approve' : 'reject',
-          comment: decideComment,
-        })))),
+        btoa(unescape(encodeURIComponent(canonicalDecisionPayload(
+          decideTarget.approval.request_id,
+          decideTarget.approve,
+          decideComment || '',
+        )))),
         decideCertSha1, true);
       sigB64 = bytesToBase64(sig.signature_der);
     }

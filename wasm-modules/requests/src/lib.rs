@@ -34,6 +34,7 @@ extern "ExtismHost" {
     fn now_ms() -> String;
     fn module_settings() -> String;
     fn emit_event(stream_id: String, event_type: String, payload_json: String) -> String;
+    fn cms_verify(data_b64: String, sig_b64: String) -> String;
     fn log_message(msg: String);
 }
 
@@ -76,6 +77,105 @@ fn unwrap_host(raw: String) -> anyhow::Result<serde_json::Value> {
         let msg = v["error"]["message"].as_str().unwrap_or("");
         Err(anyhow::anyhow!("{code}: {msg}"))
     }
+}
+
+/// Каноничные подписываемые строки (контракт SDK ≥1.2).
+/// Фронт собирает ИДЕНТИЧНЫЕ строки через utils/requestSignatures.ts.
+fn canon_submit(obj: &serde_json::Value) -> String {
+    format!(
+        "requests.submit|{}|{}|{}",
+        obj["id"].as_str().unwrap_or(""),
+        obj["version"].as_i64().unwrap_or(0),
+        obj["state"].as_str().unwrap_or(""),
+    )
+}
+
+fn canon_decide(request_id: &str, approve: bool, comment: &str) -> String {
+    format!(
+        "requests.decide|{}|{}|{}",
+        request_id,
+        if approve { "approve" } else { "reject" },
+        comment
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    hex_lower(&h.finalize())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const T: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(T[(b >> 4) as usize] as char);
+        s.push(T[(b & 15) as usize] as char);
+    }
+    s
+}
+
+fn to_b64(s: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
+}
+
+/// Слепок подписи для хранения в шаге/заявке.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct SigProof {
+    payload: Option<String>,
+    payload_sha256: Option<String>,
+    signer_sha1: Option<String>,
+    signer_subject: Option<String>,
+    signature_der: Option<String>,
+    verified: bool,
+}
+
+/// Верификация обязательной подписи. required=false → пустой слепок.
+/// Любое расхождение — ошибка операции.
+fn verify_signature_block(
+    required: bool,
+    canonical_payload: &str,
+    sig_der_b64: &Option<String>,
+    what: &str,
+) -> anyhow::Result<SigProof> {
+    if !required {
+        if let Some(s) = sig_der_b64.as_deref().filter(|s| !s.trim().is_empty()) {
+            // Подпись дали, но маршрут её не требует — примем как факт без верификации? Нет:
+            // считаем ошибкой контракта фронта.
+            return Err(anyhow::anyhow!(
+                "CONTRACT: маршрут не требует подписи, но signature_der передан ({s}…)"
+            ));
+        }
+        return Ok(SigProof::default());
+    }
+
+    let der = sig_der_b64
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SIGNATURE_REQUIRED: {what} (der_len={})", sig_der_b64.as_deref().map(|s| s.len()).unwrap_or(0)))?;
+
+    let raw = match unsafe { cms_verify(to_b64(canonical_payload), der.to_string()) } {
+        Ok(r) => r,
+        Err(e) => return Err(anyhow::anyhow!("cms_verify: {e}")),
+    };
+    let res = unwrap_host(raw)?;
+    if res["valid"].as_bool() != Some(true) {
+        return Err(anyhow::anyhow!(
+            "SIGNATURE_INVALID: {what}: {}",
+            res["message"].as_str().unwrap_or("подпись не соответствует данным")
+        ));
+    }
+
+    Ok(SigProof {
+        payload: Some(canonical_payload.to_string()),
+        payload_sha256: Some(sha256_hex(canonical_payload.as_bytes())),
+        signer_sha1: res["signer_sha1"].as_str().map(String::from),
+        signer_subject: res["signer_subject"].as_str().map(String::from),
+        signature_der: Some(der.to_string()),
+        verified: true,
+    })
 }
 
 /// Идентичность вызывающего (из host-контекста, не из аргументов!).
@@ -280,8 +380,14 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         return Err(anyhow::anyhow!("VALIDATION: маршрут '{}' отключён", input.route_code).into());
     }
 
-    // Подпись инициатора — только если маршрут требует
-    let signature = require_signature(route.requires_signature, &input.signature_der, "Отправка заявки")?;
+    // Подпись инициатора: верифицируем CMS против каноничной строки
+    let canonical = canon_submit(&obj);
+    let proof = verify_signature_block(
+        route.requires_signature,
+        &canonical,
+        &input.signature_der,
+        "Отправка заявки",
+    )?;
 
     // Хук перед отправкой (strict — может отменить)
     run_hook("before_submit", true, serde_json::json!({
@@ -306,6 +412,11 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         decided_at: None,
         comment: None,
         signature_der: None,
+        signed_payload: None,
+        payload_sha256: None,
+        signer_sha1: None,
+        signer_subject: None,
+        verified: false,
     }).collect();
 
     let approval = RequestApproval {
@@ -318,8 +429,12 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         initiator_id: user_id.clone(),
         initiator_login: c.login.clone().unwrap_or_default(),
         initiator_name: c.display_name.clone(),
-        submit_signature_der: if signature.is_empty() { None } else { Some(signature) },
+        submit_signature_der: proof.signature_der.clone(),
         requires_signature: route.requires_signature,
+        submitted_payload: proof.payload.clone(),
+        submitted_payload_sha256: proof.payload_sha256.clone(),
+        submitted_signer_sha1: proof.signer_sha1.clone(),
+        submit_verified: proof.verified,
         submitted_at: ts,
         completed_at: None,
         last_comment: None,
@@ -381,9 +496,14 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
         return Err(anyhow::anyhow!("CONFLICT: согласование уже завершено (статус: {:?})", a.status));
     }
 
-    // Подпись решения — только если маршрут (снимок) требует
-    let signature = require_signature(a.requires_signature, &Some(input.signature_der.clone()),
-        if approve { "Согласование" } else { "Отклонение" })?;
+    // Верификация подписи решения против каноничной строки
+    let canonical = canon_decide(&a.request_id, approve, input.comment.as_deref().unwrap_or(""));
+    let proof = verify_signature_block(
+        a.requires_signature,
+        &canonical,
+        &Some(input.signature_der.clone()),
+        if approve { "Согласование" } else { "Отклонение" },
+    )?;
 
     let idx = a.current_step;
     let step_is_mine = a.steps.get(idx).map(|s| step_mine(s, &c)).unwrap_or(false);
@@ -394,7 +514,12 @@ fn decide(input: DecideInput, approve: bool) -> anyhow::Result<RequestApproval> 
 
     a.steps[idx].decided_at = Some(ts);
     a.steps[idx].comment = input.comment.clone();
-    a.steps[idx].signature_der = if signature.is_empty() { None } else { Some(signature) };
+    a.steps[idx].signature_der = proof.signature_der.clone();
+    a.steps[idx].signed_payload = proof.payload.clone();
+    a.steps[idx].payload_sha256 = proof.payload_sha256.clone();
+    a.steps[idx].signer_sha1 = proof.signer_sha1.clone();
+    a.steps[idx].signer_subject = proof.signer_subject.clone();
+    a.steps[idx].verified = proof.verified;
 
     if approve {
         a.steps[idx].status = StepStatus::Approved;
