@@ -35,6 +35,8 @@ extern "ExtismHost" {
     fn module_settings() -> String;
     fn emit_event(stream_id: String, event_type: String, payload_json: String) -> String;
     fn cms_verify(data_b64: String, sig_b64: String) -> String;
+    fn kv_put_if_absent(key: String, value_json: String) -> String;
+    fn users_by_role(role_id: String) -> String;
     fn log_message(msg: String);
 }
 
@@ -449,7 +451,13 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
         last_comment: None,
     };
 
-    kv_put_value(&key, &approval)?;
+    // АТОМАРНАЯ вставка: гонка двух submit разрешается хостом
+    // (уникальный индекс ns_key). Проигравший получает CONFLICT.
+    let raw_absent = unsafe { kv_put_if_absent(key.clone(), serde_json::to_string(&approval)?) }?;
+    let absent_data = unwrap_host(raw_absent)?;
+    if absent_data["created"].as_bool() != Some(true) {
+        return Err(anyhow::anyhow!("CONFLICT: заявка уже на согласовании").into());
+    }
 
     // Уведомить первого утверждающего
     notify_current_approver(&approval)?;
@@ -468,17 +476,29 @@ pub fn submit(Json(input): Json<SubmitInput>) -> FnResult<Json<RequestApproval>>
 
 /// Уведомить утверждающего текущего этапа.
 fn notify_current_approver(a: &RequestApproval) -> anyhow::Result<()> {
-    if let Some(step) = a.steps.get(a.current_step) {
-        let approver_uuid = match step.approver_type {
-            ApproverType::User => step.approver_id.clone(),
-            ApproverType::Role => return Ok(()), // роль: рассылка позже (нужен host-fn users_by_role)
-        };
-        let subject = format!("Заявка ожидает согласования (этап {})", step.step_order);
-        let body = format!(
-            "Заявка {} отправлена {} по маршруту «{}». Требуется ваше решение.",
-            a.request_id, a.initiator_login, a.route_name
-        );
-        let _ = unsafe { notify_user(approver_uuid, subject, body) }?;
+    let Some(step) = a.steps.get(a.current_step) else { return Ok(()) };
+    let subject = format!("Заявка ожидает согласования (этап {})", step.step_order);
+    let body = format!(
+        "Заявка {} отправлена {} по маршруту «{}». Требуется ваше решение.",
+        a.request_id, a.initiator_login, a.route_name
+    );
+
+    match step.approver_type {
+        ApproverType::User => {
+            let _ = unsafe { notify_user(step.approver_id.clone(), subject, body) }?;
+        }
+        ApproverType::Role => {
+            // Рассылка всем членам роли
+            let raw = unsafe { users_by_role(step.approver_id.clone()) }?;
+            let data = unwrap_host(raw)?;
+            if let Some(users) = data["users"].as_array() {
+                for u in users {
+                    if let Some(uid) = u["user_id"].as_str() {
+                        let _ = unsafe { notify_user(uid.to_string(), subject.clone(), body.clone()) }?;
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

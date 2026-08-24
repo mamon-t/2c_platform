@@ -52,6 +52,10 @@ struct Harness {
     verify_invalid: bool,
     /// Зафиксированные вызовы cms_verify: (data, sig)
     cms_calls: Vec<(String, String)>,
+    /// Ключи, для которых kv_put_if_absent вернёт created=false (симуляция гонки)
+    kv_absent_blocked: std::collections::HashSet<String>,
+    /// Члены ролей для mock_users_by_role
+    role_members: HashMap<String, Vec<String>>,
     clock: u64,
 }
 
@@ -207,6 +211,31 @@ extism::host_fn!(pub mock_run_script(user_data: H; source: String, context_json:
     }
 });
 
+extism::host_fn!(pub mock_kv_put_if_absent(user_data: H; key: String, value_json: String) -> String {
+    let hd = clone_h!(user_data);
+    let mut h = hd.lock().unwrap();
+    // Имитация блокировки конкретных ключей (гонка)
+    if h.kv_absent_blocked.contains(&key) {
+        return Ok(envelope_ok(serde_json::json!({ "created": false })));
+    }
+    let existed = h.kv.insert(key, value_json).is_some();
+    Ok(envelope_ok(serde_json::json!({ "created": !existed })))
+});
+
+extism::host_fn!(pub mock_users_by_role(user_data: H; role_id: String) -> String {
+    let hd = clone_h!(user_data);
+    let h = hd.lock().unwrap();
+    let users: Vec<serde_json::Value> = h
+        .role_members
+        .get(&role_id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|uid| serde_json::json!({"user_id": uid, "login": format!("u_{}", &uid[..4]), "display_name": ""}))
+        .collect();
+    Ok(envelope_ok(serde_json::json!({ "users": users, "count": users.len() })))
+});
+
 extism::host_fn!(pub mock_cms_verify(user_data: H; data_b64: String, sig_b64: String) -> String {
     let hd = clone_h!(user_data);
     let mut h = hd.lock().unwrap();
@@ -269,6 +298,8 @@ impl TestApp {
             .with_function("notify_user", [PTR, PTR, PTR], [PTR], UserData::new(harness.clone()), mock_notify)
             .with_function("emit_event", [PTR, PTR, PTR], [PTR], UserData::new(harness.clone()), mock_emit_event)
             .with_function("cms_verify", [PTR, PTR], [PTR], UserData::new(harness.clone()), mock_cms_verify)
+            .with_function("kv_put_if_absent", [PTR, PTR], [PTR], UserData::new(harness.clone()), mock_kv_put_if_absent)
+            .with_function("users_by_role", [PTR], [PTR], UserData::new(harness.clone()), mock_users_by_role)
             .with_function("log_message", [PTR], [], UserData::new(harness.clone()), mock_log)
             .with_fuel_limit(50_000_000)
             .build()
@@ -737,4 +768,59 @@ fn multi_role_approver_intersection() {
         vec!["ROLE_HR".to_string()];
     let pend = app2.call("pending_approvals", json!({}));
     assert_eq!(pend.as_array().unwrap().len(), 0);
+}
+
+// ── RQ4/RQ5: гонка submit и рассылка роли ──────────────────
+
+#[test]
+fn submit_race_lost_writer_gets_conflict() {
+    let mut app = TestApp::new(U1, None).unwrap();
+    app.save_route("SIMPLE", false, &[U2]);
+    app.seed_object("req-race");
+
+    // Первый submit проходит
+    app.call("submit", json!({"request_id": "req-race", "route_code": "SIMPLE"}));
+
+    // Симулируем потерю pre-check (процесс «исчез» между проверкой и вставкой):
+    // удаляем approval из KV, но блокируем ключ для if_absent
+    let key = format!("approval:req-race");
+    {
+        let mut h = app.harness.lock().unwrap();
+        h.kv.remove(&key);
+        h.kv_absent_blocked.insert(key);
+    }
+
+    let err = app.call_err("submit", json!({"request_id": "req-race", "route_code": "SIMPLE"}));
+    assert!(err.contains("CONFLICT"), "{err}");
+
+    // Процесс в системе не задублирован: ключ остался заблокирован как занятый
+    let h = app.harness.lock().unwrap();
+    assert!(h.kv_absent_blocked.contains(&format!("approval:req-race")));
+}
+
+#[test]
+fn role_route_notifies_all_members() {
+    let mut app = TestApp::new(U1, None).unwrap();
+
+    // Роль с двумя членами
+    {
+        let mut h = app.harness.lock().unwrap();
+        h.role_members.insert("ROLE_FIN".into(), vec![U2.into(), U3.into()]);
+    }
+
+    let steps = vec![json!({
+        "step_order": 1, "approver_type": "role", "approver_id": "ROLE_FIN",
+        "timeout_hours": 0, "is_required": true,
+    })];
+    app.call("routes_save", json!({
+        "code": "FIN", "name": "Фин", "steps": steps,
+        "requires_signature": false, "is_active": true,
+    }));
+    app.seed_object("req-role");
+    app.call("submit", json!({"request_id": "req-role", "route_code": "FIN"}));
+
+    let h = app.harness.lock().unwrap();
+    let notified: Vec<&String> = h.notifications.iter().map(|(to, _, _)| to).collect();
+    assert!(notified.contains(&&U2.to_string()), "U2 уведомлён");
+    assert!(notified.contains(&&U3.to_string()), "U3 уведомлён");
 }

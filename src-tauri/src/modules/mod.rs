@@ -45,11 +45,12 @@ pub fn required_capability(function_name: &str) -> Option<&'static str> {
         "next_number" => Some("numbering.next"),
         "log_message" => Some("logging"),
         "notify_user" => Some("notifications"),
-        "kv_put" | "kv_get" | "kv_list" | "kv_delete" => Some("storage"),
+        "kv_put" | "kv_get" | "kv_list" | "kv_delete" | "kv_put_if_absent" => Some("storage"),
         "run_script" => Some("scripts"),
         "tx_begin" | "tx_add_op" | "tx_commit" => Some("transactions"),
-        "signature_required" => Some("signature"),
+                "signature_required" => Some("signature"),
         "cms_verify" => Some("signature"),
+        "users_by_role" => Some("notifications"),
         _ => None,
     }
 }

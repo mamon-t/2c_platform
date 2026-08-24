@@ -53,6 +53,8 @@ pub enum AuditableAction {
     TestDevice,
     CreateTestCertificate,
     ExecuteTransaction,
+    ModuleKvPut,
+    ModuleKvDelete,
 }
 
 impl AuditableAction {
@@ -108,6 +110,8 @@ impl AuditableAction {
             Self::TestDevice => "test_device",
             Self::CreateTestCertificate => "create_test_certificate",
             Self::ExecuteTransaction => "execute_transaction",
+            Self::ModuleKvPut => "module_kv_put",
+            Self::ModuleKvDelete => "module_kv_delete",
         }
     }
 
@@ -163,6 +167,8 @@ impl AuditableAction {
             Self::TestDevice => "Тестирование устройства",
             Self::CreateTestCertificate => "Создание тестового сертификата",
             Self::ExecuteTransaction => "Выполнение транзакционной пачки",
+            Self::ModuleKvPut => "Запись данных модуля",
+            Self::ModuleKvDelete => "Удаление данных модуля",
         }
     }
 
@@ -218,6 +224,8 @@ impl AuditableAction {
             Self::TestDevice => "fa-solid fa-vial text-primary-500",
             Self::CreateTestCertificate => "fa-solid fa-certificate text-warn-500",
             Self::ExecuteTransaction => "fa-solid fa-layer-group text-primary-500",
+            Self::ModuleKvPut => "fa-solid fa-database text-primary-500",
+            Self::ModuleKvDelete => "fa-solid fa-eraser text-warn-500",
         }
     }
 
@@ -251,6 +259,7 @@ impl AuditableAction {
             | Self::DisconnectDevice | Self::TestDevice => "device",
             Self::CreateTestCertificate => "user_certificate",
             Self::ExecuteTransaction => "transaction",
+            Self::ModuleKvPut | Self::ModuleKvDelete => "module_store",
         }
     }
 }
@@ -315,6 +324,8 @@ impl std::str::FromStr for AuditableAction {
             "test_device" => Ok(Self::TestDevice),
             "create_test_certificate" => Ok(Self::CreateTestCertificate),
             "execute_transaction" => Ok(Self::ExecuteTransaction),
+            "module_kv_put" => Ok(Self::ModuleKvPut),
+            "module_kv_delete" => Ok(Self::ModuleKvDelete),
             _ => Err(format!("Unknown audit action: {s}")),
         }
     }

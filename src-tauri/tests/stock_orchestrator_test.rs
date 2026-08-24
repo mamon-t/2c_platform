@@ -165,6 +165,7 @@ impl Orch {
             user_login: Some("orch-test".into()),
             display_name: None,
             role_id: Some(role.to_string()),
+            role_ids: vec![role.to_string()],
         }));
         let host = HostData {
             db: Some(db.clone()),
@@ -175,7 +176,6 @@ impl Orch {
                 "objects.read".into(),
                 "metadata.read".into(),
                 "signature".into(),
-                "metadata.read".into(),
                 "logging".into(),
             ],
         };

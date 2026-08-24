@@ -6,6 +6,7 @@
 //! Контракт Plugin SDK: единый конверт `{ok, data | error{code, message}}`.
 
 
+use futures::StreamExt;
 use mongodb::bson::{doc, Document};
 
 use super::{check_capability, err, error_response, ok_response, HostData};
@@ -462,6 +463,62 @@ extism::host_fn!(pub cms_verify_impl(user_data: HostData; data_b64: String, sig_
         Ok(s) => Ok(s),
         Err(msg) => Err(extism::Error::msg(msg)),
     }
+});
+
+// ── users_by_role(role_id) ─────────────────────────────────
+//
+// Пользователи роли в компании вызывающего (для рассылаемых этапов).
+// capability: notifications.
+
+extism::host_fn!(pub users_by_role_impl(user_data: HostData; role_id: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "users_by_role") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return e };
+            let company_id = match hd.ctx.read().unwrap().company_id.clone() {
+                Some(c) => c,
+                None => return error_response(err::NO_COMPANY, "Компания не выбрана"),
+            };
+
+            let profiles_filter = doc! {
+                "company_id": &company_id,
+                "role_id": &role_id,
+                "is_active": true,
+            };
+
+            let mut users = Vec::new();
+            let mut cursor = match db.collection::<Document>("user_company_profiles")
+                .find(profiles_filter)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => return error_response(err::DB_ERROR, &e.to_string()),
+            };
+            while let Some(Ok(p)) = cursor.next().await {
+                let uid = p.get_str("user_id").unwrap_or("").to_string();
+                if uid.is_empty() { continue; }
+                if let Some(u) = db.collection::<Document>("users")
+                    .find_one(doc! { "_id": &uid })
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    users.push(serde_json::json!({
+                        "user_id": uid,
+                        "login": u.get_str("login").unwrap_or(""),
+                        "display_name": u.get_str("display_name").unwrap_or(""),
+                    }));
+                }
+            }
+
+            ok_response(serde_json::json!({ "users": users, "count": users.len() }))
+        })
+    });
+    Ok(result)
 });
 
 // ── notify_user(recipient_user_id, subject, body) ──────────
