@@ -13,3 +13,5 @@ Thumbs.db
 *.docx
 tmp/
 .~lock.*
+TZ-v*.doc*
+PROGRESS.md
