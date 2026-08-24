@@ -98,6 +98,14 @@
     jsonText = JSON.stringify(data, null, 2);
   }
 
+  let dirty = $state(false);
+  $effect(() => { JSON.stringify(data); if (!loading) dirty = JSON.stringify(data) !== JSON.stringify(object.data); });
+
+  function requestClose() {
+    if (dirty && !confirm('Имеются несохранённые изменения. Закрыть без сохранения?')) return;
+    onClosed?.();
+  }
+
   function validateRequired(): string[] {
     const errors: string[] = [];
     for (const field of fields) {
@@ -290,7 +298,7 @@
     </h3>
     <span class="badge preset-tonal text-xs">{OBJECT_STATE_META[object.state]?.label ?? object.state}</span>
     <span class="text-xs text-surface-500">v{object.version}</span>
-    <button class="btn btn-sm preset-tonal-error ml-auto" onclick={() => onClosed?.()}>
+    <button class="btn btn-sm preset-tonal-error ml-auto" onclick={requestClose} aria-label="Закрыть редактор">
       <i class="fa-solid fa-xmark"></i>
     </button>
   </div>

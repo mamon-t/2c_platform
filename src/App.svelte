@@ -1049,7 +1049,7 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
         <label class="text-xs text-surface-500-500">Компания</label>
         <select class="mt-1 w-full rounded-lg border border-surface-300-700 bg-surface-50-950 px-2 py-1.5 text-sm text-surface-900-100 focus:border-primary-500 focus:outline-none" onchange={(e) => handleSwitchCompany(e.currentTarget.value)}>
           {#each (get(auth)?.companies ?? []) as uc}
-            <option value={uc.companyId} selected={uc.companyId === currentUser?._id}>{uc.companyName}</option>
+            <option value={uc.companyId} selected={uc.companyId === authUserData?.companyId}>{uc.companyName}</option>
           {/each}
         </select>
       </div>

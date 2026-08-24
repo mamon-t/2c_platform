@@ -19,7 +19,7 @@
   let journalAccount = $state('');
 
   const canManage = () => $auth && hasPermission($auth.permissions, 'settings', 'manage');
-  const seeded = $state(false);
+  let seeded = $state(false);
 
   async function load() {
     loading = true; error = '';
@@ -40,25 +40,30 @@
 
   onMount(() => {
     if (canManage()) {
-      // Проверяем есть ли план счетов
-      api.ledgerAccountsList().then((accounts) => {
-        if ((accounts as unknown[]).length === 0 && canManage()) {
-          error = '';
-        }
-      }).catch(() => {});
+      // Кнопку seed показываем только если метаданных ещё нет
+      api.listEntityTypes().then((types) => {
+        seeded = types.some((t) => t.code.startsWith('TRADE_'));
+        if (!seeded) load();
+      }).catch(() => load());
+    } else {
+      load();
     }
-    load();
   });
 
   function fmtAmount(v: number): string {
     return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2 }).format(v / 100);
   }
 
+  let seeding = $state(false);
   async function seedTrade() {
+    seeding = true; error = '';
     try {
       notice = await api.tradeSeedMetadata();
+      seeded = true;
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка seed';
+    } finally {
+      seeding = false;
     }
   }
 </script>
@@ -67,8 +72,9 @@
   <header class="flex items-center justify-between gap-3 flex-wrap">
     <h2 class="h4 flex items-center gap-2"><i class="fa-solid fa-cart-shopping"></i> Торговля</h2>
     {#if !seeded && canManage()}
-      <button class="btn btn-sm btn-outline" onclick={seedTrade}>
-        <i class="fa-solid fa-seedling"></i> Создать метаданные торговли
+      <button class="btn btn-sm btn-outline" onclick={seedTrade} disabled={seeding}>
+        {#if seeding}<i class="fa-solid fa-spinner fa-spin"></i>{:else}<i class="fa-solid fa-seedling"></i>{/if}
+        Создать метаданные торговли
       </button>
     {/if}
   </header>

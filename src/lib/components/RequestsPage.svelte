@@ -210,10 +210,12 @@
     submitCertSha1 = '';
   }
 
+  let submitting = $state(false);
   async function doSubmit() {
-    if (!submitTarget) return;
+    if (!submitTarget || submitting) return;
     if (!submitRouteCode) { error = 'Выберите маршрут'; return; }
     let sigB64: string | null = null;
+    error = '';
     if (submitNeedsSig) {
       if (!submitCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
       const payload = canonicalSubmitPayload({
@@ -221,10 +223,15 @@
         version: submitTarget.version,
         state: submitTarget.state,
       });
-      const sig = await api.signDocument(btoa(unescape(encodeURIComponent(payload))), submitCertSha1, true);
-      sigB64 = bytesToBase64(sig.signature_der);
+      try {
+        const sig = await api.signDocument(btoa(unescape(encodeURIComponent(payload))), submitCertSha1, true);
+        sigB64 = bytesToBase64(sig.signature_der);
+      } catch (e: any) {
+        error = typeof e === 'string' ? e : e?.message ?? 'Ошибка подписи';
+        return;
+      }
     }
-    error = '';
+    submitting = true;
     try {
       const env = await api.pluginCall(MODULE, 'submit', {
         request_id: submitTarget._id,
@@ -236,6 +243,8 @@
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка отправки';
+    } finally {
+      submitting = false;
     }
   }
 
@@ -246,21 +255,28 @@
     decideCertSha1 = '';
   }
 
+  let deciding = $state(false);
   async function doDecide() {
-    if (!decideTarget) return;
+    if (!decideTarget || deciding) return;
     let sigB64: string | null = null;
+    error = '';
     if (decideTarget.approval.requires_signature) {
       if (!decideCertSha1) { error = 'Маршрут требует ЭЦП: выберите сертификат'; return; }
-      const sig = await api.signDocument(
-        btoa(unescape(encodeURIComponent(canonicalDecisionPayload(
-          decideTarget.approval.request_id,
-          decideTarget.approve,
-          decideComment || '',
-        )))),
-        decideCertSha1, true);
-      sigB64 = bytesToBase64(sig.signature_der);
+      try {
+        const sig = await api.signDocument(
+          btoa(unescape(encodeURIComponent(canonicalDecisionPayload(
+            decideTarget.approval.request_id,
+            decideTarget.approve,
+            decideComment || '',
+          )))),
+          decideCertSha1, true);
+        sigB64 = bytesToBase64(sig.signature_der);
+      } catch (e: any) {
+        error = typeof e === 'string' ? e : e?.message ?? 'Ошибка подписи';
+        return;
+      }
     }
-    error = '';
+    deciding = true;
     try {
       const fn = decideTarget.approve ? 'approve_step' : 'reject_step';
       const env = await api.pluginCall(MODULE, fn, {
@@ -273,6 +289,8 @@
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка решения';
+    } finally {
+      deciding = false;
     }
   }
 
@@ -583,9 +601,9 @@
           {/each}
         </select>
         {#if certificates.filter(certOk).length === 0}
-          <div class="text-xs text-warn-600">
+          <div class="text-xs text-warning-600">
             Не найдено валидных сертификатов с приватным ключом (КриптоПро).
-            <button class="underline hover:text-warn-700" onclick={makeTestCert} disabled={makingCert}>
+            <button class="underline hover:text-warning-700" onclick={makeTestCert} disabled={makingCert}>
               {makingCert ? 'Создание…' : 'Создать тестовый'}
             </button>
           </div>
@@ -596,8 +614,9 @@
 
       <div class="flex justify-end gap-2 pt-2">
         <button class="btn btn-outline" onclick={() => (submitTarget = null)}>Отмена</button>
-        <button class="btn btn-primary" onclick={doSubmit}>
-          <i class="fa-solid fa-paper-plane"></i> {submitNeedsSig ? 'Подписать и отправить' : 'Отправить'}
+        <button class="btn btn-primary" onclick={doSubmit} disabled={submitting}>
+          {#if submitting}<i class="fa-solid fa-spinner fa-spin"></i>{:else}<i class="fa-solid fa-paper-plane"></i>{/if}
+          {submitNeedsSig ? 'Подписать и отправить' : 'Отправить'}
         </button>
       </div>
     </div>
@@ -628,8 +647,8 @@
 
       <div class="flex justify-end gap-2 pt-2">
         <button class="btn btn-outline" onclick={() => (decideTarget = null)}>Отмена</button>
-        <button class="btn {decideTarget.approve ? 'btn-success' : 'btn-error'}" onclick={doDecide}>
-          <i class="fa-solid {decideTarget.approval.requires_signature ? 'fa-signature' : 'fa-check'}"></i>
+        <button class="btn {decideTarget.approve ? 'btn-success' : 'btn-error'}" onclick={doDecide} disabled={deciding}>
+          {#if deciding}<i class="fa-solid fa-spinner fa-spin"></i>{:else}<i class="fa-solid {decideTarget.approval.requires_signature ? 'fa-signature' : 'fa-check'}"></i>{/if}
           {decideTarget.approve ? 'Согласовать' : 'Отклонить'}
         </button>
       </div>

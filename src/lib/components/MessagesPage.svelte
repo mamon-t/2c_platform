@@ -106,10 +106,13 @@
   <div class="w-80 border-r border-surface-300-700 p-3 overflow-y-auto">
     <div class="flex items-center justify-between mb-3">
       <h3 class="text-sm font-semibold">Чаты</h3>
-      <button class="btn btn-sm btn-primary" onclick={openNewChatModal}>
+      <button class="btn btn-sm btn-primary" onclick={openNewChatModal} aria-label="Создать групповой чат">
         <i class="fa-solid fa-plus"></i>
       </button>
     </div>
+    {#if error}
+      <div class="alert preset-tonal-error text-xs mb-2" role="alert">{error}</div>
+    {/if}
     <div class="space-y-1">
       {#each rooms as r (r.room._id)}
         <button class="w-full text-left p-2 rounded-lg transition-colors
