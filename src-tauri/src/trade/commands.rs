@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::commands::AppState;
 use crate::core::middleware::CommandContext;
+use crate::audit::AuditableAction;
 use crate::db::MongoClient;
 
 /// Seed метаданных торговли (settings.manage).

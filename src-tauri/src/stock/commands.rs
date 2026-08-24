@@ -362,8 +362,11 @@ pub async fn signature_policies_upsert(
         condition: input.condition,
         required: input.required,
     };
-    super::signature::SignatureService::upsert(&s.db.as_ref().unwrap(), &ctx.company_id, policy)
-        .await.map_err(|e| e.to_string())
+    super::signature::SignatureService::upsert(&s.db.as_ref().unwrap(), &ctx.company_id, policy.clone())
+        .await.map_err(|e| e.to_string())?;
+    crate::audit_log!(s, s.db.as_ref().unwrap(), crate::audit::AuditableAction::SaveSettings,
+        target_id = format!("{}:{}", policy.module, policy.action));
+    Ok(())
 }
 
 #[tauri::command]

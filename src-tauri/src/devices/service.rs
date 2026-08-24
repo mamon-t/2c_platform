@@ -194,6 +194,25 @@ impl DeviceService {
             tracing::warn!("[devices] EventStore {}: {e}", ev.event_type());
         }
 
+        // Сохранить уведомление для критичных событий (error/disconnect)
+        let ev_type = ev.event_type();
+        if ev_type.contains("error") || ev_type.contains("disconnect") || ev_type.contains("connected") {
+            let n_doc = doc! {
+                "company_id": company_id.0.to_string(),
+                "user_id": ev.device_id(),
+                "notification_type": ev_type,
+                "severity": if ev_type.contains("error") { "warning" } else { "info" },
+                "title": format!("Устройство {}", ev.device_id()),
+                "body": format!("{:?}", ev),
+                "status": "delivered",
+                "created_at": mongodb::bson::DateTime::now(),
+            };
+            if let Err(e) = db.collection::<Document>("notifications")
+                .insert_one(n_doc).await {
+                tracing::warn!("[devices] notification: {e}");
+            }
+        }
+
         // 2. Rhai-обработчик из настроек устройства (опционально)
         if let Some(handler) = settings.get("scan_handler").and_then(|h| h.as_str()) {
             let ctx = serde_json::json!({ "event": &ev });
