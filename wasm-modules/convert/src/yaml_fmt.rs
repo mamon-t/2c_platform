@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 pub fn parse(data: &[u8]) -> anyhow::Result<Vec<serde_json::Value>> {
     let text = String::from_utf8_lossy(data).to_string();
     let parsed: serde_yaml::Value =

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Сообщения — двусторонняя/групповая коммуникация.
 //!
 //! Комнаты: direct (личный диалог), group, document (обсуждение документа).

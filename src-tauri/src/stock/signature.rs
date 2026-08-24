@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Политики криптоподписи (настраиваемые, default OFF).
 //!
 //! Политика: {company_id, module, action, condition?, required}.

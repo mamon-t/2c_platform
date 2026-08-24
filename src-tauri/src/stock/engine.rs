@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Движок склада: атомарные операции над остатками.
 //!
 //! Все функции принимают открытую сессию ИСПОЛНИТЕЛЯ (tx_exec) и пишут

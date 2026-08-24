@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 import { writable, derived, get } from 'svelte/store';
 
 export type ThemeMode = 'light' | 'dark' | 'system';

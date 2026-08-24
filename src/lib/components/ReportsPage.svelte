@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type EntityType, type ObjectEntity, OBJECT_STATE_META, FIELD_KIND_META } from '$lib/services/api';

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Projection engine: событие → шаблон → подписка → уведомление.
 //!
 //! Слушает события из Трубы и генерирует уведомления для пользователей,

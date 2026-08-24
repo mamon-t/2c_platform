@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Модуль «Торговля» — оркестратор поступлений, реализаций и возвратов.
 //!
 //! WASM-плагин собирает пачки tx_exec из операций склада и учёта.

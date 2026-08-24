@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! LedgerService: план счетов, периоды, проводки, балансы.
 //!
 //! Все записи выполняются через ОПЦИОНАЛЬНУЮ сессию: внутри tx_exec

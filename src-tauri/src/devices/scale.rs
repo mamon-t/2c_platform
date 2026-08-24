@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Весы (RS-232 / USB-COM).
 //!
 //! Протокол описывается пользователем в настройках устройства:

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Сессия-строитель пачек для WASM-плагинов.
 //!
 //! Через границу песочницы нельзя передать &mut TransactionPackage,

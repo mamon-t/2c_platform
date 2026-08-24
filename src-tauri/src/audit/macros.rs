@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use super::{AuditChanges, AuditEntry, AuditableAction, service::{MongoAuditService, AuditService}};
 use crate::commands::AppState;
 use crate::core::{CompanyId, UserId};

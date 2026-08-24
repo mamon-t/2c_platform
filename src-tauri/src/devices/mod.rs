@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Модуль оборудования (сканеры, весы; ККМ — v0.3).
 //!
 //! Внутренний Rust-модуль (не WASM): прямой доступ к устройствам,

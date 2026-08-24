@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use handlebars::Handlebars;
 use handlebars::{HelperDef, HelperResult, Helper, RenderContext, Output, Context};
 use super::{PrintContext, PrintTemplate};

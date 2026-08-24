@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! IPC-команды модуля оборудования.
 //!
 //! Права: devices.read (чтение), devices.manage (конфигурация/подключение/тест),

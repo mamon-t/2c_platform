@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use crate::auth::AuthService;
 use crate::company::{Company, CompanyService, CreateCompanyInput, UpdateCompanyInput};
 use crate::db::{DiagnosticsInfo, MongoClient};

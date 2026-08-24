@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Реестр операций tx_exec.
 //!
 //! Имя-операции → обработчик. Исполнитель универсален: добавление

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Модуль «Заявки» — WASM-плагин платформы 2C.
 //!
 //! Маршруты согласования и активные согласования хранятся

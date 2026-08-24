@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Частичные индексы objects для справочников торговли.
 //!
 //! Фильтр по entity_type UUID решает проблему «раздутых» индексов

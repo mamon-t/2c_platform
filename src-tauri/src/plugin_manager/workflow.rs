@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Workflow host-функции для WASM-модулей:
 //! - `transition_object` (capability: `objects.update`) — проведение/отмена объекта
 //! - `run_script` (capability: `scripts`) — выполнение Rhai-скрипта в песочнице

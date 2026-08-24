@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Обработчики учёта для реестра tx_exec (Блок 2).
 //!
 //! Выполняются ВНУТРИ транзакции исполнителя: те же проверки Блока 1,

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 export interface TransportAdapter {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }

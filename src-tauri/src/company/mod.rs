@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use mongodb::bson::{doc, Document};

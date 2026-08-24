@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use std::future::Future;
 
 use crate::audit::{AuditChanges, AuditableAction, service::MongoAuditService, service::AuditService as AuditServiceTrait};

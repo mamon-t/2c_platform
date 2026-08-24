@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Учёт — нативный движок двойной записи.
 //!
 //! Инварианты (гарантируются сервисом, живут нативно как движок склада):

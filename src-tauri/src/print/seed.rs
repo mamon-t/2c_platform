@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use chrono::Utc;
 use mongodb::bson::{doc, Document};
 use tracing::info;

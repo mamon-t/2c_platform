@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Модуль «Склад» — оркестратор складских документов.
 //!
 //! Движок остатков живёт на хосте (реестр tx_exec: stock.receipt/issue/

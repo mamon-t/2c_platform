@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 use crate::core::{FieldKind, PlatformError};
 use crate::meta::EntityField;
 use serde_json::Value;

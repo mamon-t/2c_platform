@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Serial-сканер штрихкодов (/dev/ttyUSB*, /dev/ttyACM*).
 //!
 //! Сканер шлёт код строкой с терминатором \r или \n.

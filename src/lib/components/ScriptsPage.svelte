@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 <script lang="ts">
   import { api } from '$lib/services/api';
   import { hasPermission, auth } from '$lib/stores/auth';

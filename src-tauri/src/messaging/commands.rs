@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! IPC-команды сообщений.
 //!
 //! Право: trade.read — любой пользователь модуля торговли может общаться.

@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 //! Мост движка склада в реестр tx_exec.
 //!
 //! Движок — поставщик атомарных кубиков: каждый обработчик — тонкая

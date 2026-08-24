@@ -1,3 +1,6 @@
+// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+// This code is proprietary. See LICENSE file for details.
+
 // ── Константы действий (subsystem.action) ──────────────────────
 // Формат: "subsystem.action" — совпадает с кодами PermissionPolicy
 // Неизвестное действие = нет разрешающей политики = deny (deny-by-default)
