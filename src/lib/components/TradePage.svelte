@@ -8,7 +8,6 @@
 
   let loading = $state(true);
   let error = $state('');
-  let notice = $state('');
   let tab = $state<'osv' | 'journal'>('osv');
 
   let osvRows = $state<LedgerOsvRowTS[]>([]);
@@ -58,7 +57,7 @@
   async function seedTrade() {
     seeding = true; error = '';
     try {
-      notice = await api.tradeSeedMetadata();
+      toastSuccess(await api.tradeSeedMetadata());
       seeded = true;
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка seed';
@@ -66,6 +65,7 @@
       seeding = false;
     }
   }
+  import { toastSuccess, toastError, errText } from '$lib/components/ui/toast';
 </script>
 
 <div class="container mx-auto p-4 space-y-4">
@@ -80,7 +80,6 @@
   </header>
 
   {#if error}<div class="alert alert-error">{error}</div>{/if}
-  {#if notice}<div class="alert alert-success text-xs">{notice}</div>{/if}
 
   <!-- Фильтр периода -->
   <div class="card p-3 flex gap-3 items-end flex-wrap">

@@ -15,6 +15,7 @@
   import { parseFile, serializeFile, downloadText, readFileAsText,
     type FileFormat, type ParseResult } from '$lib/utils/fileConverter';
   import FieldMappingDialog from '$lib/components/FieldMappingDialog.svelte';
+  import { confirmDialog } from '$lib/components/ui/dialog';
 
   interface Props {
     object: ObjectEntity;
@@ -101,8 +102,8 @@
   let dirty = $state(false);
   $effect(() => { JSON.stringify(data); if (!loading) dirty = JSON.stringify(data) !== JSON.stringify(object.data); });
 
-  function requestClose() {
-    if (dirty && !confirm('Имеются несохранённые изменения. Закрыть без сохранения?')) return;
+  async function requestClose() {
+    if (dirty && !(await confirmDialog({ title: 'Закрыть без сохранения?', message: 'Имеются несохранённые изменения.', danger: true, confirmLabel: 'Закрыть' }))) return;
     onClosed?.();
   }
 
@@ -147,7 +148,7 @@
     const isDangerous = t.to_state === 'posted' || t.to_state === 'cancelled';
     if (isDangerous) {
       const label = t.to_state === 'posted' ? 'проведении' : 'отмене';
-      if (!confirm(`Вы уверены в ${label} документа?`)) return;
+      if (!(await confirmDialog({ title: `Подтвердите ${label} документа`, danger: true, confirmLabel: 'Провести' }))) return;
     }
 
     saving = true;
@@ -184,7 +185,7 @@
   }
 
   async function handleRestore(targetVersion: number) {
-    if (!confirm(`Восстановить версию v${targetVersion}?`)) return;
+    if (!(await confirmDialog({ title: `Восстановить версию v${targetVersion}?`, danger: true }))) return;
     saving = true;
     try {
       const saved = await api.restoreObjectVersion(object._id, targetVersion);

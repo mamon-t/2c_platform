@@ -10,7 +10,6 @@
 
   let loading = $state(true);
   let error = $state('');
-  let notice = $state('');
   let devices = $state<DeviceListItemTS[]>([]);
   let ports = $state<PortDtoTS[]>([]);
   let journal = $state<{ ev: DeviceEventTS; at: string }[]>([]);
@@ -110,7 +109,7 @@
         is_active: form.is_active,
       });
       showForm = false;
-      notice = editingId ? 'Сохранено' : 'Устройство добавлено';
+      toastSuccess(editingId ? 'Сохранено' : 'Устройство добавлено');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка сохранения';
@@ -120,10 +119,10 @@
   }
 
   async function remove(id: string) {
-    if (!confirm('Удалить устройство?')) return;
+    if (!(await confirmDialog({ title: 'Удалить устройство?', danger: true }))) return;
     try {
       await api.devicesDelete(id);
-      notice = 'Удалено';
+      toastSuccess('Устройство удалено');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка удаления';
@@ -131,14 +130,14 @@
   }
 
   async function toggleConnect(d: DeviceListItemTS) {
-    error = ''; notice = '';
+    error = '';
     try {
       if (d.connected) {
         await api.devicesDisconnect(d.id);
-        notice = 'Отключено';
+        toastSuccess('Отключено');
       } else {
         await api.devicesConnect(d.id);
-        notice = `${d.name}: подключено`;
+        toastSuccess(`${d.name}: подключено`);
       }
       await load();
     } catch (e: any) {
@@ -148,9 +147,9 @@
   }
 
   async function test(d: DeviceConfigTS) {
-    error = ''; notice = '';
+    error = '';
     try {
-      notice = await api.devicesTest(d.id);
+      toastSuccess(await api.devicesTest(d.id));
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка теста';
     }
@@ -162,7 +161,7 @@
     lastWedgeCode = code;
     try {
       await api.devicesWedgeScan(code);
-      notice = `Скан зафиксирован: ${code}`;
+      toastSuccess(`Скан зафиксирован: ${code}`);
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка отправки скана';
     }
@@ -187,6 +186,8 @@
       default: return ev.message ?? 'ошибка';
     }
   }
+  import { confirmDialog } from '$lib/components/ui/dialog';
+  import { toastSuccess, toastError, errText } from '$lib/components/ui/toast';
 </script>
 
 <div class="container mx-auto p-4 space-y-4">
@@ -198,7 +199,6 @@
   </header>
 
   {#if error}<div class="alert alert-error whitespace-pre-line">{error}</div>{/if}
-  {#if notice}<div class="alert alert-success">{notice}</div>{/if}
 
   <div class="grid gap-3 md:grid-cols-2">
     {#each devices as d (d.id)}

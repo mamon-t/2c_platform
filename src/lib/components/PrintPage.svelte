@@ -140,7 +140,7 @@
   }
 
   async function deleteTemplate(id: string) {
-    if (!confirm('Удалить шаблон?')) return;
+    if (!(await confirmDialog({ title: 'Удалить шаблон?', danger: true }))) return;
     try {
       await api.printDeleteTemplate(id);
       await loadTemplates();
@@ -170,6 +170,7 @@
     a.click();
     URL.revokeObjectURL(url);
   }
+  import { confirmDialog } from '$lib/components/ui/dialog';
 </script>
 
 <div class="space-y-4">

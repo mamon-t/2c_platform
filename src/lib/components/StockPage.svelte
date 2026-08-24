@@ -10,7 +10,6 @@
 
   let loading = $state(true);
   let error = $state('');
-  let notice = $state('');
   let tab = $state<'balances' | 'handover' | 'overdue'>('balances');
 
   let balances = $state<StockBalanceTS[]>([]);
@@ -43,7 +42,7 @@
 
   async function seed() {
     try {
-      notice = await api.stockSeedMetadata();
+      toastSuccess(await api.stockSeedMetadata());
       seeded = true;
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка seed';
@@ -63,6 +62,7 @@
   let locations = $derived(
     [...new Set(balances.map(b => b.location_id))].sort()
   );
+  import { toastSuccess, toastError, errText } from '$lib/components/ui/toast';
 </script>
 
 <div class="container mx-auto p-4 space-y-4">
@@ -74,7 +74,6 @@
   </header>
 
   {#if error}<div class="alert alert-error whitespace-pre-line">{error}</div>{/if}
-  {#if notice}<div class="alert alert-success text-xs">{notice}</div>{/if}
 
   <!-- Первый запуск -->
   {#if !seeded && canManage() && balances.length === 0 && !loading}

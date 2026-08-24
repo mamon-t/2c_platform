@@ -92,7 +92,7 @@
   }
 
   async function handleUninstall(id: string, name: string) {
-    if (!confirm(`Удалить модуль «${name}»? Все настройки будут потеряны.`)) return;
+    if (!(await confirmDialog({ title: `Удалить модуль «${name}»?`, message: 'Все настройки будут потеряны.', danger: true }))) return;
     error = '';
     try { await api.modulesUninstall(id); await loadModules(); } catch (e: any) { error = typeof e === 'string' ? e : e?.message ?? 'Ошибка'; }
   }
@@ -103,6 +103,7 @@
   const btnDanger = 'rounded-lg bg-error-500 px-3 py-1 text-xs font-medium text-white hover:bg-error-600';
 
   $effect(() => { if (canRead) loadModules(); });
+  import { confirmDialog } from '$lib/components/ui/dialog';
 </script>
 
 <div class="space-y-6">

@@ -25,3 +25,36 @@ html, body {
 body.dark {
   color-scheme: dark;
 }
+
+/* ── Корпоративные примитивы (плотный стиль) ─────────────── */
+
+/* Плотная таблица: компактные строки, sticky-заголовок */
+.table-dense {
+  font-size: 0.8125rem;
+}
+.table-dense th,
+.table-dense td {
+  padding: 0.3rem 0.55rem;
+  line-height: 1.25;
+}
+.table-dense thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-100-900);
+  color: var(--color-surface-600-400);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom-width: 1px;
+}
+.table-dense tbody tr {
+  @apply hover:bg-surface-100-900/60;
+}
+
+/* Панель инструментов над таблицей */
+.toolbar-input {
+  height: 1.9rem;
+  font-size: 0.8125rem;
+}

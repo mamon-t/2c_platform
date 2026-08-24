@@ -10,13 +10,14 @@
   } from '$lib/services/api';
   import { auth, hasPermission } from '$lib/stores/auth';
   import { canonicalSubmitPayload, canonicalDecisionPayload } from '$lib/utils/requestSignatures';
+  import { confirmDialog, promptDialog } from '$lib/components/ui/dialog';
+  import { toastSuccess, toastError, errText } from '$lib/components/ui/toast';
 
   const MODULE = 'requests';
 
   // ── State ──
   let loading = $state(true);
   let error = $state('');
-  let notice = $state('');
   let tab = $state<'mine' | 'pending' | 'all' | 'routes'>('mine');
 
   let entityTypes = $state<EntityType[]>([]);
@@ -153,12 +154,12 @@
   // Тестовый сертификат (когда в MY пусто)
   let makingCert = $state(false);
   async function makeTestCert() {
-    const name = prompt('Имя владельца (латиницей):', 'Test User');
+    const name = await promptDialog({ title: 'Тестовый сертификат', message: 'Имя владельца (латиницей):', initialValue: 'Test User', confirmLabel: 'Создать' });
     if (!name?.trim()) return;
-    makingCert = true; error = ''; notice = '';
+    makingCert = true; error = '';
     try {
       const info = await api.createTestCertificate(name.trim());
-      notice = `Тестовый сертификат создан: ${info.split('|')[1]}`;
+      toastSuccess(`Тестовый сертификат создан: ${info.split('|')[1]}`);
       certificates = await api.listCryptoCertificates();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка создания сертификата';
@@ -188,7 +189,7 @@
       });
       showCreate = false;
       newReq = { title: '', priority: 'medium', amount: '', deadline: '', description: '' };
-      notice = 'Заявка создана';
+      toastSuccess('Заявка создана');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка создания';
@@ -239,7 +240,7 @@
         signature_der: sigB64,
       });
       submitTarget = null;
-      notice = 'Отправлено на согласование';
+      toastSuccess('Отправлено на согласование');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка отправки';
@@ -285,7 +286,7 @@
         signature_der: sigB64 ?? '',
       });
       decideTarget = null;
-      notice = 'Решение принято';
+      toastSuccess('Решение принято');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка решения';
@@ -341,7 +342,7 @@
   }
 
   async function deleteRoute(code: string) {
-    if (!confirm(`Удалить маршрут «${code}»?`)) return;
+    if (!(await confirmDialog({ title: `Удалить маршрут «${code}»?`, danger: true }))) return;
     try {
       await api.pluginCall(MODULE, 'routes_delete', { code });
       await load();
@@ -352,10 +353,10 @@
 
   // Отмена процедуры инициатором
   async function cancelApproval(requestId: string) {
-    if (!confirm('Отменить процедуру согласования? Заявка останется черновиком.')) return;
+    if (!(await confirmDialog({ title: 'Отменить согласование?', message: 'Заявка останется черновиком.', danger: true }))) return;
     try {
       await api.pluginCall(MODULE, 'cancel_request', { request_id: requestId });
-      notice = 'Согласование отменено';
+      toastSuccess('Согласование отменено');
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка отмены';
@@ -383,7 +384,6 @@
   </header>
 
   {#if error}<div class="alert alert-error">{error}</div>{/if}
-  {#if notice}<div class="alert alert-success">{notice}</div>{/if}
 
   <!-- Табы -->
   <div class="flex gap-1 border-b border-surface-200">

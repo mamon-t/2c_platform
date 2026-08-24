@@ -24,6 +24,10 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
   import ScriptsPage from '$lib/components/ScriptsPage.svelte';
   import ReportsPage from '$lib/components/ReportsPage.svelte';
+  import Toaster from '$lib/components/ui/Toaster.svelte';
+  import DialogHost from '$lib/components/ui/DialogHost.svelte';
+  import { confirmDialog } from '$lib/components/ui/dialog';
+  import { toastError, toastSuccess, errText } from '$lib/components/ui/toast';
 
   let sidebarCollapsed = $state(false);
   let diagnostics = $state<DiagnosticsReport | null>(null);
@@ -258,8 +262,8 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
   }
 
   async function deleteCompany(id: string) {
-    if (!confirm('Удалить компанию?')) return;
-    try { await api.deleteCompany(id); await loadCompanies(); } catch {}
+    if (!(await confirmDialog({ title: 'Удалить компанию?', danger: true }))) return;
+    try { await api.deleteCompany(id); await loadCompanies(); toastSuccess('Компания удалена'); } catch (e) { toastError(errText(e)); }
   }
 
   async function openUserForm() {
@@ -296,8 +300,8 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
   async function toggleUserStatus(user: User) {
     const newStatus = user.status === 'disabled' ? 'active' : 'disabled';
     const action = newStatus === 'disabled' ? 'Заблокировать' : 'Разблокировать';
-    if (!confirm(`${action} пользователя ${user.login}?`)) return;
-    try { await api.updateUser(user._id, { status: newStatus }); await loadUsers(); } catch {}
+    if (!(await confirmDialog({ title: `${action} пользователя?`, message: user.login, danger: newStatus === 'disabled', confirmLabel: action }))) return;
+    try { await api.updateUser(user._id, { status: newStatus }); await loadUsers(); } catch (e) { toastError(errText(e)); }
   }
 
   async function openUserDetail(user: User) {
@@ -409,8 +413,8 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
   }
 
   async function deleteRole(id: string) {
-    if (!confirm('Удалить роль?')) return;
-    try { await api.deleteRole(id); await loadRoles(); } catch {}
+    if (!(await confirmDialog({ title: 'Удалить роль?', danger: true }))) return;
+    try { await api.deleteRole(id); await loadRoles(); toastSuccess('Роль удалена'); } catch (e) { toastError(errText(e)); }
   }
 
   // Password reset
@@ -1025,6 +1029,9 @@ import MessagesPage from '$lib/components/MessagesPage.svelte';
       {/if}
     </div>
   </main>
+
+  <Toaster />
+  <DialogHost />
 
   <aside class="flex flex-col border-l border-surface-300-700 bg-surface-100-900 transition-all duration-300" class:w-64={!sidebarCollapsed} class:w-16={sidebarCollapsed}>
     <div class="flex items-center gap-2 border-b border-surface-300-700 p-4">

@@ -67,7 +67,7 @@
   }
 
   async function deleteType(id: string) {
-    if (!confirm('Удалить тип сущности и все вложенные данные?')) return;
+    if (!(await confirmDialog({ title: 'Удалить тип сущности?', message: 'Будут удалены все вложенные данные (поля, состояния, объекты).', danger: true }))) return;
     try {
       await api.deleteEntityType(id);
       if (selectedId === id) { selectedId = null; fields = []; states = []; transitions = []; }
@@ -110,6 +110,7 @@
   }
 
   onMount(() => loadTypes());
+  import { confirmDialog } from '$lib/components/ui/dialog';
 </script>
 
 <div class="flex h-full">
