@@ -110,10 +110,13 @@ WASM-оркестратор поверх склада и учёта.
 ### 2.10 RBAC и аудит
 
 Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос). ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
+Все модули (stock/trade/devices/signing) пишут в audit_log через audit_log! макрос.
+stock: signature_policies_upsert → SaveSettings; trade: seed_metadata → SaveSettings.
 
 ### 2.11 Уведомления
 
-Расширенная модель: severity(info/warning/critical), entity_ref({type,id}), channels[], metadata. Projection engine: событие из Трубы → шаблон → подписка → уведомление. Host-fn: notify_user, users_by_role. IPC: list/mark_read/count_unread/subscriptions/templates. UI: колокольчик + бейдж + dropdown панель (поллинг 30с).
+Расширенная модель: severity(info/warning/critical), entity_ref({type,id}), channels[], metadata. Projection engine: событие из Трубы → шаблон → подписка → уведомление. Host-fn: notify_user, users_by_role.
+Devices: error/disconnect события → notifications collection. IPC: list/mark_read/count_unread/subscriptions/templates. UI: колокольчик + бейдж + dropdown панель (поллинг 30с).
 
 ---
 
