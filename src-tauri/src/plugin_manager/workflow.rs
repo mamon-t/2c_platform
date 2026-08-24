@@ -200,6 +200,7 @@ extism::host_fn!(pub whoami_impl(user_data: HostData;) -> String {
         "login": ctx.user_login,
         "display_name": ctx.display_name,
         "role_id": ctx.role_id,
+        "role_ids": ctx.role_ids,
     }).to_string())
 });
 
@@ -325,9 +326,9 @@ extism::host_fn!(pub tx_commit_impl(user_data: HostData; handle: String) -> Stri
         tokio::runtime::Handle::current().block_on(async {
             let db = match db_or_err(&hd) { Ok(d) => d, Err(e) => return Ok(e) };
 
-            // Свежий снапшот политик по роли вызывающего
-            let role_id = hd.ctx.read().unwrap().role_id.clone();
-            let policies = load_policies(&db, role_id).await;
+            // Свежий снапшот политик по ВСЕМ ролям вызывающего
+            let role_ids = hd.ctx.read().unwrap().role_ids.clone();
+            let policies = load_policies(&db, &role_ids).await;
 
             let pkg = match crate::tx::session::take_and_build(&handle, policies) {
                 Ok(p) => p,
@@ -350,27 +351,32 @@ extism::host_fn!(pub tx_commit_impl(user_data: HostData; handle: String) -> Stri
     result
 });
 
-/// Загрузить политики роли (свежие, на момент коммита).
+/// Загрузить ОБЪЕДИНЕНИЕ политик всех ролей вызывающего
+/// (свежий снапшот на момент коммита).
 async fn load_policies(
     db: &crate::db::MongoClient,
-    role_id: Option<String>,
+    role_ids: &[String],
 ) -> Vec<crate::permission_policy::PermissionPolicy> {
     use crate::role::RoleService;
 
-    let Some(rid) = role_id.and_then(|s| uuid::Uuid::parse_str(&s).ok()) else {
-        return Vec::new();
-    };
-    match RoleService::get(db, rid).await {
-        Ok(role) => {
-            let p = RoleService::get_policies(db, &role).await.unwrap_or_default();
-            eprintln!("[tx] load_policies: role={} -> {} политик", role.code, p.len());
-            p
-        }
-        Err(e) => {
-            eprintln!("[tx] load_policies: роль {rid} не найдена: {e}");
-            Vec::new()
+    let mut out: Vec<crate::permission_policy::PermissionPolicy> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for rid in role_ids {
+        let Some(id) = uuid::Uuid::parse_str(rid).ok() else { continue };
+        match RoleService::get(db, id).await {
+            Ok(role) => {
+                let policies = RoleService::get_policies(db, &role).await.unwrap_or_default();
+                for p in policies {
+                    if seen.insert(p._id.to_string()) {
+                        out.push(p);
+                    }
+                }
+            }
+            Err(_) => continue,
         }
     }
+    out
 }
 
 // ── signature_required(module, action, object_id) ──────────

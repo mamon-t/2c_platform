@@ -66,7 +66,10 @@ pub struct PluginContext {
     pub user_id: Option<String>,
     pub user_login: Option<String>,
     pub display_name: Option<String>,
+    /// Активная роль (для совместимости)
     pub role_id: Option<String>,
+    /// ВСЕ активные роли пользователя в компании (мультипрофиль)
+    pub role_ids: Vec<String>,
 }
 
 // ── HostData (только db + общий контекст) ──────────────────
@@ -499,6 +502,7 @@ impl WasmPlugin {
         Ok(Self { plugin, info, ctx, capabilities })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_context(
         &self,
         company_id: Option<String>,
@@ -506,6 +510,7 @@ impl WasmPlugin {
         user_login: Option<String>,
         display_name: Option<String>,
         role_id: Option<String>,
+        role_ids: Vec<String>,
     ) {
         if let Ok(mut ctx) = self.ctx.write() {
             ctx.company_id = company_id;
@@ -513,6 +518,7 @@ impl WasmPlugin {
             ctx.user_login = user_login;
             ctx.display_name = display_name;
             ctx.role_id = role_id;
+            ctx.role_ids = role_ids;
         }
     }
 

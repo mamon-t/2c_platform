@@ -1,9 +1,37 @@
 use super::{HostData, ModuleInfo, PluginContext, WasmPlugin};
 use crate::commands::AppState;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tauri::State;
 use tokio::sync::Mutex;
+
+
+/// Все активные роли пользователя в компании (из профилей).
+pub(crate) async fn load_user_role_ids(
+    db: &crate::db::MongoClient,
+    company_id: &str,
+    user_id: &str,
+) -> Vec<String> {
+    let Ok(mut cursor) = db
+        .collection::<mongodb::bson::Document>("user_company_profiles")
+        .find(mongodb::bson::doc! {
+            "company_id": company_id,
+            "user_id": user_id,
+            "is_active": true,
+        })
+        .await
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    while let Some(Ok(p)) = cursor.next().await {
+        if let Ok(r) = p.get_str("role_id") {
+            out.push(r.to_string());
+        }
+    }
+    out
+}
 
 const PLUGIN_TIMEOUT_MS: u64 = 30_000;
 
@@ -22,7 +50,9 @@ pub async fn wasm_load(
             user_login: s.current_user.as_ref().map(|u| u.login.clone()),
             display_name: s.current_user.as_ref().map(|u| u.display_name.clone()),
             role_id: s.current_role_id.clone(),
+            role_ids: Vec::new(),
         }));
+        // Роли загрузятся при каждом вызове (plugin_call refresh)
         (ctx, s.db.clone())
     };
 
@@ -89,7 +119,7 @@ pub(crate) async fn invoke_plugin(
 ) -> Result<String, String> {
     let module_id = module_id.to_string();
     let function = function.to_string();
-    let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display, fresh_role) = {
+    let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display, fresh_role, db) = {
         let s = state.lock().await;
         let modules = s.wasm_modules.as_ref().ok_or("Нет загруженных WASM-модулей")?;
         let arc = modules.get(&module_id)
@@ -100,18 +130,25 @@ pub(crate) async fn invoke_plugin(
         let login = s.current_user.as_ref().map(|u| u.login.clone());
         let display = s.current_user.as_ref().map(|u| u.display_name.clone());
         let role = s.current_role_id.clone();
-        (arc, company, uid, login, display, role)
+        let db = s.db.clone();
+        (arc, company, uid, login, display, role, db)
+    };
+
+    let fresh_roles = match (&fresh_company, &fresh_user_id, &db) {
+        (Some(c), Some(u), Some(d)) => load_user_role_ids(d, c, u).await,
+        _ => Vec::new(),
     };
 
     {
         let mut plugin = plugin_arc.lock().unwrap();
-        plugin.update_context(fresh_company.clone(), fresh_user_id.clone(), fresh_login.clone(), fresh_display.clone(), fresh_role.clone());
+        plugin.update_context(fresh_company.clone(), fresh_user_id.clone(), fresh_login.clone(), fresh_display.clone(), fresh_role.clone(), fresh_roles.clone());
         let mut ctx = plugin.ctx.write().unwrap();
         ctx.company_id = fresh_company;
         ctx.user_id = fresh_user_id;
         ctx.user_login = fresh_login;
         ctx.display_name = fresh_display;
         ctx.role_id = fresh_role;
+        ctx.role_ids = fresh_roles;
     }
 
     let function_clone = function.clone();

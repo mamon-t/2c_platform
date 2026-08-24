@@ -42,6 +42,8 @@ struct Harness {
     events: Vec<(String, String, Value)>,
     /// Текущий пользователь для whoami()
     current_user: Value,
+    /// Дополнительные роли (role_ids) текущего пользователя
+    extra_role_ids: Vec<String>,
     /// Настройки модуля (хуки)
     settings: Value,
     /// Принудительная ошибка следующего run_script
@@ -167,7 +169,13 @@ extism::host_fn!(pub mock_transition(user_data: H; id: String, version: String, 
 
 extism::host_fn!(pub mock_whoami(user_data: H;) -> String {
     let hd = clone_h!(user_data);
-    let u = hd.lock().unwrap().current_user.clone();
+    let mut u = hd.lock().unwrap().current_user.clone();
+    if !hd.lock().unwrap().extra_role_ids.is_empty() {
+        let ids = hd.lock().unwrap().extra_role_ids.clone();
+        if let Some(obj) = u.as_object_mut() {
+            obj.insert("role_ids".into(), serde_json::json!(ids));
+        }
+    }
     Ok(envelope_ok(u))
 });
 
@@ -686,4 +694,47 @@ fn unsigned_route_rejects_unexpected_signature() {
         "signature_der": "QUJD",
     }));
     assert!(err.contains("CONTRACT"), "{err}");
+}
+
+// ── RQ3: мультироли ────────────────────────────────────────
+
+#[test]
+fn multi_role_approver_intersection() {
+    // U2 — начальник склада (primary ROLE_WH), по совместительству
+    // финдиректор (ROLE_FIN в role_ids). Этап назначен на ROLE_FIN.
+    let mut app = TestApp::new(U1, None).unwrap();
+
+    let steps = vec![json!({
+        "step_order": 1, "approver_type": "role", "approver_id": "ROLE_FIN",
+        "timeout_hours": 0, "is_required": true,
+    })];
+    app.call("routes_save", json!({
+        "code": "FIN", "name": "Фин", "steps": steps,
+        "requires_signature": false, "is_active": true,
+    }));
+    app.seed_object("req-mr");
+    app.call("submit", json!({"request_id": "req-mr", "route_code": "FIN"}));
+
+    // Primary-роль НЕ совпадает, но роль есть в role_ids → может согласовать
+    app.switch_user(U2, None);
+    {
+        let mut h = app.harness.lock().unwrap();
+        h.current_user["role_id"] = json!("ROLE_WH");
+        h.extra_role_ids = vec!["ROLE_WH".to_string(), "ROLE_FIN".to_string()];
+    }
+
+    let pend = app.call("pending_approvals", json!({}));
+    assert_eq!(pend.as_array().unwrap().len(), 1, "этап виден по второй роли");
+
+    let a = app.call("approve_step", json!({
+        "request_id": "req-mr", "comment": "по совместительству", "signature_der": "",
+    }));
+    assert_eq!(a["status"], "approved");
+
+    // Пользователь вообще без нужной роли — не видит и не согласовывает
+    let mut app2 = TestApp::new(U3, None).unwrap();
+    app2.harness.lock().unwrap().extra_role_ids =
+        vec!["ROLE_HR".to_string()];
+    let pend = app2.call("pending_approvals", json!({}));
+    assert_eq!(pend.as_array().unwrap().len(), 0);
 }

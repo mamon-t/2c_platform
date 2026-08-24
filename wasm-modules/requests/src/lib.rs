@@ -185,7 +185,11 @@ struct Caller {
     user_id: Option<String>,
     login: Option<String>,
     display_name: Option<String>,
+    #[serde(default)]
     role_id: Option<String>,
+    /// Все активные роли пользователя в компании (мультипрофиль)
+    #[serde(default)]
+    role_ids: Vec<String>,
 }
 
 fn caller() -> anyhow::Result<Caller> {
@@ -296,7 +300,12 @@ fn step_mine(step: &StepState, c: &Caller) -> bool {
     match step.approver_type {
         ApproverType::User => step.approver_id == uid,
         ApproverType::Role => {
-            step.approver_id == c.role_id.as_deref().unwrap_or("")
+            // Пересечение: этап назначен на ЛЮБУЮ из ролей утверждающего
+            let primary = c.role_id.as_deref().unwrap_or("");
+            if step.approver_id == primary && !primary.is_empty() {
+                return true;
+            }
+            c.role_ids.iter().any(|r| r == &step.approver_id)
         }
     }
 }
