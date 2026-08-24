@@ -21,6 +21,41 @@ use super::{
 };
 
 /// Контекст исполнения движка внутри транзакции.
+
+/// Сохранить уведомление о складском событии ВНУТРИ транзакции.
+async fn save_stock_notification(
+    e: &mut EngineCtx<'_>,
+    user_id: &str,
+    title: String,
+    body: String,
+) {
+    let n = serde_json::json!({
+        "_id": uuid::Uuid::new_v4().to_string(),
+        "company_id": e.company_id.0.to_string(),
+        "user_id": user_id,
+        "notification_type": "stock.event",
+        "severity": "info",
+        "title": title,
+        "body": body,
+        "entity_ref": null,
+        "channels": ["inapp"],
+        "status": "delivered",
+        "metadata": {},
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let bson = match mongodb::bson::to_bson(&n) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let mut d = match bson.as_document() { Some(d) => d.clone(), None => return };
+    if let Err(err) = e.db.collection::<Document>("notifications")
+        .insert_one(d)
+        .session(&mut *e.session)
+        .await {
+        tracing::warn!("[stock] notification insert: {err}");
+    }
+}
+
 pub struct EngineCtx<'a> {
     pub db: &'a MongoClient,
     pub session: &'a mut mongodb::ClientSession,
@@ -443,6 +478,14 @@ pub async fn transfer(
                     responsible_user_id.as_deref(), expected_return_date.as_deref(), false).await?;
                 bump_balance(e, to_location_id, &nom_id, part.qty).await?;
 
+                // Уведомление подотчётнику при handover
+                if let Some(resp) = responsible_user_id.as_deref() {
+                    save_stock_notification(e, resp,
+                        format!("Выдано имущество: {nom_id} × {}", fmt_qty(part.qty)),
+                        format!("Ожидаемый возврат: {}", expected_return_date.as_deref().unwrap_or("не указан")),
+                    ).await;
+                }
+
                 moved.push(serde_json::json!({
                     "nomenclature_id": nom_id,
                     "qty": part.qty,
@@ -497,6 +540,10 @@ pub async fn count(
         } else if diff < -1e-9 {
             eat_fifo(e, location_id, &line.nomenclature_id, -diff, MovementKind::CountShortage, &doc_ref).await?;
             results.push(serde_json::json!({"nomenclature_id": line.nomenclature_id, "shortage": fmt_qty(-diff)}));
+            save_stock_notification(e, "",
+                format!("Недостача: {}", line.nomenclature_id),
+                format!("Не хватает {} при инвентаризации", fmt_qty(-diff)),
+            ).await;
         } else {
             results.push(serde_json::json!({"nomenclature_id": line.nomenclature_id, "match": true}));
         }
