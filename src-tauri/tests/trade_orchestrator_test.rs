@@ -127,6 +127,7 @@ impl Orch {
             .with_function("tx_add_op",       [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::tx_add_op_impl)
             .with_function("tx_commit",       [PTR], [PTR], UserData::new(host.clone()), wf::tx_commit_impl)
             .with_function("emit_event",      [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::emit_event_impl)
+            .with_function("notify_user", [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::notify_user_impl)
             .with_function("log_message",     [PTR], [], UserData::new(host.clone()), pm::log_message_impl)
             .with_fuel_limit(50_000_000)
             .build()

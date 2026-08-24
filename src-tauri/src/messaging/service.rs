@@ -291,3 +291,38 @@ impl MessagingService {
             .map_err(|e| PlatformError::Database(e.to_string()))
     }
 }
+
+impl MessagingService {
+    /// Найти или создать document-комнату.
+    pub async fn ensure_document_room(
+        db: &MongoClient,
+        company_id: &CompanyId,
+        doc_id: &str,
+        doc_title: &str,
+    ) -> PlatformResult<String> {
+        let col = db.collection::<Document>(COL_ROOMS);
+        let filter = doc! {
+            "company_id": company_id.0.to_string(),
+            "entity_ref.entity_id": doc_id,
+            "is_archived": { "$ne": true },
+        };
+        if let Some(existing) = col.find_one(filter.clone()).await.map_err(|e| PlatformError::Database(e.to_string()))? {
+            return Ok(existing.get_str("_id").unwrap_or("").to_string());
+        }
+        let room_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        col.insert_one(doc! {
+            "_id": &room_id,
+            "company_id": company_id.0.to_string(),
+            "room_type": "document",
+            "title": format!("Обсуждение: {}", doc_title),
+            "members": [],
+            "entity_ref": { "entity_type": "document", "entity_id": doc_id },
+            "created_by": "",
+            "created_at": mongodb::bson::DateTime::from_millis(now.timestamp_millis()),
+            "last_message_at": null,
+            "is_archived": false,
+        }).await.map_err(|e| PlatformError::Database(e.to_string()))?;
+        Ok(room_id)
+    }
+}

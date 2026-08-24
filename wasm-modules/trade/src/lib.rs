@@ -19,6 +19,7 @@ extern "ExtismHost" {
     fn tx_commit(handle: String) -> String;
     fn emit_event(stream_id: String, event_type: String, payload_json: String) -> String;
     fn now_ms() -> String;
+    fn notify_user(recipient: String, subject: String, body: String) -> String;
     fn log_message(msg: String);
 }
 
@@ -307,6 +308,15 @@ pub fn on_post(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Value>
         "total": data["total"],
         "entity_type": type_code,
     }));
+
+    // Уведомление инициатору
+    if let Some(initiator) = data["created_by"].as_str() {
+        let _ = unsafe { notify_user(
+            initiator.to_string(),
+            format!("{} проведён", type_code),
+            format!("Документ {} проведён атомарно.", input.id),
+        ) }?;
+    }
 
     let _ = unsafe { log_message(format!(
         "[trade] {} {} проведён атомарно", type_code, input.id

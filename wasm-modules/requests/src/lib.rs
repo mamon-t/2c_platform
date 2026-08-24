@@ -218,7 +218,7 @@ fn approval_key(request_id: &str) -> String { format!("approval:{request_id}") }
 fn emit(request_id: &str, event_type: &str, extra: serde_json::Value, initiator: &str) {
     let mut payload = serde_json::json!({
         "request_id": request_id,
-        "initiator": initiator,
+        "initiator_id": initiator,
     });
     if let (serde_json::Value::Object(extra), serde_json::Value::Object(base)) = (&extra, &mut payload) {
         for (k, v) in extra {
