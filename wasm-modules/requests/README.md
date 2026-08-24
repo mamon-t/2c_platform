@@ -55,10 +55,19 @@ NOT_FOUND, DB_ERROR, SCRIPT_FAILED, CAPABILITY_DENIED.
 
 Доступные функции: create_object, list_objects, get_object, update_object,
 transition_object(post|cancel), kv_put/kv_get/kv_list/kv_delete,
+kv_put_if_absent(key, value) — атомарная вставка (гонки),
 run_script(source, ctx_json), notify_user(recipient, subject, body),
-whoami(), now_ms(), module_settings(), log_message(msg), get_entity_type,
+users_by_role(role_id) — члены роли для рассылаемых этапов,
+whoami() — включая role_ids[] (мультипрофиль),
+now_ms(), module_settings(), log_message(msg), get_entity_type,
 list_entity_fields, emit_event(stream_id, event_type, payload_json),
+cms_verify(data_b64, sig_b64) — верификация CMS через КриптоПро
+(возвращает valid/signer_subject/signer_sha1),
+signature_required(module, action, object_id),
 **tx_begin / tx_add_op / tx_commit** (capability `transactions`).
+
+Аудит: kv_put/kv_delete пишут AuditEntry (ModuleKvPut/Delete) —
+«кто что записал» сохраняется навсегда.
 
 ### Транзакционные пачки (Plugin SDK ≥1.1)
 
@@ -103,3 +112,26 @@ tx_commit(h);                                  // атомарно; повтор
 Фронтенд: list_crypto_certificates → sign_document → plugin_call.
 Плагин проверяет наличие и сохраняет DER в этапе согласования;
 проверка подлинности — verify_document_signature (host-side).
+
+
+## Подписи: верификация и слепок (SDK ≥1.2)
+
+Подписываемая строка — КАНОНИЧНАЯ, собирается одинаково фронтом и плагином:
+
+```
+submit:  requests.submit|{id}|{version}|{state}
+decide:  requests.decide|{id}|{approve|reject}|{comment}
+```
+
+Плагин перед записью шага вызывает cms_verify; расхождение →
+SIGNATURE_INVALID, операция отменяется. В шаге хранится:
+payload ЦЕЛИКОМ + payload_sha256 + signer_sha1 + signer_subject +
+verified. Данные заявки не входят в строку напрямую — их неизменность
+гарантирует версионный замок (снимок версии фиксируется вместе с решением).
+
+## Задел v0.2
+
+- `timeout_hours` / `is_required` этапа — под механизм эскалаций
+- `all_approvals`: pushdown фильтра на хост при >1000 процедур
+  (kv_list сейчас отдаёт всё с префиксом)
+- Outbox для гарантированной доставки уведомлений
