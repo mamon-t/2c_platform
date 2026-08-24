@@ -173,13 +173,21 @@ extism::host_fn!(pub emit_event_impl(user_data: HostData; stream_id: String, eve
                 crate::events::StreamType::Module,
                 &format!("{module_code}:{stream_id}"),
                 &event_type,
-                payload,
-                cctx.actor,
-                cctx.company_id,
+                payload.clone(),
+                cctx.actor.clone(),
+                cctx.company_id.clone(),
                 None,
                 None,
             ).await {
-                Ok(_) => ok_response(serde_json::json!({ "emitted": true })),
+                Ok(_) => {
+                    // Проекция: событие → уведомление (если есть шаблон+подписка)
+                    if let Err(e) = crate::notify::projection::project_event(
+                        &db, &cctx.company_id, &event_type, &payload, &cctx.actor,
+                    ).await {
+                        tracing::warn!("[emit_event] projection: {e}");
+                    }
+                    ok_response(serde_json::json!({ "emitted": true }))
+                }
                 Err(e) => error_response(super::err::DB_ERROR, &e.to_string()),
             }
         })
@@ -541,17 +549,25 @@ extism::host_fn!(pub notify_user_impl(user_data: HostData; recipient_user_id: St
                 Err(_) => return error_response(err::INVALID_UUID, "Невалидный UUID получателя"),
             };
 
-            let notification = crate::notify::NotificationService::new().create_outbox_entry(
-                cctx.company_id,
-                "module.notify",
-                crate::notify::NotificationChannel::InApp,
-                recipient,
-                if subject.is_empty() { None } else { Some(subject) },
+            let notification = crate::notify::Notification {
+                id: uuid::Uuid::new_v4(),
+                company_id: cctx.company_id.0.to_string(),
+                user_id: recipient_user_id.clone(),
+                notification_type: "module.notify".into(),
+                severity: "info".into(),
+                title: if subject.is_empty() { "Уведомление".into() } else { subject },
                 body,
-            );
+                entity_ref: None,
+                channels: vec!["inapp".into()],
+                status: "delivered".into(),
+                delivered_at: Some(chrono::Utc::now()),
+                read_at: None,
+                metadata: serde_json::json!({}),
+                created_at: chrono::Utc::now(),
+            };
 
-            match crate::notify::service::NotificationStore::save(&db, &notification).await {
-                Ok(id) => ok_response(serde_json::json!({ "id": id })),
+            match crate::notify::service::NotificationStore::save_notification(&db, &notification).await {
+                Ok(_) => ok_response(serde_json::json!({ "id": notification.id.to_string() })),
                 Err(e) => error_response(err::DB_ERROR, &e.to_string()),
             }
         })

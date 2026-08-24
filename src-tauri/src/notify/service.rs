@@ -151,3 +151,66 @@ fn deserialize_notification(d: &Document) -> Option<NotificationOutbox> {
         sent_at: None,
     })
 }
+
+impl NotificationStore {
+    /// Список уведомлений в НОВОМ формате (Notification).
+    pub async fn list_new(
+        db: &MongoClient,
+        user_id: &str,
+        limit: i64,
+    ) -> PlatformResult<Vec<serde_json::Value>> {
+        let mut cursor = db.collection::<Document>(Self::COLLECTION)
+            .find(doc! { "user_id": user_id })
+            .sort(doc! { "created_at": -1 })
+            .limit(limit.clamp(1, 200))
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        use futures::StreamExt;
+        let mut out = Vec::new();
+        while let Some(Ok(d)) = cursor.next().await {
+            out.push(serde_json::Value::Object(
+                d.into_iter()
+                    .filter(|(k, _)| k != "_id")
+                    .map(|(k, v)| (k, mongodb::bson::from_bson::<serde_json::Value>(v).unwrap_or_default()))
+                    .collect()
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Отметить прочитанным (новый формат: по user_id + id или все).
+    pub async fn mark_read_new(
+        db: &MongoClient,
+        user_id: &str,
+        notification_id: Option<&str>,
+    ) -> PlatformResult<u64> {
+        let mut filter = doc! {
+            "user_id": user_id,
+            "status": { "$nin": ["read", "archived"] },
+        };
+        if let Some(id) = notification_id {
+            filter.insert("_id", id);
+        }
+        let res = db.collection::<Document>(Self::COLLECTION)
+            .update_many(filter, doc! { "$set": { "status": "read", "read_at": mongodb::bson::DateTime::now() } })
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        Ok(res.modified_count)
+    }
+
+    /// Подсчёт непрочитанных (новый формат).
+    pub async fn count_unread_new(
+        db: &MongoClient,
+        user_id: &str,
+    ) -> PlatformResult<i64> {
+        db.collection::<Document>(Self::COLLECTION)
+            .count_documents(doc! {
+                "user_id": user_id,
+                "status": { "$nin": ["read", "archived"] },
+            })
+            .await
+            .map(|c| c as i64)
+            .map_err(|e| PlatformError::Database(e.to_string()))
+    }
+}

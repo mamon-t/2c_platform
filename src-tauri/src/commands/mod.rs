@@ -1637,11 +1637,13 @@ pub async fn list_object_versions(id: String, state: State<'_, Mutex<AppState>>)
 // ── Уведомления (in-app outbox) ──────────────────────────────
 
 #[tauri::command]
-pub async fn notifications_list(limit: Option<i64>, state: State<'_, Mutex<AppState>>) -> Result<Vec<crate::notify::NotificationOutbox>, String> {
-    let state = state.lock().await;
-    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    let user_id = crate::core::UserId(ctx.user._id);
-    crate::notify::service::NotificationStore::list_for_user(&ctx.db, &user_id, limit.unwrap_or(50))
+pub async fn notifications_list(limit: Option<i64>, state: State<'_, Mutex<AppState>>) -> Result<Vec<serde_json::Value>, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    let uid = ctx.user._id.to_string();
+    let db = ctx.db.clone();
+    drop(s);
+    crate::notify::service::NotificationStore::list_new(&db, &uid, limit.unwrap_or(50))
         .await
         .map_err(|e| e.to_string())
 }
@@ -1650,10 +1652,10 @@ pub async fn notifications_list(limit: Option<i64>, state: State<'_, Mutex<AppSt
 pub async fn notifications_mark_read(notification_id: Option<String>, state: State<'_, Mutex<AppState>>) -> Result<u64, String> {
     let state = state.lock().await;
     let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    let user_id = crate::core::UserId(ctx.user._id);
-    crate::notify::service::NotificationStore::mark_read(
+    let uid = ctx.user._id.to_string();
+    crate::notify::service::NotificationStore::mark_read_new(
         &ctx.db,
-        &user_id,
+        &uid,
         notification_id.as_deref(),
     )
     .await

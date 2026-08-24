@@ -3,7 +3,7 @@
   import { allNavItems } from '$lib/stores/navigation';
   import { auth, isAuthenticated, hasPermission, type AuthUser } from '$lib/stores/auth';
   import { get } from 'svelte/store';
-  import { api } from '$lib/services/api';
+  import { api, type NotificationItemTS } from '$lib/services/api';
   import type { DiagnosticsReport, Company, User, Role, UserProfile, Person, UserContact, UserCertificate } from '$lib/services/api';
   import { onMount } from 'svelte';
   import AuditPage from '$lib/components/AuditPage.svelte';
@@ -26,6 +26,9 @@ import TradePage from '$lib/components/TradePage.svelte';
   let loading = $state(true);
   let currentNav = $state('dashboard');
   let connected = $state(false);
+  let notifPanelOpen = $state(false);
+  let unreadCount = $state(0);
+  let notifications = $state<NotificationItemTS[]>([]);
   let currentUser = $state<User | null>(null);
   let authUserData = $state<AuthUser | null>(null);
 
@@ -37,6 +40,46 @@ import TradePage from '$lib/components/TradePage.svelte';
       hasPermission(authUserData.permissions, item.requiredPermission.subsystem, item.requiredPermission.action)
     )
   );
+
+  async function loadNotifications() {
+    if (!authUserData) return;
+    try {
+      unreadCount = await api.notificationsCountUnread();
+      if (notifPanelOpen) {
+        const raw = await api.notificationsList(30);
+        notifications = raw.map((n: any) => ({
+          _id: n._id, user_id: n.user_id, company_id: n.company_id,
+          notification_type: n.notification_type ?? 'module.notify',
+          severity: n.severity ?? 'info', title: n.title ?? '', body: n.body ?? '',
+          entity_ref: n.entity_ref ?? null,
+          status: n.status ?? 'delivered',
+          read_at: n.read_at ?? null,
+          created_at: n.created_at ?? '',
+        }));
+      }
+    } catch { /* тихо */ }
+  }
+
+  function toggleNotifPanel() {
+    notifPanelOpen = !notifPanelOpen;
+    if (notifPanelOpen) { loadNotifications(); }
+  }
+
+  async function markAllRead() {
+    try { await api.notificationsMarkRead(); await loadNotifications(); } catch {}
+  }
+
+  function sevColor(sev: string): string {
+    return sev === 'critical' ? 'text-error-600' : sev === 'warning' ? 'text-warning-600' : 'text-primary-500';
+  }
+  function sevIcon(sev: string): string {
+    return sev === 'critical' ? 'fa-solid fa-circle-exclamation' :
+           sev === 'warning' ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-info';
+  }
+  function fmtNotifTime(iso: string): string {
+    try { return new Date(iso).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }); }
+    catch { return ''; }
+  }
 
   // Login
   let loginLogin = $state('');
@@ -395,6 +438,13 @@ import TradePage from '$lib/components/TradePage.svelte';
     } catch (e: any) { resetPasswordError = typeof e === 'string' ? e : e?.message ?? 'Ошибка'; }
   }
 
+  onMount(() => {
+  });
+
+  $effect(() => {
+    if (connected && authUserData) { loadNotifications(); }
+  });
+
   onMount(async () => {
     theme.init();
     try {
@@ -423,6 +473,7 @@ import TradePage from '$lib/components/TradePage.svelte';
       localStorage.removeItem('2c-token');
       localStorage.removeItem('2c-company');
     } finally { loading = false; }
+
   });
 
   $effect(() => {
@@ -492,11 +543,46 @@ import TradePage from '$lib/components/TradePage.svelte';
         <span class="rounded-full px-2 py-0.5 text-xs font-medium {diagnostics?.mongodb.ok ? 'bg-success-500/20 text-success-700' : 'bg-error-500/20 text-error-700'}">
           DB {diagnostics?.mongodb.ok ? 'OK' : 'ERR'}
         </span>
+        {#if authUserData && unreadCount > 0}
+          <button onclick={toggleNotifPanel} class="relative rounded-lg p-2 text-surface-500-500 hover:bg-surface-200-800" title="Уведомления">
+            <i class="fa-solid fa-bell"></i>
+            <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-error-500 text-[10px] font-bold text-white">{unreadCount > 99 ? '99+' : unreadCount}</span>
+          </button>
+        {/if}
         <button onclick={() => theme.set($theme === 'dark' ? 'light' : 'dark')} class="rounded-lg p-2 text-surface-500-500 hover:bg-surface-200-800" title="Сменить тему">
           <i class="fa-solid {$theme === 'dark' ? 'fa-sun' : 'fa-moon'}"></i>
         </button>
       </div>
     </header>
+
+    <!-- Панель уведомлений -->
+    {#if notifPanelOpen}
+      <div class="fixed inset-0 z-40" onclick={() => notifPanelOpen = false} role="presentation"></div>
+      <div class="fixed right-4 top-14 z-50 w-96 max-h-[70vh] overflow-y-auto rounded-xl border border-surface-300-700 bg-surface-50-950 shadow-xl">
+        <div class="flex items-center justify-between p-3 border-b border-surface-300-700">
+          <h3 class="text-sm font-semibold"><i class="fa-solid fa-bell mr-1"></i> Уведомления</h3>
+          {#if notifications.some(n => n.status !== 'read')}
+            <button class="text-xs text-primary-600 hover:underline" onclick={markAllRead}>Прочитать все</button>
+          {/if}
+        </div>
+        <div class="max-h-80 overflow-y-auto divide-y divide-surface-200-700">
+          {#each notifications as n (n._id)}
+            <div class="p-3 {n.status !== 'read' ? 'bg-primary-50 dark:bg-primary-900/10' : ''}">
+              <div class="flex items-start gap-2">
+                <i class="{sevIcon(n.severity)} mt-0.5 {sevColor(n.severity)}"></i>
+                <div class="min-w-0">
+                  <div class="text-sm font-medium truncate">{n.title}</div>
+                  {#if n.body}<div class="text-xs text-surface-500 truncate">{n.body}</div>{/if}
+                  <div class="text-[10px] text-surface-400">{fmtNotifTime(n.created_at)}</div>
+                </div>
+              </div>
+            </div>
+          {:else}
+            <div class="p-6 text-center text-surface-400 text-sm">Уведомлений нет</div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <div class="p-6">
       {#if currentNav === 'dashboard'}

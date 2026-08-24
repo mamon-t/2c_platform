@@ -924,6 +924,15 @@ export const api = {
   async notificationsList(limit?: number): Promise<NotificationOutboxTS[]> {
     return getAdapter().invoke<NotificationOutboxTS[]>('notifications_list', { limit: limit ?? null });
   },
+  async notificationsCountUnread(): Promise<number> {
+    return getAdapter().invoke<number>('notifications_count_unread');
+  },
+  async notificationSubscriptionsList(): Promise<unknown[]> {
+    return getAdapter().invoke<unknown[]>('notification_subscriptions_list');
+  },
+  async notificationSubscriptionsUpsert(eventType: string, channels: string[], isMuted: boolean): Promise<void> {
+    return getAdapter().invoke<void>('notification_subscriptions_upsert', { eventType, channels, isMuted });
+  },
   async notificationsMarkRead(notificationId?: string): Promise<number> {
     return getAdapter().invoke<number>('notifications_mark_read', { notificationId: notificationId ?? null });
   },
@@ -1263,4 +1272,21 @@ export interface PriceOnDateTS {
   price_type_id: string;
   value: number;
   valid_from: string;
+}
+
+
+// ── Уведомления (новый формат) ──
+
+export interface NotificationItemTS {
+  _id: string;
+  user_id: string;
+  company_id: string;
+  notification_type: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  body: string;
+  entity_ref?: { entity_type: string; entity_id: string } | null;
+  status: string;
+  read_at?: string | null;
+  created_at: string;
 }
