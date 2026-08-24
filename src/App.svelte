@@ -15,6 +15,7 @@
   import DevicesPage from '$lib/components/DevicesPage.svelte';
 import StockPage from '$lib/components/StockPage.svelte';
 import TradePage from '$lib/components/TradePage.svelte';
+import MessagesPage from '$lib/components/MessagesPage.svelte';
   import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
   import NumberingPage from '$lib/components/NumberingPage.svelte';
@@ -982,6 +983,9 @@ import TradePage from '$lib/components/TradePage.svelte';
 
       {:else if currentNav === 'trade'}
         <TradePage />
+
+      {:else if currentNav === 'messages'}
+        <MessagesPage />
 
       {:else if currentNav === 'events'}
         <EventsPage />

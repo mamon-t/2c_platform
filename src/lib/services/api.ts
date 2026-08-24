@@ -1011,6 +1011,38 @@ export const api = {
     });
   },
 
+  // ── Сообщения (messaging) ──
+  async messagingRoomsList(roomType?: string): Promise<MessagingRoomPreviewTS[]> {
+    return getAdapter().invoke<MessagingRoomPreviewTS[]>('messaging_rooms_list', { roomType: roomType ?? null });
+  },
+  async messagingRoomsCreate(title: string, memberIds: string[], entityRef?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return getAdapter().invoke<Record<string, unknown>>('messaging_rooms_create', {
+      title, memberIds, entityRef: entityRef ?? null,
+    });
+  },
+  async messagingRoomsArchive(roomId: string): Promise<void> {
+    return getAdapter().invoke<void>('messaging_rooms_archive', { roomId });
+  },
+  async messagingMessagesSend(roomId: string, content: string, replyTo?: string): Promise<MessagingMessageTS> {
+    return getAdapter().invoke<MessagingMessageTS>('messaging_messages_send', {
+      roomId, content, replyTo: replyTo ?? null,
+    });
+  },
+  async messagingMessagesList(roomId: string, limit?: number): Promise<MessagingMessageTS[]> {
+    return getAdapter().invoke<MessagingMessageTS[]>('messaging_messages_list', {
+      roomId, limit: limit ?? null,
+    });
+  },
+  async messagingMessagesEdit(messageId: string, content: string): Promise<void> {
+    return getAdapter().invoke<void>('messaging_messages_edit', { messageId, content });
+  },
+  async messagingMessagesDelete(messageId: string): Promise<void> {
+    return getAdapter().invoke<void>('messaging_messages_delete', { messageId });
+  },
+  async messagingReadsUpdate(roomId: string, lastMessageId: string): Promise<void> {
+    return getAdapter().invoke<void>('messaging_reads_update', { roomId, lastMessageId });
+  },
+
   // ── Оборудование (devices) ──
   async devicesList(): Promise<DeviceListItemTS[]> {
     return getAdapter().invoke<DeviceListItemTS[]>('devices_list');
@@ -1288,5 +1320,39 @@ export interface NotificationItemTS {
   entity_ref?: { entity_type: string; entity_id: string } | null;
   status: string;
   read_at?: string | null;
+  created_at: string;
+}
+
+
+// ── Сообщения (messaging) ──
+
+export interface MessagingRoomTS {
+  _id: string;
+  company_id: string;
+  room_type: 'direct' | 'group' | 'document';
+  title?: string | null;
+  members: string[];
+  entity_ref?: Record<string, unknown> | null;
+  created_by: string;
+  created_at: string;
+  last_message_at?: string | null;
+  is_archived: boolean;
+}
+
+export interface MessagingRoomPreviewTS {
+  room: MessagingRoomTS;
+  last_message?: { content: string; author_id: string; created_at: string } | null;
+  unread_count: number;
+}
+
+export interface MessagingMessageTS {
+  _id: string;
+  company_id: string;
+  room_id: string;
+  author_id: string;
+  content: string;
+  reply_to?: string | null;
+  is_deleted: boolean;
+  edited_at?: string | null;
   created_at: string;
 }
