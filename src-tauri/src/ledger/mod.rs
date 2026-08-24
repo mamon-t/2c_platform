@@ -1,137 +1,178 @@
-use crate::core::*;
-use chrono::{DateTime, NaiveDate, Utc};
+//! Учёт — нативный движок двойной записи.
+//!
+//! Инварианты (гарантируются сервисом, живут нативно как движок склада):
+//! - каждая проводка сбалансирована (пара Дт/Кт, сумма одна);
+//! - счета существуют и активны;
+//! - проводка возможна только в ОТКРЫТЫЙ период её даты;
+//! - обороты по счетам наращиваются в `ledger_balances` той же транзакцией,
+//!   что и записи; сальдо вычисляется читателем по типу счёта.
+//!
+//! Счета в настройках торговли адресуются КОДАМИ ("41", "60"…);
+//! при проведении код резолвится в активный счёт компании.
+
+pub mod commands;
+pub mod handlers;
+pub mod indexes;
+pub mod service;
+
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+// ── Коллекции ──────────────────────────────────────────────
+
+pub const COL_ACCOUNTS: &str = "ledger_accounts";
+pub const COL_ENTRIES: &str = "ledger_entries";
+pub const COL_BALANCES: &str = "ledger_balances";
+pub const COL_PERIODS: &str = "accounting_periods";
+
+// ── План счетов ────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountType {
-    Asset,
-    Liability,
-    Equity,
-    Revenue,
-    Expense,
-    OffBalance,
+    Asset,     // актив
+    Liability, // пассив
+    Equity,    // капитал
+    Revenue,   // доход
+    Expense,   // расход
+    OffBalance, // забалансовый
 }
 
+impl AccountType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::Liability => "liability",
+            Self::Equity => "equity",
+            Self::Revenue => "revenue",
+            Self::Expense => "expense",
+            Self::OffBalance => "off_balance",
+        }
+    }
+
+    /// Сальдо по типу счёта: актив/расход — Дт минус Кт;
+    /// пассив/капитал/доход — Кт минус Дт. Забалансовые — обороты без сальдо.
+    pub fn balance_sign(&self) -> i64 {
+        match self {
+            Self::Asset | Self::Expense => 1,
+            Self::OffBalance => 1,
+            _ => -1,
+        }
+    }
+}
+
+/// Счёт плана счетов компании. Код уникален в рамках компании.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
-    pub _id: Id,
-    pub company_id: CompanyId,
+pub struct LedgerAccount {
+    #[serde(rename = "_id")]
+    pub id: crate::core::Id,
+    pub company_id: CompanyIdStr,
     pub code: String,
     pub name: String,
     pub account_type: AccountType,
-    pub parent_id: Option<Id>,
-    pub active: bool,
+    /// Родительский счёт (иерархия), опционально.
+    #[serde(default)]
+    pub parent_code: Option<String>,
+    pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
+/// Псевдоним для читаемости: компания хранится строкой UUID.
+pub type CompanyIdStr = String;
+
+// ── Проводка (пара Дт/Кт = один документ коллекции) ───────
+
+/// Одна корреспонденция счетов.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostingLine {
+    pub debit_code: String,
+    pub credit_code: String,
+    /// Сумма в минорных единицах (копейки), > 0.
+    pub amount: i64,
+    #[serde(default)]
+    pub nomenclature_id: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Запись журнала — одна корреспонденция. Группируется в постинг
+/// через posting_id; документ-источник — через doc_id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerEntry {
-    pub _id: Id,
-    pub company_id: CompanyId,
-    pub period_id: Id,
-    pub document_id: Option<Id>,
-    pub account_debit: Id,
-    pub account_credit: Id,
+    #[serde(rename = "_id")]
+    pub id: crate::core::Id,
+    pub company_id: CompanyIdStr,
+    /// "YYYY-MM"
+    pub period_key: String,
+    /// "YYYY-MM-DD"
+    pub date: String,
+    pub posting_id: String,
+    #[serde(default)]
+    pub doc_kind: Option<String>,
+    #[serde(default)]
+    pub doc_id: Option<String>,
+
+    pub debit_code: String,
+    pub credit_code: String,
     pub amount: i64,
-    pub date: NaiveDate,
+
+    /// Измерение для построчной себестоимости (возвраты покупателя).
+    #[serde(default)]
+    pub nomenclature_id: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
-    pub created_by: UserId,
+
+    #[serde(default)]
+    pub is_reversal: bool,
+
+    pub created_by: UserIdStr,
     pub created_at: DateTime<Utc>,
 }
 
+pub type UserIdStr = String;
+
+/// Обороты счёта за период. Сальдо считает читатель:
+/// sign(типа) × (Дт − Кт) накопленно по периодам ≤ целевого.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerBalance {
-    pub _id: Id,
-    pub company_id: CompanyId,
-    pub period_id: Id,
-    pub account_id: Id,
+    #[serde(rename = "_id")]
+    pub id: crate::core::Id,
+    pub company_id: CompanyIdStr,
+    /// "YYYY-MM"
+    pub period_key: String,
+    pub account_id: crate::core::Id,
+    pub account_code: String,
+    pub account_type: AccountType,
     pub debit_turnover: i64,
     pub credit_turnover: i64,
-    pub debit_balance: i64,
-    pub credit_balance: i64,
+    pub updated_at: DateTime<Utc>,
 }
 
+// ── Периоды ────────────────────────────────────────────────
+
+/// Учётный период (месяц).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountingPeriod {
-    pub _id: Id,
-    pub company_id: CompanyId,
+    #[serde(rename = "_id")]
+    pub id: crate::core::Id,
+    pub company_id: CompanyIdStr,
+    /// "YYYY-MM"
+    pub period_key: String,
     pub year: i32,
     pub month: u32,
     pub opened: bool,
-    pub opened_at: Option<DateTime<Utc>>,
     pub closed: bool,
-    pub closed_at: Option<DateTime<Utc>>,
+    /// RFC3339 строка (bson DateTime ≠ chrono serde)
+    pub created_at: String,
 }
 
-pub struct LedgerService;
-
-impl LedgerService {
-    pub fn new() -> Self {
-        Self
+impl AccountingPeriod {
+    pub fn period_key(year: i32, month: u32) -> String {
+        format!("{year:04}-{month:02}")
     }
+}
 
-    pub fn create_account(
-        &self,
-        company_id: CompanyId,
-        code: &str,
-        name: &str,
-        account_type: AccountType,
-    ) -> Account {
-        let now = Utc::now();
-        Account {
-            _id: uuid::Uuid::new_v4(),
-            company_id,
-            code: code.to_string(),
-            name: name.to_string(),
-            account_type,
-            parent_id: None,
-            active: true,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    pub fn create_entry(
-        &self,
-        company_id: CompanyId,
-        period_id: Id,
-        account_debit: Id,
-        account_credit: Id,
-        amount: i64,
-        date: NaiveDate,
-        created_by: UserId,
-    ) -> LedgerEntry {
-        LedgerEntry {
-            _id: uuid::Uuid::new_v4(),
-            company_id,
-            period_id,
-            document_id: None,
-            account_debit,
-            account_credit,
-            amount,
-            date,
-            description: None,
-            created_by,
-            created_at: Utc::now(),
-        }
-    }
-
-    /// Форматирование суммы: i64 минорные единицы -> строка "1 234,56"
-    pub fn format_amount(amount: i64, currency_decimals: u32) -> String {
-        let sign = if amount < 0 { "-" } else { "" };
-        let abs = amount.unsigned_abs();
-        let divisor = 10i64.pow(currency_decimals) as u64;
-        let whole = abs / divisor;
-        let frac = abs % divisor;
-
-        format!(
-            "{}{},{:0width$}",
-            sign,
-            whole,
-            frac,
-            width = currency_decimals as usize
-        )
-    }
+pub fn period_key_of_date(date: &str) -> String {
+    date.get(..7).unwrap_or("0000-00").to_string()
 }

@@ -8,7 +8,7 @@ mod crypto;
 pub mod db;
 mod devices;
 pub mod events;
-mod ledger;
+pub mod ledger;
 mod meta;
 mod modules;
 mod notify;
@@ -155,6 +155,11 @@ pub fn run() {
             stock::commands::signature_policies_upsert,
             stock::commands::signature_policies_delete,
             stock::commands::signature_required_for_doc,
+            ledger::commands::ledger_accounts_list,
+            ledger::commands::ledger_account_create,
+            ledger::commands::ledger_account_update,
+            ledger::commands::ledger_periods_list,
+            ledger::commands::ledger_period_set_state,
             commands::notifications_list,
             commands::notifications_mark_read,
             devices::commands::devices_list,

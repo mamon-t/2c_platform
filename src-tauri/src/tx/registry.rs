@@ -47,6 +47,7 @@ pub type ArcHandler = std::sync::Arc<dyn TxOpHandler>;
 fn registry() -> &'static HashMap<String, ArcHandler> {
     REGISTRY.get_or_init(|| {
         use super::handlers::{NoopHandler, ObjectCancelHandler, ObjectPostHandler};
+        use crate::ledger::handlers::{AccountingPostHandler, AccountingReverseHandler};
         use crate::stock::handlers::{
             BalancesHandler, CountHandler, HandoverHandler, HandoverReturnHandler,
             IssueHandler, ReceiptHandler, ReverseHandler, TransferHandler,
@@ -68,6 +69,10 @@ fn registry() -> &'static HashMap<String, ArcHandler> {
         put(&mut m, "stock.count", Arc::new(CountHandler));
         put(&mut m, "stock.balances", Arc::new(BalancesHandler));
         put(&mut m, "stock.reverse", Arc::new(ReverseHandler));
+
+        // ── Учёт ──
+        put(&mut m, "accounting.post", Arc::new(AccountingPostHandler));
+        put(&mut m, "accounting.reverse_by_doc", Arc::new(AccountingReverseHandler));
         m
     })
 }

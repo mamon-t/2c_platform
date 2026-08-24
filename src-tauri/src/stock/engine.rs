@@ -569,6 +569,7 @@ pub async fn reverse_document(
             "company_id": e.company_id.0.to_string(),
             "doc_id": doc_id,
             "is_reversal": { "$ne": true },
+            "reversed": { "$exists": false },
         })
         .sort(doc! { "created_at": -1 }) // LIFO
         .session(&mut *e.session)
