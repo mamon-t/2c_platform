@@ -16,7 +16,7 @@ mod objects;
 mod numbering;
 pub mod permission_policy;
 mod person;
-mod plugin_manager;
+pub mod plugin_manager;
 mod print;
 mod rhai;
 mod role;
@@ -147,6 +147,7 @@ pub fn run() {
             signing::commands::sign_document,
             signing::commands::verify_document_signature,
             signing::commands::create_test_certificate,
+            stock::commands::stock_seed_metadata,
             commands::notifications_list,
             commands::notifications_mark_read,
             devices::commands::devices_list,

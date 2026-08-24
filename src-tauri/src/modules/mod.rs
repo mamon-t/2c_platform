@@ -92,6 +92,10 @@ pub struct ModuleManifest {
     /// При install хост создаёт недостающие PermissionPolicy.
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Коды entity_type, чьё проведение оркестрирует модуль:
+    /// post_object/cancel_object делегируют on_post/on_cancel.
+    #[serde(default)]
+    pub handles_documents: Vec<String>,
     pub functions: Vec<ModuleFunction>,
 }
 

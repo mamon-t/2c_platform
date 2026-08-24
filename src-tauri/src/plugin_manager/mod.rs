@@ -25,6 +25,10 @@ pub struct ModuleInfo {
     pub version: String,
     pub source: String,
     pub functions: Vec<PluginFunction>,
+    /// Коды entity_type, проведение которых оркестрирует модуль
+    /// (post_object/cancel_object делегируют on_post/on_cancel).
+    #[serde(default)]
+    pub handled_documents: Vec<String>,
 }
 
 /// Единые коды ошибок host-функций (контракт Plugin SDK).
@@ -232,7 +236,7 @@ extism::host_fn!(list_objects_impl(user_data: HostData; entity_type_id: String, 
 
 // --- get_object (capability: objects.read) ---
 
-extism::host_fn!(get_object_impl(user_data: HostData; id: String) -> String {
+extism::host_fn!(pub get_object_impl(user_data: HostData; id: String) -> String {
     let hd = user_data.get()?.lock().unwrap().clone();
     if let Err(e) = check_capability(&hd, "get_object") {
         return Ok(e);
@@ -343,7 +347,7 @@ extism::host_fn!(update_object_impl(user_data: HostData; id: String, data: Strin
 
 // --- log_message (capability: logging) ---
 
-extism::host_fn!(log_message_impl(user_data: HostData; msg: String) -> String {
+extism::host_fn!(pub log_message_impl(user_data: HostData; msg: String) -> String {
     let hd = user_data.get()?.lock().unwrap().clone();
     if let Err(e) = check_capability(&hd, "log_message") {
         return Ok(e);
@@ -356,7 +360,7 @@ extism::host_fn!(log_message_impl(user_data: HostData; msg: String) -> String {
 
 // --- get_entity_type (capability: metadata.read) ---
 
-extism::host_fn!(get_entity_type_impl(user_data: HostData; id: String) -> String {
+extism::host_fn!(pub get_entity_type_impl(user_data: HostData; id: String) -> String {
     let hd = user_data.get()?.lock().unwrap().clone();
     if let Err(e) = check_capability(&hd, "get_entity_type") {
         return Ok(e);
@@ -476,10 +480,11 @@ impl WasmPlugin {
 
         let info = ModuleInfo {
             id: uuid::Uuid::new_v4().to_string(),
-            name: wasm_info.name,
+            name: wasm_info.name.clone(),
             version: wasm_info.version,
             source: "bytes".into(),
             functions: wasm_info.functions,
+            handled_documents: wasm_info.handled_documents,
         };
 
         tracing::info!(
@@ -526,6 +531,8 @@ pub struct WasmModuleInfo {
     pub name: String,
     pub version: String,
     pub functions: Vec<PluginFunction>,
+    #[serde(default)]
+    pub handled_documents: Vec<String>,
     /// Код модуля (если не указан — используется name).
     #[serde(default)]
     pub code: Option<String>,

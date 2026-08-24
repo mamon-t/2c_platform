@@ -1493,44 +1493,109 @@ pub async fn update_object(id: String, input: crate::objects::UpdateObjectInput,
 
 #[tauri::command]
 pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
-    let state = state.lock().await;
-    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    ctx.check_permission("documents.approve").map_err(|e| e.to_string())?;
-    let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let user = state.current_user.as_ref()
-        .ok_or_else(|| "Необходима авторизация".to_string())?;
-    let user_id = crate::core::UserId(user._id);
-    let company_id = state.current_company_id.as_ref()
-        .ok_or_else(|| "Не выбрана компания".to_string())?;
-    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let outcome = crate::objects::service::ObjectService::post(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::PostDocument,
-        target_id = outcome.result._id.to_string());
+
+    // Этап 1 (под локом): права, объект, код типа, поиск оркестратора
+    let (db, orchestrator) = {
+        let s = state.lock().await;
+        let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+        ctx.check_permission("documents.approve").map_err(|e| e.to_string())?;
+        let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
+
+        let obj = crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string())?;
+        let et_code = object_type_code(&db, &obj.entity_type_id).await;
+        let orchestrator = match et_code {
+            Some(code) => find_document_orchestrator(&s, &code),
+            None => None,
+        };
+        (db, orchestrator)
+    }; // лок отпущен до вызова плагина
+
+    // Этап 2а: делегирование оркестратору (пачка включает object.post)
+    if let Some(module_id) = orchestrator {
+        let out = crate::plugin_manager::commands::invoke_plugin(
+            &state,
+            &module_id,
+            "on_post",
+            serde_json::json!({"id": id, "expected_version": version}).to_string(),
+        ).await?;
+        check_plugin_envelope(&out)?;
+        return crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string());
+    }
+
+    // Этап 2б: обычное проведение
+    let user_id = {
+        let s = state.lock().await;
+        crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id)
+    };
+    let company_id = {
+        let s = state.lock().await;
+        let cid = s.current_company_id.as_ref().ok_or("Не выбрана компания")?;
+        crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?)
+    };
+    let outcome = {
+        let mut session_ctx = state.lock().await;
+        let db_ref = get_db!(session_ctx);
+        let actor = build_actor(&session_ctx);
+        crate::objects::service::ObjectService::post(db_ref, uid, version, user_id, actor, company_id).await.map_err(|e| e.to_string())?
+    };
+    {
+        let s = state.lock().await;
+        let db_ref = get_db!(s);
+        crate::audit_log!(s, db_ref, AuditableAction::PostDocument,
+            target_id = outcome.result._id.to_string());
+    }
     Ok(outcome.result)
 }
-
 #[tauri::command]
 pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
-    let state = state.lock().await;
-    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    ctx.check_permission("documents.cancel").map_err(|e| e.to_string())?;
-    let db = get_db!(state);
     let uid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let user = state.current_user.as_ref()
-        .ok_or_else(|| "Необходима авторизация".to_string())?;
-    let user_id = crate::core::UserId(user._id);
-    let company_id = state.current_company_id.as_ref()
-        .ok_or_else(|| "Не выбрана компания".to_string())?;
-    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
-    let actor = build_actor(&state);
-    let outcome = crate::objects::service::ObjectService::cancel(db, uid, version, user_id, actor, crate::core::CompanyId(cid)).await.map_err(|e| e.to_string())?;
-    crate::audit_log!(state, db, AuditableAction::CancelDocument,
-        target_id = outcome.result._id.to_string());
+
+    let (db, orchestrator) = {
+        let s = state.lock().await;
+        let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+        ctx.check_permission("documents.cancel").map_err(|e| e.to_string())?;
+        let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
+
+        let obj = crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string())?;
+        let et_code = object_type_code(&db, &obj.entity_type_id).await;
+        (db, et_code.and_then(|c| find_document_orchestrator(&s, &c)))
+    };
+
+    if let Some(module_id) = orchestrator {
+        let out = crate::plugin_manager::commands::invoke_plugin(
+            &state,
+            &module_id,
+            "on_cancel",
+            serde_json::json!({"id": id, "expected_version": version}).to_string(),
+        ).await?;
+        check_plugin_envelope(&out)?;
+        return crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string());
+    }
+
+    let user_id = {
+        let s = state.lock().await;
+        crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id)
+    };
+    let company_id = {
+        let s = state.lock().await;
+        let cid = s.current_company_id.as_ref().ok_or("Не выбрана компания")?;
+        crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?)
+    };
+    let outcome = {
+        let s = state.lock().await;
+        let db_ref = get_db!(s);
+        let actor = build_actor(&s);
+        crate::objects::service::ObjectService::cancel(db_ref, uid, version, user_id, actor, company_id).await.map_err(|e| e.to_string())?
+    };
+    {
+        let s = state.lock().await;
+        let db_ref = get_db!(s);
+        crate::audit_log!(s, db_ref, AuditableAction::CancelDocument,
+            target_id = outcome.result._id.to_string());
+    }
     Ok(outcome.result)
 }
-
 #[tauri::command]
 pub async fn restore_object_version(id: String, target_version: i64, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
@@ -1591,6 +1656,38 @@ pub async fn notifications_mark_read(notification_id: Option<String>, state: Sta
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+
+/// Код типа сущности объекта (для поиска оркестратора).
+async fn object_type_code(db: &crate::db::MongoClient, et_id: &str) -> Option<String> {
+    let id = uuid::Uuid::parse_str(et_id).ok()?;
+    crate::meta::service::EntityTypeService::get(db, id).await.ok().map(|t| t.code)
+}
+
+/// Найти включённый модуль-оркестратор для кода типа сущности.
+fn find_document_orchestrator(s: &AppState, entity_type_code: &str) -> Option<String> {
+    let modules = s.wasm_modules.as_ref()?;
+    for p in modules.values() {
+        let info = &p.lock().unwrap().info;
+        if info.handled_documents.iter().any(|c| c == entity_type_code) {
+            return Some(info.id.clone());
+        }
+    }
+    None
+}
+
+/// Конверт плагина {ok,data|error} → Result<(),String>.
+fn check_plugin_envelope(out: &str) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_str(out)
+        .map_err(|e| format!("ответ плагина невалиден: {e}"))?;
+    if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        let code = v["error"]["code"].as_str().unwrap_or("PLUGIN_ERROR");
+        let msg = v["error"]["message"].as_str().unwrap_or("");
+        Err(format!("{code}: {msg}"))
+    }
 }
 
 pub fn build_actor(state: &AppState) -> crate::events::ActorSnapshot {

@@ -76,6 +76,19 @@ pub async fn plugin_call(
     args_json: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<String, String> {
+    invoke_plugin(&state, &module_id, &function, args_json).await
+}
+
+/// Внутренний вызов функции загруженного WASM-модуля (для делегирования
+/// post_object/cancel_object оркестраторам).
+pub(crate) async fn invoke_plugin(
+    state: &Mutex<AppState>,
+    module_id: &str,
+    function: &str,
+    args_json: String,
+) -> Result<String, String> {
+    let module_id = module_id.to_string();
+    let function = function.to_string();
     let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display, fresh_role) = {
         let s = state.lock().await;
         let modules = s.wasm_modules.as_ref().ok_or("Нет загруженных WASM-модулей")?;

@@ -13,6 +13,7 @@
 //! универсальной коллекции objects через метамодель. Конвенции полей
 //! data см. `nomenclature::` и `location::` ниже.
 
+pub mod commands;
 pub mod engine;
 pub mod handlers;
 pub mod indexes;

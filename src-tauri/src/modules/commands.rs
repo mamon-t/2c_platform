@@ -89,6 +89,7 @@ pub async fn modules_install(
             .unwrap_or_else(|| format!("WASM модуль {} v{}", wasm_info.name, wasm_info.version)),
         capabilities: wasm_info.capabilities.clone(),
         permissions: wasm_info.permissions.clone(),
+        handles_documents: wasm_info.handled_documents.clone(),
         functions: wasm_info.functions.into_iter().map(|f| super::ModuleFunction {
             name: f.name,
             label: f.label,

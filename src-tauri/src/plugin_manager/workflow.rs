@@ -361,8 +361,15 @@ async fn load_policies(
         return Vec::new();
     };
     match RoleService::get(db, rid).await {
-        Ok(role) => RoleService::get_policies(db, &role).await.unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(role) => {
+            let p = RoleService::get_policies(db, &role).await.unwrap_or_default();
+            eprintln!("[tx] load_policies: role={} -> {} политик", role.code, p.len());
+            p
+        }
+        Err(e) => {
+            eprintln!("[tx] load_policies: роль {rid} не найдена: {e}");
+            Vec::new()
+        }
     }
 }
 
