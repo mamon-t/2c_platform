@@ -1,6 +1,6 @@
 # 2C Platform — Technical Report
 
-**Дата:** 25.08.2026 · **Версия:** 0.1.0 · **Состояние:** рабочий прототип
+**Дата:** 26.08.2026 · **Версия:** 0.1.0 · **Состояние:** рабочий прототип
 
 Снимок реализованного по коду для сверки с ТЗ v2.2/v2.3.
 
@@ -12,157 +12,127 @@
 |---|---|
 | Backend | Rust / Tauri v2 / Tokio / MongoDB(replSet) |
 | Backend модулей | **32** |
-| IPC-команд | **135** |
+| IPC-команд | **~140** |
 | Host-fn для WASM | **25** |
 | Mongo-коллекций | **38** |
 | Capabilities плагинов | **14** |
-| RBAC политик | **64** (20 подсистем) |
-| Аудит действий | **52** |
+| RBAC политик | **64+** (20 подсистем) |
+| Аудит действий | **52+** |
 | Операций tx_exec | **13** |
-| Фронтенд | Svelte 5 + TS · 16 компонентов · 115 API-методов |
+| Фронтенд | Svelte 5 + TS · 17 компонентов · 120+ API-методов |
 | Тестов | **56** (22 unit + 34 интеграционных) |
 
 Стек: Rust/Tokio/MongoDB/Tauri2 · Svelte5+TS+Vite8+Tailwind4+Skeleton · Extism/wasmtime · Rhai · Argon2id+JWT · КриптоПро CSP 5.0.
 
-Архитектура «Труба и Доски»: Event Store (неизменяемая лента) + Objects (материализованное состояние через метамодель). Гибридная модульность: ядро нейтрально; тяжёлые инварианты — нативные Rust-модули; оркестрация — WASM-плагины через `tx_exec`.
+Архитектура «Труба и Доски»: Event Store + Objects через метамодель. Гибридная модульность: ядро нейтрально; инварианты — нативные Rust; оркестрация — WASM через `tx_exec`.
 
 ---
 
-## 2. Backend
+## 2. Backend (32 модуля)
 
-### 2.1 Модули (32)
+### 2.1 Модули
 
 | Группа | Модули |
 |---|---|
-| Ядро | core(+middleware), db, actions, auth, events, audit |
-| Данные | objects(+validation), meta(6 коллекций), company, user, person, role, user_contact, user_profile, user_certificate, settings |
-| Безопасность | permission_policy(deny-by-default), signing(КриптоПро CMS) |
-| Плагины | plugin_manager(25 host-fn), modules(lifecycle), notify(outbox+projection), rhai(sandbox) |
-| Инфраструктура | tx(tx_exec), numbering(атомарные номера), print(шаблоны), devices(оборудование) |
-| Прикладные | stock(движок), trade(оркестратор), ledger(двойная запись), crypto(заготовка ЭЦП), commands(IPC hub) |
+| Ядро | core(+middleware), db, actions(COMMAND_MAP), auth(JWT), events(Event Store), audit(52 действия) |
+| Данные | objects(+validation), meta(6 типов метамодели), company, user, person, role, user_contact, user_profile, user_certificate, settings |
+| Безопасность | permission_policy(deny-by-default), signing(КриптоПро CMS), crypto(абстракция ЭЦП) |
+| Плагины | plugin_manager(25 host-fn), modules(lifecycle), notify(projection engine), rhai(sandbox) |
+| Инфраструктура | tx(tx_exec), numbering, print(шаблоны), devices(сканеры/весы), messaging(чаты) |
+| Прикладные | stock(FIFO движок), trade(оркестратор), ledger(двойная запись), commands(IPC hub) |
 
-### 2.2 IPC-команды (135)
+### 2.2 tx_exec — реестр операций (13)
 
-| Домен | Кол-во | Примеры |
-|---|---|---|
-| Метамодель CRUD | 32 | entity_types/fields/states/transitions/forms/actions + validate_entity_transition + execute_entity_action |
-| Диагностика/БД/Auth | 6 | get_diagnostics, connect_db, authenticate, get_me, switch_company, get_my_permissions |
-| Компании | 5 | CRUD |
-| Пользователи/Персона/Профили/Контакты/Сертификаты | 19 | CRUD + contacts types + certificates |
-| Роли | 4 | CRUD |
-| Политики доступа | 3 | list/create/delete |
-| Объекты | 8 | list/get/create/update/post/cancel/restore/list_versions |
-| Event Store | 3 | list_events/get_event/list_stream_events |
-| Аудит | 2 | list_audit_logs/get_audit_entry |
-| Rhai | 2 | validate/execute |
-| Печать | 6 | templates×5 + render |
-| Нумерация | 4 | list/get/update_format/reset |
-| WASM модули | 11 | wasm_load/unload/list/plugin_call + modules_list/get/install/uninstall/enable/disable/update_settings |
-| Подпись | 4 | list_crypto_certificates/sign_document/verify_document_signature/create_test_certificate |
-| Склад | 8 | seed_metadata/balances/report_handover/report_overdue/signature_policies×3/signature_required_for_doc |
-| Учёт | 8 | accounts_list/account_create/update/periods_list/period_set_state/osv/journal/card |
-| Торговля | 2 | trade_seed_metadata/trade_get_price |
-| Устройства | 9 | list/get/save/delete/connect/disconnect/test/list_ports/wedge_scan |
-| Уведомления | 7 | list/mark_read/count_unread/subscriptions×2/templates_list + notify_user host |
-| Настройки приложения | 4 | get/save_app_config/get/save_contact_types |
+`object.post/cancel`, `stock.receipt/issue/transfer/handover/handover_return/count/balances/reverse`, `accounting.post/reverse_by_doc`, `test.noop`
 
-### 2.3 tx_exec — транзакционные пачки
+Фазы: валидация → идемпотентный повтор → права пачки → txn → последовательное выполнение с `$ref` → журнал внутри txn → commit. Конкурентный E11000 → результат победителя. Лимиты ≤100 ops / 30 c.
 
-**Реестр операций (13):**
-`object.post`, `object.cancel`, `stock.receipt`, `stock.issue`, `stock.transfer`, `stock.handover`, `stock.handover_return`, `stock.count`, `stock.balances`, `stock.reverse`, `accounting.post`, `accounting.reverse_by_doc`, `test.noop`
-
-Фазы: валидация → идемпотентный повтор (`tx_journal` unique `(company_id, idempotency_key)`) → права пачки → txn → последовательное выполнение с `$ref`-подстановкой → журнал внутри txn → commit. Конкурентный дубликат E11000 → результат победителя.
-
-Лимиты: ≤100 ops / 30 c timeout. TransientTransactionError retry ×3.
-
-### 2.4 Plugin SDK ≥1.2
+### 2.3 Plugin SDK ≥1.2
 
 **Host-fn (25):**
 
 | Группа | Функции | Capability |
 |---|---|---|
-| Объекты | create_object, list_objects, get_object, update_object | objects.create/read/update |
-| Переходы | transition_object(post\|cancel) | objects.update |
+| Объекты | create_object, list_objects, get_object, update_object, transition_object(post\|cancel) | objects.* |
 | Метаданные | get_entity_type, list_entity_fields | metadata.read |
-| KV | kv_put, kv_get, kv_list, kv_delete, **kv_put_if_absent** | storage |
+| KV | kv_put, kv_get, kv_list, kv_delete, kv_put_if_absent | storage |
 | Workflow | run_script(source, ctx_json) | scripts |
 | Уведомления | notify_user(recipient, subject, body), users_by_role(role_id) | notifications |
 | Контекст | whoami() → {user_id, login, display_name, role_id, **role_ids[]**}, now_ms() | — |
-| Настройки | module_settings() → CompanyModule.settings JSON | — |
-| События | emit_event(stream_id, event_type, payload) | events.emit |
+| Настройки | module_settings() | — |
+| События | emit_event(stream_id, event_type, payload_json) — подключён projection engine | events.emit |
 | Подпись | signature_required(module, action, object_id), **cms_verify**(data_b64, sig_b64) | signature |
-| TX | tx_begin(key), tx_add_op(handle, op, params), tx_commit(handle) | transactions |
+| TX | tx_begin(key), tx_add_op(handle, op, params)→op_id, tx_commit(handle) | transactions |
 | Лог | log_message(msg) | logging |
 
-**Capabilities (14):** objects.create/read/update/delete, metadata.read, events.emit, numbering.next, logging, notifications, storage, scripts, transactions, signature
+**Манифест** = источник правды: code/version/api_version/capabilities[]/permissions[]/**handles_documents[]**/functions[]. `handles_documents` → post_object делегирует on_post/on_cancel плагину атомарно.
 
-**Манифест** = единственный источник правды: code/name/version/api_version/capabilities[]/permissions[]/handles_documents[]/functions[]. Хост ничего не хардкодит. `handles_documents` → post_object делегирует on_post/on_cancel плагину.
+### 2.4 Заявки (WASM `requests`)
 
-**Аудит KV**: kv_put/kv_delete пишут AuditEntry (ModuleKvPut/Delete).
+Маршруты согласования (этапы user/role, `requires_signature`). Серверная верификация CMS (cms_verify против каноничных строк). Слепок payload + sha256 + сертификат подписанта в шаге. Хуки Rhai из настроек модуля. События lifecycle в Трубу. Уведомления user и role-рассылка. Мультироли утверждающего. Гонка submit через kv_put_if_absent. Отмена инициатором.
 
-### 2.5 Заявки (WASM `requests`, референс SDK)
+### 2.5 Склад
 
-Маршруты согласования (этапы user/role, `requires_signature`). Серверная верификация CMS (cms_verify против каноничных строк). Слепок payload целиком + sha256 + сертификат подписанта. Хуки Rhai из настроек. События lifecycle в Трубу. Уведомления user и role-рассылка (users_by_role). Гонка submit через kv_put_if_absent. Мультироли утверждающего (пересечение role_ids[]). Отмена инициатором.
+Нативный движок session-aware: receipt / issue_fifo / transfer (+handover) / count / balances / reverse_document. FIFO по receipt_date, атомарный условный декремент. Строгое сторно с защитой от двойного сторно (`reversed_by`). Отрицательные остатки запрещены по умолчанию.
 
-### 2.6 Склад
+Оркестратор — WASM `stock`: handled_documents=[MOVE,COUNT,HANDOVER,HANDOVER_RETURN]. Подотчёт: отчёты «что у кого» и просрочки.
 
-Нативный движок session-aware: receipt (партии+движения+балансы), issue_fifo (FIFO, атомарный условный декремент, наборы→компоненты), transfer (цена/дата партии переезжают, handover фиксирует ответственного), count (излишек/недостача), balances, reverse_document (строгое сторно, защита от двойного сторно через reversed_by).
-
-Коллекции: stock_movements/batches/balances. Отрицательные остатки запрещены по умолчанию. Оркестратор — WASM `stock` (handled_documents=[MOVE,COUNT,HANDOVER,HANDOVER_RETURN]). Подотчёт: отчёты «что у кого» и просрочки.
-
-### 2.7 Учёт
+### 2.6 Учёт
 
 Двойная запись нативно (session-aware):
-- **План счетов** (`ledger_accounts`): код уникален per company, AccountType определяет знак сальдо, seed торговли (41/44/50/51/60/62/90.1/90.2)
-- **Проводки** (`ledger_entries`): пара Дт/Кт = документ; posting_id группирует; nomenclature_id — измерение для возвратов
+- **План счетов** (`ledger_accounts`): код per company, AccountType определяет знак сальдо, seed торговли (41/44/50/51/60/62/90.1/90.2), CRUD IPC
+- **Проводки** (`ledger_entries`): пара Дт/Кт = документ; posting_id группирует; nomenclature_id — измерение для возвратов; doc_kind/doc_id — ссылка на документ
 - **Обороты** (`ledger_balances`): unique (company, period_key, account_id); сальдо через AccountType::balance_sign
-- **Периоды** (`accounting_periods`): ensure при первой проводке, close/reopen (reopen = accounting.manage)
+- **Периоды** (`accounting_periods`): ensure при первой проводке, close/reopen (reopen = accounting.manage); проводка в закрытый → отказ
 - Операции tx_exec: `accounting.post` (Σ>0, Дт≠Кт, счета активны, период открыт) / `accounting.reverse_by_doc`
-- Отчёты: ОСВ, журнал проводок, карточка счёта
+- Отчёты: ОСВ (обороты+сальдо по типам счетов за период), журнал проводок, карточка счёта
 
-### 2.8 Торговля
+### 2.7 Торговля
 
-WASM-оркестратор поверх склада и учёта. Не хранит остатки.
+WASM-оркестратор поверх склада и учёта.
 - Справочники на Досках: COUNTERPARTY, PRICE_TYPE, PRICE (история цен через закрытие valid_to)
-- Частичные индексы objects (по entity_type UUID)
+- Частичные индексы objects (по entity_type UUID): counterparty(data.name, data.inn), price(unique code), price(nom+ptype+valid_from DESC)
 - Документы: PURCHASE/SALES/CUSTOMER_RETURN/SUPPLIER_RETURN
-- on_post: [stock.receipt/issue (+доп.расходы пропорционально) → accounting.post (счета из module_settings) → object.post] одной пачкой
+- on_post: [stock.receipt/issue (+доп.расходы пропорционально сумме строк) → accounting.post (счета из module_settings) → object.post] одной пачкой
+- on_cancel: [stock.reverse → accounting.reverse_by_doc → object.cancel]
 - use_accounting=false → без проводок
 - trade_get_price(nom, ptype, date) — нативное чтение цены на дату
+- События: trade.purchase_posted/sales_posted/customer_returned/supplier_returned/doc_cancelled
 
-### 2.9 Криптоподпись
+### 2.8 Криптоподпись
 
-КриптоПро CSP 5.0 (cpcsp-rs). CMS attached/detached ГОСТ Р 34.11-2012_256. Политики подписи (signature_policies): condition по категории номенклатуры, default OFF. cms_verify для серверной верификации. signature_ref в AuditEntry.
+КриптоПро CSP 5.0. CMS attached/detached ГОСТ Р 34.11-2012_256. Политики подписи (signature_policies) по категории номенклатуры, default OFF. cms_verify host-fn для серверной проверки. signature_ref в AuditEntry. Тестовый самоподписанный сертификат.
 
-### 2.10 Устройства
+### 2.9 Устройства
 
-Сканеры (wedge/serial), весы (regex из настроек). Насос: mpsc → Event Store (StreamType::Device) → Rhai scan_handler → Tauri-push. FiscalPrinter — v0.3.
+Сканеры (wedge/serial), весы (regex из настроек). Насос: mpsc → Event Store (StreamType::Device) → Rhai scan_handler → Tauri-push + notifications collection. FiscalPrinter — v0.3.
 
-### 2.11 RBAC
+### 2.10 RBAC и аудит
 
-Deny-by-default. Seed 64 политик / 20 подсистем: platform(1), companies(4), users(4), roles(4), contacts(5), documents(6), metadata(4), catalogs(4), reports(3), scripts(3), audit(1), settings(2), print(4), plugins(3), numbering(2), modules(2), devices(3), stock(3), accounting(3), trade(3), notifications(2). record_scope («company»/«own»).
+Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос). ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
 
-### 2.12 Аудит
+### 2.11 Уведомления
 
-52 действия. AuditEntry (11 полей incl. signature_ref, ModuleKvPut/Delete для аудита KV модулей). Запись warn-and-forget после коммита.
+Расширенная модель: severity(info/warning/critical), entity_ref({type,id}), channels[], metadata. Projection engine: событие из Трубы → шаблон → подписка → уведомление. Host-fn: notify_user, users_by_role. IPC: list/mark_read/count_unread/subscriptions/templates. UI: колокольчик + бейдж + dropdown панель (поллинг 30с).
 
 ---
 
 ## 3. Frontend (Svelte 5)
 
-16 компонентов · 20 nav пунктов · 115 api.ts методов · ~75 типов.
+17 компонентов · 20 nav пунктов · 120+ API-методов · ~75 типов.
 
 | Раздел | Компонент |
 |---|---|
-| Объекты/Документы | ObjectsPage + ObjectEditor (17 FieldKind, transitions, версии, вес с весов) |
-| Заявки | RequestsPage (маршруты, ЭЦП, timeline) |
-| Склад | StockPage (остатки, подотчёт, просрочки) |
-| Торговля | TradePage (ОСВ, журнал проводок) |
-| Устройства | DevicesPage (сканеры/весы, wedge, device-event журнал) |
+| Объекты/Документы/Справочники | ObjectsPage + ObjectEditor (17 FieldKind, transitions, версии, вес с весов, делегирование оркестратору) |
+| Заявки | RequestsPage (маршруты, ЭЦП, timeline, слепки подписи) |
+| Склад | StockPage (остатки, подотчёт, просрочки, seed) |
+| Торговля | TradePage (ОСВ, журнал проводок, seed) |
+| Сообщения | MessagesPage (rooms list, чат, групповые диалоги) |
+| Устройства | DevicesPage (карточки, COM-порты, wedge-тест, device-event журнал) |
 | Модули | ModulesPage (install/enable/disable, настройки счетов) |
-| Прочее | MetadataPage, EventsPage, AuditPage, PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
+| Прочее | MetadataPage, EventsPage, AuditPage (37 действий), PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
 
-Инфраструктура: адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures). pluginCall<T> — универсальный мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events через Tauri event.
+Инфраструктура: адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures). pluginCall<T> — мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events. Колокольчик уведомлений с поллингом 30с.
 
 ---
 
@@ -170,30 +140,31 @@ Deny-by-default. Seed 64 политик / 20 подсистем: platform(1), co
 
 | Набор | Кол-во | Покрытие | Гейт |
 |---|---|---|---|
-| unit | 22 | COMMAND_MAP, tx::validate/$ref, tx::session | — |
-| requests_plugin | 20 | Реальный wasm: маршруты/submit/approve/reject/подписи/мультироли/гонка/хуки | — |
-| stock_engine | 4 | FIFO, сторно, гонка списаний, перенос цены | TX_TEST_MONGO=1 |
-| tx_executor | 5 | Идемпотентность, конкурентность, rollback, $ref, deny-by-default | TX_TEST_MONGO=1 |
-| stock_orchestrator | 2 | E2E stock.wasm: MOVE post/cancel, политики подписи | TX_TEST_MONGO=1 |
-| ledger_test | 2 | Постинг+балансы+реверс, закрытый период | TX_TEST_MONGO=1 |
+| unit | 22 | COMMAND_MAP×4, tx::validate/$ref×14, tx::session×4 | — |
+| requests_plugin | 20 | requests.wasm: маршруты/submit/approve/reject/подписи(valid/invalid)/мультироли/гонка/рассылки/хуки | — |
+| stock_engine | 4 | FIFO математика ТЗ, сторно (частично съеденная партия отклоняется, двойное блокируется), перенос цены, гонка списаний | TX_TEST_MONGO=1 |
+| tx_executor | 5 | Идемпотентность, конкурентность, rollback, $ref-цепочка, deny-by-default | TX_TEST_MONGO=1 |
+| stock_orchestrator | 2 | E2E stock.wasm: MOVE post/cancel, политика подписи | TX_TEST_MONGO=1 |
+| ledger_test | 2 | Постинг+балансы+реверс+повтор отклонён; закрытый период | TX_TEST_MONGO=1 |
 | trade_orchestrator | 1 | E2E trade.wasm: демо п.11 ТЗ (поступление→реализация→COGS→сторно) | TX_TEST_MONGO=1 |
+
+Live-тесты: отдельные БД `*_test_*`/`*_e2e_*` с очисткой; `TX_TEST_MONGO=1` + `MONGODB_URI`.
 
 ---
 
 ## 5. Ограничения и задел
 
-| Область | Статус | План |
+| Область | Ограничение | План |
 |---|---|---|
-| ОСВ | Без входящих сальдо | По мере накопления |
+| ОСВ | Без входящих сальдо | По мере накопления данных |
 | ККМ | Не реализована | v0.3, права заложены |
 | Серийные номера | Количественный учёт | v0.2 |
-| Уведомления UI | Backend готов, бейдж/dropdown нет | v0.2 |
-| Email/Push каналы | InApp только | v0.2-v0.3 |
-| Messaging (чаты) | Не реализовано | v0.2 |
-| Эскалации | Хранятся, не исполняются | v0.2 |
-| WebSocket real-time | Поллинг | v0.3 |
-| object.patch op | Для записи себестоимости в строки документа | v0.2 |
+| Уведомления Email/Push | InApp только | v0.2-v0.3 |
+| Messaging real-time | Поллинг 15с | WebSocket v0.3 |
+| Эскалации | timeout_hours/is_required хранятся, не исполняются | v0.2 |
+| object.patch op | Для записи себестоимости в строки SALES | v0.2 |
 | Windows | Linux-first | По плану |
+| ConvertPage.svelte | Осиротевший компонент | Удалить или вернуть |
 
 ---
 
