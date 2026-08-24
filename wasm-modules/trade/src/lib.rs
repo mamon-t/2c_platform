@@ -117,7 +117,15 @@ struct Accounts {
 impl Accounts {
     fn from_settings(settings: &serde_json::Value) -> Self {
         let a = |k: &str| -> String {
-            settings["accounts"][k].as_str().unwrap_or("").to_string()
+            // Дефолтные коды типового торгового плана
+            let defaults = serde_json::json!({
+                "goods": "41", "supplier_settlements": "60",
+                "customer_settlements": "62", "revenue": "90.1",
+                "cogs": "90.2", "expenses_44": "44"
+            });
+            settings["accounts"][k].as_str()
+                .map(String::from)
+                .unwrap_or_else(|| defaults[k].as_str().unwrap_or("").to_string())
         };
         Self {
             use_accounting: settings.get("use_accounting")
@@ -304,7 +312,7 @@ pub fn on_post(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Value>
         "[trade] {} {} проведён атомарно", type_code, input.id
     )) };
 
-    Ok(Json(result))
+    Ok(Json(serde_json::json!({ "posted": true })))
 }
 
 // ── Типовые пачки ──────────────────────────────────────────

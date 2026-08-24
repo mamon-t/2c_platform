@@ -85,6 +85,36 @@ impl NotificationStore {
             .map_err(|e| PlatformError::Database(e.to_string()))?;
         Ok(res.modified_count)
     }
+
+    /// Сохранить уведомление (новая модель с severity/entity_ref).
+    pub async fn save_notification(
+        db: &MongoClient,
+        n: &crate::notify::Notification,
+    ) -> crate::core::PlatformResult<()> {
+        let mut d = mongodb::bson::to_document(n)
+            .map_err(|e| crate::core::PlatformError::Internal(e.to_string()))?;
+        d.insert("_id", n.id.to_string());
+        db.collection::<Document>(Self::COLLECTION)
+            .insert_one(d)
+            .await
+            .map_err(|e| crate::core::PlatformError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Количество непрочитанных уведомлений пользователя.
+    pub async fn count_unread(
+        db: &MongoClient,
+        user_id: &UserId,
+    ) -> crate::core::PlatformResult<i64> {
+        db.collection::<Document>(Self::COLLECTION)
+            .count_documents(doc! {
+                "user_id": user_id.0.to_string(),
+                "status": { "$nin": ["read", "archived"] },
+            })
+            .await
+            .map(|c| c as i64)
+            .map_err(|e| crate::core::PlatformError::Database(e.to_string()))
+    }
 }
 
 fn deserialize_notification(d: &Document) -> Option<NotificationOutbox> {
