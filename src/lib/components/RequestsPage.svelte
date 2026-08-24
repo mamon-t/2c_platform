@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, unwrapPlugin,
-    type EntityType, type Object as PlatformObject, type ObjectPage,
+  import { api,
+    type EntityType, type ObjectEntity as PlatformObject, type ObjectPage,
     type RequestRouteTS, type RequestApprovalTS, type RouteStepTS,
     type CertificateInfo, type PluginEnvelope,
   } from '$lib/services/api';
   import { auth, hasPermission } from '$lib/stores/auth';
+  import { canonicalSubmitPayload, canonicalDecisionPayload } from '$lib/utils/requestSignatures';
 
   const MODULE = 'requests';
 
@@ -23,7 +24,7 @@
   let certificates = $state<CertificateInfo[]>([]);
   let users = $state<{ _id: string; display_name: string }[]>([]);
   let roles = $state<{ _id: string; code: string; name: string }[]>([]);
-  let approvalsByRequest = $state<Record<string, RequestApprovalTS>>({});
+  let approvalsByRequest = $state<Record<string, RequestApprovalTS | null>>({});
 
   // Создание заявки
   let showCreate = $state(false);
@@ -73,7 +74,10 @@
         certificates = await api.listCryptoCertificates();
       } catch { certificates = []; }
       try {
-        [users, roles] = await Promise.all([api.usersList(), api.rolesList()]);
+        [users, roles] = await Promise.all([
+          api.listUsers(),
+          api.listRoles($auth?.companyId ?? ''),
+        ]);
       } catch { /* не критично */ }
 
       const rt = requestType();
@@ -84,20 +88,20 @@
         const pairs = await Promise.all(ids.map(async id => {
           try {
             const env = await api.pluginCall<RequestApprovalTS | null>(MODULE, 'approval_get', { request_id: id });
-            return [id, unwrapPlugin(env)] as const;
+            return [id, env] as const;
           } catch { return [id, null] as const; }
         }));
         approvalsByRequest = Object.fromEntries(pairs.filter(([, v]) => v));
       }
 
       try {
-        pendingApprovals = unwrapPlugin(await api.pluginCall<RequestApprovalTS[]>(MODULE, 'pending_approvals'));
+        pendingApprovals = await api.pluginCall(MODULE, 'pending_approvals');
       } catch (e) { pendingApprovals = []; if (!canSubmit()) throw e; }
       try {
-        allApprovals = unwrapPlugin(await api.pluginCall<RequestApprovalTS[]>(MODULE, 'all_approvals'));
+        allApprovals = await api.pluginCall(MODULE, 'all_approvals');
       } catch { allApprovals = []; }
       try {
-        routes = unwrapPlugin(await api.pluginCall<RequestRouteTS[]>(MODULE, 'routes_list'));
+        routes = await api.pluginCall(MODULE, 'routes_list');
       } catch (e) { routes = []; if (canManageRoutes()) throw e; }
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка загрузки';
@@ -174,10 +178,9 @@
           title: newReq.title.trim(),
           priority: newReq.priority,
           amount: newReq.amount ? Number(newReq.amount) : null,
-          deadline: newReq.deadline || null,
-          description: newReq.description || null,
+          deadline: newReq.deadline || undefined,
+          description: newReq.description || undefined,
         },
-        parent_id: null,
         date: new Date().toISOString().slice(0, 10),
       });
       showCreate = false;
@@ -225,7 +228,6 @@
         route_code: submitRouteCode,
         signature_der: sigB64,
       });
-      unwrapPlugin(env);
       submitTarget = null;
       notice = 'Отправлено на согласование';
       await load();
@@ -263,7 +265,6 @@
         comment: decideComment || null,
         signature_der: sigB64 ?? '',
       });
-      unwrapPlugin(env);
       decideTarget = null;
       notice = 'Решение принято';
       await load();
@@ -311,7 +312,6 @@
     error = '';
     try {
       const env = await api.pluginCall(MODULE, 'routes_save', { ...$state.snapshot(routeForm) });
-      unwrapPlugin(env);
       showRouteEditor = false;
       await load();
     } catch (e: any) {
@@ -322,7 +322,7 @@
   async function deleteRoute(code: string) {
     if (!confirm(`Удалить маршрут «${code}»?`)) return;
     try {
-      unwrapPlugin(await api.pluginCall(MODULE, 'routes_delete', { code }));
+      await api.pluginCall(MODULE, 'routes_delete', { code });
       await load();
     } catch (e: any) {
       error = typeof e === 'string' ? e : e?.message ?? 'Ошибка удаления';
@@ -333,7 +333,7 @@
   async function cancelApproval(requestId: string) {
     if (!confirm('Отменить процедуру согласования? Заявка останется черновиком.')) return;
     try {
-      unwrapPlugin(await api.pluginCall(MODULE, 'cancel_request', { request_id: requestId }));
+      await api.pluginCall(MODULE, 'cancel_request', { request_id: requestId });
       notice = 'Согласование отменено';
       await load();
     } catch (e: any) {
@@ -341,7 +341,7 @@
     }
   }
 
-  const meId = (): string => $auth?.user?._id ?? '';
+  const meId = (): string => $auth?.userId ?? '';
 </script>
 
 <div class="container mx-auto p-4 space-y-4">

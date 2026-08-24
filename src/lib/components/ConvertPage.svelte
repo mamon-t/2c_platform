@@ -108,13 +108,12 @@
     try {
       const arrayBuffer = await importFile.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuffer));
-      const args = JSON.stringify({
+      const raw = await api.pluginCall(importModuleId, importFn.name, {
         format: importFormat,
         file_data: bytes,
         entity_type_id: importEntityTypeId,
       });
-      const raw = await api.pluginCall(importModuleId, importFn.name, args);
-      importResult = JSON.parse(raw) as ImportResult;
+      importResult = raw as ImportResult;
       addLog(`Импорт: ${importResult.created}/${importResult.total} объектов`, importResult.errors.length === 0);
     } catch (e: any) {
       addLog(`Ошибка импорта: ${e}`, false);
@@ -128,12 +127,11 @@
     exporting = true;
     exportResult = null;
     try {
-      const args = JSON.stringify({
+      const raw = await api.pluginCall(exportModuleId, exportFn.name, {
         format: exportFormat,
         entity_type_id: exportEntityTypeId,
       });
-      const raw = await api.pluginCall(exportModuleId, exportFn.name, args);
-      exportResult = JSON.parse(raw) as ExportResult;
+      exportResult = raw as ExportResult;
       // Download the file
       const bytes = new Uint8Array(exportResult.data);
       const blob = new Blob([bytes], { type: exportResult.content_type });

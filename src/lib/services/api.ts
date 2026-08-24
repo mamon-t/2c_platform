@@ -635,10 +635,10 @@ export const api = {
   async listUserContacts(userId: string): Promise<UserContact[]> {
     return getAdapter().invoke<UserContact[]>('list_user_contacts', { userId });
   },
-  async createContact(input: { user_id: string; channel_type: string; value: string; is_primary?: boolean; purposes?: string[] }): Promise<UserContact> {
+  async createContact(input: { user_id: string; channel_type: string; value: string; is_primary?: boolean; purposes?: string[]; note?: string }): Promise<UserContact> {
     return getAdapter().invoke<UserContact>('create_contact', { input });
   },
-  async updateContact(id: string, input: { value?: string; is_primary?: boolean; is_verified?: boolean; purposes?: string[] }): Promise<UserContact> {
+  async updateContact(id: string, input: { value?: string; is_primary?: boolean; is_verified?: boolean; purposes?: string[]; note?: string }): Promise<UserContact> {
     return getAdapter().invoke<UserContact>('update_contact', { id, input });
   },
   async deleteContact(id: string): Promise<void> {
@@ -833,9 +833,6 @@ export const api = {
   async listWasmModules(): Promise<WasmModuleInfo[]> {
     return getAdapter().invoke<WasmModuleInfo[]>('wasm_list');
   },
-  async pluginCall(moduleId: string, func: string, argsJson: string): Promise<string> {
-    return getAdapter().invoke<string>('plugin_call', { moduleId, func, argsJson });
-  },
 
   // ── Печатные формы ──
   async printListTemplates(entityType: string, formCode?: string): Promise<PrintTemplate[]> {
@@ -895,12 +892,32 @@ export const api = {
   },
 
   // ── Универсальный мост к WASM-модулям ──
-  async pluginCall<T = unknown>(moduleId: string, fnName: string, args: Record<string, unknown> = {}): Promise<PluginEnvelope<T>> {
-    return getAdapter().invoke<PluginEnvelope<T>>('plugin_call', {
+  /**
+   * Вызвать функцию WASM-модуля. Возвращает РАЗОБРАННЫЙ вывод гостя.
+   * Если гость вернул конверт {ok, data|error} (новый контракт SDK) —
+   * он разворачивается; ошибка конверта бросается как исключение.
+   * Иначе возвращается сырой JSON-вывод (совместимость с convert).
+   */
+  async pluginCall<T = unknown>(moduleId: string, fnName: string, args: Record<string, unknown> = {}): Promise<T> {
+    const out = await getAdapter().invoke<string>('plugin_call', {
       moduleId,
       function: fnName,
       argsJson: JSON.stringify(args),
     });
+    let v: unknown;
+    try { v = JSON.parse(out); } catch { return out as T; }
+    if (
+      v && typeof v === 'object' && !Array.isArray(v) &&
+      'ok' in v && typeof (v as PluginEnvelope<unknown>).ok === 'boolean'
+    ) {
+      const env = v as PluginEnvelope<T>;
+      if (!env.ok) {
+        const err = env.error;
+        throw new Error(err ? `${err.code}: ${err.message}` : 'Ошибка модуля');
+      }
+      return env.data as T;
+    }
+    return v as T;
   },
 
   // ── Уведомления (in-app outbox) ──
