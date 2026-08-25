@@ -226,3 +226,89 @@ pub(crate) async fn invoke_plugin(
         Err(_) => Err(format!("Плагин '{}' таймаут {}ms", function, PLUGIN_TIMEOUT_MS)),
     }
 }
+
+// ── Pre-load всех активных модулей компании после логина ──────
+
+#[derive(serde::Serialize)]
+pub struct PreloadResult {
+    pub loaded: u32,
+    pub errors: Vec<PreloadError>,
+    pub elapsed_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct PreloadError {
+    pub code: String,
+    pub error: String,
+}
+
+#[tauri::command]
+pub async fn preload_company_modules(
+    state: State<'_, Mutex<AppState>>,
+) -> Result<PreloadResult, String> {
+    let t0 = std::time::Instant::now();
+    let (db, company_id) = {
+        let s = state.lock().await;
+        let db = s.db.clone().ok_or("Нет подключения к БД")?;
+        let cid = s.current_company_id.clone().ok_or("Не выбрана компания")?;
+        (db, cid)
+    };
+
+    let cid = crate::core::CompanyId(
+        uuid::Uuid::parse_str(&company_id).map_err(|e| format!("Невалидный company_id: {e}"))?,
+    );
+    let enabled = crate::modules::service::ModuleService::list_enabled(&db, &cid)
+        .await
+        .map_err(|e| format!("Ошибка загрузки списка модулей: {e}"))?;
+
+    let mut loaded = 0u32;
+    let mut errors = Vec::new();
+
+    for inst in enabled {
+        // Пропустить уже загруженные
+        {
+            let s = state.lock().await;
+            if s.wasm_modules.as_ref().map_or(false, |m| m.contains_key(&inst.code)) {
+                loaded += 1;
+                continue;
+            }
+        }
+
+        let ctx = Arc::new(RwLock::new(PluginContext {
+            company_id: Some(company_id.clone()),
+            user_id: None,
+            user_login: None,
+            display_name: None,
+            role_id: None,
+            role_ids: Vec::new(),
+        }));
+        let host_data = HostData {
+            db: Some(db.clone()),
+            ctx,
+            module_code: Some(inst.code.clone()),
+            capabilities: inst.capabilities.clone(),
+        };
+
+        match WasmPlugin::load(inst.wasm_bytes, inst.code.clone(), host_data).await {
+            Ok(plugin) => {
+                let arc = Arc::new(StdMutex::new(plugin));
+                let mut s = state.lock().await;
+                let map = s.wasm_modules.get_or_insert_with(HashMap::new);
+                map.insert(inst.code.clone(), arc.clone());
+                map.insert(inst.id.to_string(), arc);
+                loaded += 1;
+            }
+            Err(e) => {
+                tracing::error!(
+                    "[Pre-load] Ошибка загрузки модуля {}: {}\nBacktrace:\n{}",
+                    inst.code, e, std::backtrace::Backtrace::force_capture()
+                );
+                errors.push(PreloadError { code: inst.code, error: e });
+            }
+        }
+    }
+
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    tracing::info!("[Pre-load] Загружено модулей: {loaded}, ошибок: {}, за {elapsed_ms}ms", errors.len());
+    Ok(PreloadResult { loaded, errors, elapsed_ms })
+}

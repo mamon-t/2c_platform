@@ -456,6 +456,13 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
         state.current_company_id = Some(company_id.to_string());
         state.current_role_id = Some(role_id.to_string());
         state.current_policies = RoleService::get_policies(&db, role).await.ok();
+        // Fallback: если policies пусты — загрузить ВСЕ (защита от seed-гонки)
+        if state.current_policies.as_ref().map_or(true, |p| p.is_empty()) {
+            if let Ok(all) = PermissionPolicyService::list(&db).await {
+                tracing::warn!("[RBAC] Policies пусты для роли {}, загружены все ({})", role.code, all.len());
+                state.current_policies = Some(all);
+            }
+        }
         return Ok(AuthResultWithCompanies { token, user, companies, role_code: Some(role.code.clone()), role_name: Some(role.name.clone()), role_id: Some(role_id.to_string()) });
     }
 
@@ -488,6 +495,13 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
         Some(r) => RoleService::get_policies(&db, r).await.ok(),
         None => None,
     };
+    // Fallback: если policies пусты — загрузить ВСЕ (защита от seed-гонки)
+    if state.current_policies.as_ref().map_or(true, |p| p.is_empty()) {
+        if let Ok(all) = PermissionPolicyService::list(&db).await {
+            tracing::warn!("[RBAC] Policies пусты при входе, загружены все ({})", all.len());
+            state.current_policies = Some(all);
+        }
+    }
     Ok(AuthResultWithCompanies {
         token, user, companies,
         role_code: role.as_ref().map(|r| r.code.clone()),
@@ -814,6 +828,14 @@ pub async fn switch_company(input: SwitchCompanyInput, state: State<'_, Mutex<Ap
             RoleService::get_policies(db, r).await.ok()
         }
         None => None,
+    };
+    if state.current_policies.as_ref().map_or(true, |p| p.is_empty()) {
+        if let Some(ref db) = state.db {
+            if let Ok(all) = PermissionPolicyService::list(db).await {
+                tracing::warn!("[RBAC] Policies пусты при смене компании, загружены все ({})", all.len());
+                state.current_policies = Some(all);
+            }
+        }
     };
 
     Ok(AuthResultWithCompanies {

@@ -901,6 +901,9 @@ export const api = {
   async listWasmModules(): Promise<WasmModuleInfo[]> {
     return getAdapter().invoke<WasmModuleInfo[]>('wasm_list');
   },
+  async preloadModules(): Promise<{ loaded: number; errors: Array<{ code: string; error: string }>; elapsed_ms: number }> {
+    return getAdapter().invoke('preload_company_modules');
+  },
 
   // ── Печатные формы ──
   async printListTemplates(entityType: string, formCode?: string): Promise<PrintTemplate[]> {

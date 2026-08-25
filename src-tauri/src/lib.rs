@@ -133,6 +133,7 @@ pub fn run() {
             plugin_manager::commands::wasm_load,
             plugin_manager::commands::wasm_unload,
             plugin_manager::commands::wasm_list,
+            plugin_manager::commands::preload_company_modules,
             plugin_manager::commands::plugin_call,
             print::commands::print_list_templates,
             print::commands::print_get_template,

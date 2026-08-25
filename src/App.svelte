@@ -7,7 +7,7 @@
   import { auth, isAuthenticated, hasPermission, type AuthUser } from '$lib/stores/auth';
   import { get } from 'svelte/store';
   import { api, type DiagnosticsReport, type User, type SavedConnection } from '$lib/services/api';
-  import { toastSuccess } from '$lib/components/ui/toast';
+  import { toastSuccess, toastError } from '$lib/components/ui/toast';
   import { onMount } from 'svelte';
 
   import AuditPage from '$lib/components/AuditPage.svelte';
@@ -48,6 +48,28 @@
   let connections = $state<SavedConnection[]>([]);
   let currentDbUri = $state('');
   let showConnections = $state(false);
+
+  // Состояние свёрнутых групп сайдбара (хранится в localStorage)
+  const STORAGE_KEY = '2c-sidebar-collapsed-groups';
+  function loadCollapsed(): Set<string> {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]');
+      if (Array.isArray(stored) && stored.length > 0) return new Set(stored);
+    } catch { /* ignore */ }
+    // Первый запуск: инициализировать из defaultCollapsed
+    const defaults = new Set<string>();
+    for (const item of allNavItems) {
+      if (item.group && item.defaultCollapsed) defaults.add(item.group);
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...defaults]));
+    return defaults;
+  }
+  let collapsedGroups = $state(loadCollapsed());
+  function toggleGroup(group: string) {
+    collapsedGroups = new Set(collapsedGroups);
+    if (collapsedGroups.has(group)) collapsedGroups.delete(group); else collapsedGroups.add(group);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsedGroups]));
+  }
 
   let filteredNavItems = $derived(
     allNavItems.filter(item =>
@@ -133,6 +155,13 @@
       });
       authUserData = get(auth);
       currentUser = result.user;
+      // Pre-load WASM-модулей для компании (бесшовно, ошибки — в toast)
+      api.preloadModules().then((r) => {
+        if (r.errors.length > 0) {
+          const msg = r.errors.map((e) => `${e.code}: ${e.error}`).join('\n');
+          toastError(`Ошибки загрузки модулей:\n${msg}`);
+        }
+      }).catch(() => { /* тихо при offline */ });
       return null;
     } catch (e) {
       return typeof e === 'string' ? e : (e as Error)?.message ?? 'Ошибка авторизации';
@@ -159,6 +188,8 @@
       }
       authUserData = get(auth);
       currentUser = result.user;
+      // Pre-load модулей для новой компании
+      api.preloadModules().catch(() => { /* тихо */ });
     } catch (e) {
       console.error('Ошибка смены компании:', e);
     }
@@ -289,13 +320,22 @@
       <nav class="flex-1 overflow-y-auto p-2">
         {#each filteredNavItems as item, i (item.code)}
           {#if item.group && filteredNavItems[i - 1]?.group !== item.group}
-            <div class="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-surface-400">{item.group}</div>
+            {@const isCollapsed = collapsedGroups.has(item.group)}
+            <button
+              onclick={() => toggleGroup(item.group!)}
+              class="flex w-full items-center gap-1.5 px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-surface-400 hover:text-surface-600-400"
+            >
+              <i class="fa-solid fa-chevron-right text-[9px] transition-transform {isCollapsed ? '' : 'rotate-90'}"></i>
+              {item.group}
+            </button>
           {/if}
-          <button onclick={() => setNav(item.code)} aria-label={item.label}
-            class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {currentNav === item.code ? 'bg-primary-500/10 font-medium text-primary-600' : 'text-surface-600-400 hover:bg-surface-200-800'}">
-            <i class="{item.icon} w-5 text-center text-lg"></i>
-            {#if !sidebarCollapsed}<span>{item.label}</span>{/if}
-          </button>
+          {#if !item.group || !collapsedGroups.has(item.group)}
+            <button onclick={() => setNav(item.code)} aria-label={item.label}
+              class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {currentNav === item.code ? 'bg-primary-500/10 font-medium text-primary-600' : 'text-surface-600-400 hover:bg-surface-200-800'}">
+              <i class="{item.icon} w-5 text-center text-lg"></i>
+              {#if !sidebarCollapsed}<span>{item.label}</span>{/if}
+            </button>
+          {/if}
         {/each}
       </nav>
       {#if currentUser && (get(auth)?.companies?.length ?? 0) > 1 && !sidebarCollapsed}

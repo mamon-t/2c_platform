@@ -7,8 +7,10 @@ export interface NavItem {
   icon: string;
   path: string;
   requiredPermission?: { subsystem: string; action: string };
-  /** Заголовок секции в сайдбаре (рисуется при смене группы у соседа). */
+  /** Заголовок секции в сайдбаре. */
   group?: string;
+  /** Свёрнута ли группа по умолчанию. */
+  defaultCollapsed?: boolean;
 }
 
 export const allNavItems: NavItem[] = [
@@ -21,9 +23,10 @@ export const allNavItems: NavItem[] = [
   { code: 'objects', label: 'Все объекты', icon: 'fa-solid fa-cube', path: '/objects', group: 'Справочники' },
   { code: 'reports', label: 'Отчёты', icon: 'fa-solid fa-chart-bar', path: '/reports', requiredPermission: { subsystem: 'reports', action: 'read' }, group: 'Отчёты' },
   { code: 'messages', label: 'Сообщения', icon: 'fa-solid fa-comments', path: '/messages', group: 'Обслуживание' },
-  { code: 'events', label: 'События', icon: 'fa-solid fa-bolt', path: '/events', requiredPermission: { subsystem: 'audit', action: 'read' }, group: 'Обслуживание' },
+  // События — скрыты из основного меню (Event Store для разработчиков)
+  // { code: 'events', label: 'События', icon: 'fa-solid fa-bolt', path: '/events', requiredPermission: { subsystem: 'audit', action: 'read' }, group: 'Обслуживание' },
   { code: 'audit', label: 'Журнал', icon: 'fa-solid fa-clock-rotate-left', path: '/audit', requiredPermission: { subsystem: 'audit', action: 'read' }, group: 'Обслуживание' },
-  { code: 'companies', label: 'Компании', icon: 'fa-solid fa-building', path: '/companies', requiredPermission: { subsystem: 'companies', action: 'read' }, group: 'Администрирование' },
+  { code: 'companies', label: 'Компании', icon: 'fa-solid fa-building', path: '/companies', requiredPermission: { subsystem: 'companies', action: 'read' }, group: 'Администрирование', defaultCollapsed: true },
   { code: 'users', label: 'Пользователи', icon: 'fa-solid fa-users', path: '/users', requiredPermission: { subsystem: 'users', action: 'read' }, group: 'Администрирование' },
   { code: 'roles', label: 'Роли', icon: 'fa-solid fa-shield-halved', path: '/roles', requiredPermission: { subsystem: 'roles', action: 'read' }, group: 'Администрирование' },
   { code: 'metadata', label: 'Метаданные', icon: 'fa-solid fa-database', path: '/metadata', requiredPermission: { subsystem: 'settings', action: 'manage' }, group: 'Администрирование' },
