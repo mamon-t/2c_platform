@@ -872,6 +872,9 @@ export const api = {
   async getObject(id: string): Promise<ObjectEntity> {
     return getAdapter().invoke<ObjectEntity>('get_object', { id });
   },
+  async searchObjectByField(entityTypeId: string, fieldCode: string, value: string): Promise<ObjectEntity | null> {
+    return getAdapter().invoke<ObjectEntity | null>('search_object_by_field', { entityTypeId, fieldCode, value });
+  },
   async createObject(input: { entity_type_id: string; data: Record<string, unknown>; parent_id?: string; date?: string }): Promise<ObjectEntity> {
     return getAdapter().invoke<ObjectEntity>('create_object', { input });
   },

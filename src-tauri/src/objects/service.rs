@@ -545,7 +545,15 @@ impl ObjectService {
 
         if let Some(ref et) = filters.entity_type_id { f.insert("entity_type_id", et); }
         if let Some(ref s) = filters.state { f.insert("state", s); }
-        if let Some(ref pid) = filters.parent_id { f.insert("parent_id", pid); }
+        if let Some(ref s) = filters.parent_id { f.insert("parent_id", s); }
+
+        // Текстовый поиск по data.name (case-insensitive regex)
+        if let Some(ref q) = filters.search {
+            if !q.is_empty() {
+                let regex = doc! { "$regex": q, "$options": "i" };
+                f.insert("data.name", regex.clone());
+            }
+        }
 
         let limit = filters.limit.unwrap_or(50).min(200);
         let offset = filters.offset.unwrap_or(0).max(0);

@@ -1531,6 +1531,44 @@ pub async fn list_objects(filters: crate::objects::ObjectFilters, state: State<'
     crate::objects::service::ObjectService::list(db, crate::core::CompanyId(cid), filters).await.map_err(|e| e.to_string())
 }
 
+/// Точный поиск объекта по значению поля в data (для разрешения ссылок при импорте).
+#[tauri::command]
+pub async fn search_object_by_field(
+    entity_type_id: String,
+    field_code: String,
+    value: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Option<crate::objects::Object>, String> {
+    let state = state.lock().await;
+    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+    ctx.check_permission("documents.read").map_err(|e| e.to_string())?;
+    let db = get_db!(state);
+    let company_id = state.current_company_id.as_ref()
+        .ok_or_else(|| "Не выбрана компания".to_string())?;
+    let cid = uuid::Uuid::parse_str(company_id).map_err(|e| e.to_string())?;
+    let search_value = value.clone();
+    let filters = crate::objects::ObjectFilters {
+        entity_type_id: Some(entity_type_id),
+        search: Some(value),
+        limit: Some(5),
+        ..Default::default()
+    };
+    let page = crate::objects::service::ObjectService::list(db, crate::core::CompanyId(cid), filters).await.map_err(|e| e.to_string())?;
+    // Точный матч: ищем объект, у которого data[field_code] == search_value (без учёта регистра)
+    for obj in &page.objects {
+        if let Some(val) = obj.data.get(&field_code) {
+            let match_str = match val {
+                serde_json::Value::String(s) => s.eq_ignore_ascii_case(&search_value),
+                _ => val.to_string().eq_ignore_ascii_case(&search_value),
+            };
+            if match_str {
+                return Ok(Some(obj.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn get_object(id: String, state: State<'_, Mutex<AppState>>) -> Result<crate::objects::Object, String> {
     let state = state.lock().await;
