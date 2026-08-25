@@ -1074,6 +1074,12 @@ export const api = {
   async ledgerAccountsList(): Promise<unknown[]> {
     return getAdapter().invoke<unknown[]>('ledger_accounts_list');
   },
+  async ledgerAccountCreate(code: string, name: string, accountType: string, parentCode?: string): Promise<void> {
+    return getAdapter().invoke<void>('ledger_account_create', { code, name, accountType, parentCode: parentCode ?? null });
+  },
+  async ledgerAccountUpdate(code: string, name?: string, isActive?: boolean): Promise<void> {
+    return getAdapter().invoke<void>('ledger_account_update', { code, name: name ?? null, isActive: isActive ?? null });
+  },
   async ledgerGetOpeningBalances(periodKey: string): Promise<LedgerOpeningBalanceTS[]> {
     return getAdapter().invoke<LedgerOpeningBalanceTS[]>('ledger_get_opening_balances', { periodKey });
   },

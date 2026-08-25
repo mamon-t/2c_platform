@@ -19,6 +19,8 @@
   import DevicesPage from '$lib/components/DevicesPage.svelte';
   import StockPage from '$lib/components/StockPage.svelte';
   import TradePage from '$lib/components/TradePage.svelte';
+  import OsvPage from '$lib/components/screens/OsvPage.svelte';
+  import LedgerAccountsPage from '$lib/components/screens/LedgerAccountsPage.svelte';
   import MessagesPage from '$lib/components/MessagesPage.svelte';
   import ModulesPage from '$lib/components/ModulesPage.svelte';
   import PrintPage from '$lib/components/PrintPage.svelte';
@@ -285,6 +287,10 @@
           <DevicesPage />
         {:else if currentNav === 'stock'}
           <StockPage />
+        {:else if currentNav === 'osv'}
+          <OsvPage />
+        {:else if currentNav === 'ledger_accounts'}
+          <LedgerAccountsPage />
         {:else if currentNav === 'trade'}
           <TradePage />
         {:else if currentNav === 'messages'}
