@@ -266,6 +266,22 @@ impl LedgerService {
         period_key: &str,
         rows: &[SaveOpeningBalanceInput],
     ) -> PlatformResult<()> {
+        // Проверяем что период открыт
+        let period_col = db.collection::<Document>(COL_PERIODS);
+        let period = period_col.find_one(doc! {
+            "company_id": company_id.0.to_string(),
+            "period_key": period_key,
+        }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        if let Some(p) = &period {
+            if p.get_bool("closed").unwrap_or(false) {
+                return Err(PlatformError::Validation(format!(
+                    "период {period_key} закрыт — входящие сальдо нельзя изменить"
+                )));
+            }
+        }
+        // Если периода нет — это нормально, он создастся при необходимости
+
         let col = db.collection::<Document>(COL_BALANCES);
         let mut session = db.client().start_session().await
             .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
@@ -276,6 +292,14 @@ impl LedgerService {
             // Резолвим счёт
             let acc = Self::get_active_by_code(db, company_id, &row.account_code).await?;
 
+            // Натуральное хранение: пользователь вводит 1000 (кредиторка) → храним -1000,
+            // 500 (дебиторка) → храним 500. Это позволяет closing = opening + (dt − ct)
+            // работать единообразно для всех типов счетов.
+            let natural = match acc.account_type {
+                AccountType::Liability | AccountType::Equity | AccountType::Revenue => -row.opening_balance,
+                _ => row.opening_balance,
+            };
+
             let filter = doc! {
                 "company_id": company_id.0.to_string(),
                 "period_key": period_key,
@@ -283,7 +307,7 @@ impl LedgerService {
             };
             let update = doc! {
                 "$set": {
-                    "opening_balance": row.opening_balance,
+                    "opening_balance": natural,
                     "account_code": &acc.code,
                     "account_type": acc.account_type.as_str(),
                     "updated_at": mongodb::bson::DateTime::now(),
@@ -309,7 +333,7 @@ impl LedgerService {
     }
 
     /// Закрыть период с переносом исходящих сальдо в следующий.
-    /// Вычисляет closing_balance = opening + sign*(Dт-Кт) для каждого счёта,
+    /// Вычисляет closing = opening + (Дт − Кт) для каждого счёта,
     /// записывает его как opening_balance периода+1.
     pub async fn close_period_with_carry_forward(
         db: &MongoClient,
@@ -335,14 +359,13 @@ impl LedgerService {
         let mut entries = Vec::new();
         while let Some(Ok(d)) = cursor.next().await {
             let acc_type_str = d.get_str("account_type").unwrap_or("asset");
-            let sign = match acc_type_str {
-                "liability" | "equity" | "revenue" => -1i64,
-                _ => 1i64,
-            };
             let opening = d.get_i64("opening_balance").unwrap_or(0);
             let dt = d.get_i64("debit_turnover").unwrap_or(0);
             let ct = d.get_i64("credit_turnover").unwrap_or(0);
-            let closing = opening + sign * (dt - ct);
+            // Натуральное хранение: closing = opening + (dt − ct).
+            // Для пассивов/доходов opening хранится отрицательным (пользователь ввёл
+            // со знаком минус), поэтому формула единообразна для всех типов счетов.
+            let closing = opening + (dt - ct);
 
             entries.push(CarryForwardEntry {
                 account_id: d.get_str("account_id").unwrap_or("").to_string(),
@@ -350,6 +373,21 @@ impl LedgerService {
                 account_type: acc_type_str.to_string(),
                 closing_balance: closing,
             });
+        }
+
+        // Проверяем следующий период: если закрыт — пропускаем перенос (ручная корректировка)
+        let period_col = db.collection::<Document>(COL_PERIODS);
+        let next_period = period_col.find_one(doc! {
+            "company_id": company_id.0.to_string(),
+            "period_key": &next_key,
+        }).await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        if let Some(p) = &next_period {
+            if p.get_bool("closed").unwrap_or(false) {
+                // Следующий период закрыт — не перезаписываем его opening.
+                // Это может произойти при ручном закрытии «вперёд».
+                return Ok(());
+            }
         }
 
         // Записываем в следующий период
@@ -424,6 +462,8 @@ impl LedgerService {
     // ── Проводки ───────────────────────────────────────────
 
     /// Получить opening_balance для карточки счёта.
+    /// Возвращает opening_balance из самого раннего периода ≤ date_from.
+    /// Не суммирует: после carry-forward каждый период уже содержит кумулятивное сальдо.
     pub async fn get_opening_balance_for_card(
         db: &MongoClient,
         company_id: &CompanyId,
@@ -439,18 +479,17 @@ impl LedgerService {
         if let Some(ref pk) = period_key {
             filter.insert("period_key", doc! { "$lte": pk });
         }
-        let mut cursor = col.find(filter)
-            .sort(doc! { "period_key": 1 })
+        // Берём самый поздний период ≤ date_from — его opening уже кумулятивный
+        let doc = col.find(filter)
+            .sort(doc! { "period_key": -1 })
+            .limit(1)
             .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?
+            .next()
+            .await
+            .transpose()
             .map_err(|e| PlatformError::Database(e.to_string()))?;
-        let mut total: i64 = 0;
-        while let Some(Ok(d)) = cursor.next().await {
-            let opening = d.get_i64("opening_balance").unwrap_or(0);
-            let dt = d.get_i64("debit_turnover").unwrap_or(0);
-            let ct = d.get_i64("credit_turnover").unwrap_or(0);
-            total += opening + dt - ct;
-        }
-        Ok(total)
+        Ok(doc.map(|d| d.get_i64("opening_balance").unwrap_or(0)).unwrap_or(0))
     }
 
     /// Провести пачку пар Дт/Кт. Все проверки Блока 1; записи и обороты —
@@ -680,10 +719,20 @@ impl LedgerService {
 
 fn parse_period_key(key: &str) -> PlatformResult<(i32, u32)> {
     let mut it = key.split('-');
-    let y = it.next().and_then(|s| s.parse().ok())
+    let y: i32 = it.next().and_then(|s| s.parse().ok())
         .ok_or_else(|| PlatformError::Validation(format!("период {key:?}: год")))?;
-    let m = it.next().and_then(|s| s.parse().ok())
+    let m: u32 = it.next().and_then(|s| s.parse().ok())
         .ok_or_else(|| PlatformError::Validation(format!("период {key:?}: месяц")))?;
+    if m < 1 || m > 12 {
+        return Err(PlatformError::Validation(format!(
+            "период {key:?}: месяц должен быть от 01 до 12"
+        )));
+    }
+    if y < 2000 || y > 2100 {
+        return Err(PlatformError::Validation(format!(
+            "период {key:?}: год должен быть от 2000 до 2100"
+        )));
+    }
     Ok((y, m))
 }
 

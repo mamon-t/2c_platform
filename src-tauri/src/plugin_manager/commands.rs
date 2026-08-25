@@ -102,6 +102,10 @@ pub async fn wasm_list(
         .unwrap_or_default())
 }
 
+/// Контракт прав: plugin_call НЕ проверяет RBAC пользователя намеренно.
+/// У модулей нет собственных прав — доступ определяется правами пользователя
+/// на объекты, над которыми работает плагин (convert и т.п.). Модульные
+/// capabilities проверяются внутри host-fn (check_capability).
 #[tauri::command]
 pub async fn plugin_call(
     module_id: String,
@@ -257,53 +261,85 @@ pub async fn preload_company_modules(
     let cid = crate::core::CompanyId(
         uuid::Uuid::parse_str(&company_id).map_err(|e| format!("Невалидный company_id: {e}"))?,
     );
-    let enabled = crate::modules::service::ModuleService::list_enabled(&db, &cid)
+
+    // Тайминг запроса к БД: только МЕТА модулей (бинарники не тянутся)
+    let t_db = std::time::Instant::now();
+    let enabled = crate::modules::service::ModuleService::list_enabled_meta(&db, &cid)
         .await
         .map_err(|e| format!("Ошибка загрузки списка модулей: {e}"))?;
+    tracing::info!("[Pre-load] list_enabled_meta за {}ms, модулей: {}", t_db.elapsed().as_millis(), enabled.len());
 
-    let mut loaded = 0u32;
-    let mut errors = Vec::new();
-
-    for inst in enabled {
-        // Пропустить уже загруженные
-        {
-            let s = state.lock().await;
-            if s.wasm_modules.as_ref().map_or(false, |m| m.contains_key(&inst.code)) {
-                loaded += 1;
-                continue;
+    // Определяем что уже загружено (один лок, один раз)
+    let (to_load, already_loaded) = {
+        let s = state.lock().await;
+        let map = s.wasm_modules.as_ref();
+        let mut to_load = Vec::new();
+        let mut already = 0u32;
+        for inst in enabled {
+            if map.map_or(false, |m| m.contains_key(&inst.code)) {
+                already += 1;
+            } else {
+                to_load.push(inst);
             }
         }
+        (to_load, already)
+    };
 
-        let ctx = Arc::new(RwLock::new(PluginContext {
-            company_id: Some(company_id.clone()),
-            user_id: None,
-            user_login: None,
-            display_name: None,
-            role_id: None,
-            role_ids: Vec::new(),
-        }));
-        let host_data = HostData {
-            db: Some(db.clone()),
-            ctx,
-            module_code: Some(inst.code.clone()),
-            capabilities: inst.capabilities.clone(),
-        };
+    // Параллельная загрузка: байты из локального кэша (промах → разовый fetch),
+    // затем compile. Каждый таск независим.
+    let mut load_futs = Vec::with_capacity(to_load.len());
+    for inst in to_load {
+        let company_id = company_id.clone();
+        let db = db.clone();
+        load_futs.push(async move {
+            let bytes = match crate::modules::service::ModuleService::get_module_bytes(&db, &inst).await {
+                Ok(b) => b,
+                Err(e) => return (inst.code, inst.id.to_string(), Err(format!("кэш/БД байтов: {e}"))),
+            };
+            let ctx = Arc::new(RwLock::new(PluginContext {
+                company_id: Some(company_id),
+                user_id: None,
+                user_login: None,
+                display_name: None,
+                role_id: None,
+                role_ids: Vec::new(),
+            }));
+            let host_data = HostData {
+                db: Some(db),
+                ctx,
+                module_code: Some(inst.code.clone()),
+                capabilities: inst.capabilities.clone(),
+            };
+            let code = inst.code.clone();
+            let id = inst.id.to_string();
+            let result = WasmPlugin::load(bytes, code.clone(), host_data).await;
+            (code, id, result)
+        });
+    }
 
-        match WasmPlugin::load(inst.wasm_bytes, inst.code.clone(), host_data).await {
-            Ok(plugin) => {
-                let arc = Arc::new(StdMutex::new(plugin));
-                let mut s = state.lock().await;
-                let map = s.wasm_modules.get_or_insert_with(HashMap::new);
-                map.insert(inst.code.clone(), arc.clone());
-                map.insert(inst.id.to_string(), arc);
-                loaded += 1;
-            }
-            Err(e) => {
-                tracing::error!(
-                    "[Pre-load] Ошибка загрузки модуля {}: {}\nBacktrace:\n{}",
-                    inst.code, e, std::backtrace::Backtrace::force_capture()
-                );
-                errors.push(PreloadError { code: inst.code, error: e });
+    let results = futures::future::join_all(load_futs).await;
+
+    // Вставка результатов под одним локом
+    let mut loaded = already_loaded;
+    let mut errors = Vec::new();
+    {
+        let mut s = state.lock().await;
+        let map = s.wasm_modules.get_or_insert_with(HashMap::new);
+        for (code, id, result) in results {
+            match result {
+                Ok(plugin) => {
+                    let arc = Arc::new(StdMutex::new(plugin));
+                    map.insert(code.clone(), arc.clone());
+                    map.insert(id.to_string(), arc);
+                    loaded += 1;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "[Pre-load] Ошибка загрузки модуля {}: {}",
+                        code, e,
+                    );
+                    errors.push(PreloadError { code, error: e });
+                }
             }
         }
     }

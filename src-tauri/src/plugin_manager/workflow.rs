@@ -577,3 +577,40 @@ extism::host_fn!(pub notify_user_impl(user_data: HostData; recipient_user_id: St
     });
     Ok(result)
 });
+
+// ── stock_doc_cost(doc_id) (capability: objects.read) ─────
+//
+// Себестоимость списаний документа — чистая проекция движений склада.
+// Используется оркестраторами (возвраты от покупателя) и карточками.
+
+extism::host_fn!(pub stock_doc_cost_impl(user_data: HostData; doc_id: String) -> String {
+    let hd = user_data.get()?.lock().unwrap().clone();
+    if let Err(e) = check_capability(&hd, "stock_doc_cost") {
+        return Ok(e);
+    }
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let db = match hd.db.clone() {
+                Some(client) => client,
+                None => return error_response(err::NO_DATABASE, "База данных не инициализирована"),
+            };
+
+            let ctx = hd.ctx.read().unwrap();
+            let company_id = match ctx.company_id.as_ref() {
+                Some(cid) => match uuid::Uuid::parse_str(cid) {
+                    Ok(uid) => crate::core::CompanyId(uid),
+                    Err(_) => return error_response(err::INVALID_COMPANY, "Невалидный UUID компании"),
+                },
+                None => return error_response(err::NO_COMPANY, "Компания не выбрана"),
+            };
+            drop(ctx);
+
+            match crate::stock::engine::doc_cost(&db, &company_id, &doc_id).await {
+                Ok(v) => ok_response(v),
+                Err(e) => error_response(err::DB_ERROR, &e.to_string()),
+            }
+        })
+    });
+    Ok(result)
+});

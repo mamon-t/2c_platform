@@ -8,7 +8,7 @@
     type EntityType, type EntityField, type EntityState, type EntityTransition,
     type ObjectEntity, type ObjectSnapshot, type User, type Company,
     FIELD_KIND_META, OBJECT_STATE_META,
-    type FieldKind, type ObjectStateTS,
+    type FieldKind, type ObjectStateTS, type StockDocCostTS,
   } from '$lib/services/api';
   import { auth, hasPermission } from '$lib/stores/auth';
   import { lastWeight, initDeviceEvents } from '$lib/stores/devices';
@@ -45,6 +45,39 @@
   let loadingReferences: Record<string, boolean> = $state({});
 
   const entityType = $derived(entityTypes.find(t => t._id === object.entity_type_id));
+
+  // Себестоимость строк — проекция движений склада (только проведённые SALES)
+  let stockCost = $state<StockDocCostTS | null>(null);
+  let loadingCost = $state(false);
+  const showStockCost = $derived(entityType?.code === 'SALES' && object.state === 'posted');
+
+  async function loadStockCost() {
+    if (!showStockCost) { stockCost = null; return; }
+    loadingCost = true;
+    try {
+      stockCost = await api.stockDocCost(object._id);
+    } catch {
+      stockCost = null; // нет движений / ошибка чтения → пустая панель
+    } finally {
+      loadingCost = false;
+    }
+  }
+
+  $effect(() => {
+    // Пересчитывать при смене документа или переходе в posted
+    void object._id; void object.state; void entityType?.code;
+    if (showStockCost) loadStockCost();
+    else stockCost = null;
+  });
+
+  function fmtKop(v: number): string {
+    return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2 }).format(v / 100);
+  }
+  function fmtQty3(v: number): string {
+    const s = v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+    return s;
+  }
+
 
   const groupedFields = $derived.by(() => {
     const groups: Record<string, EntityField[]> = {};
@@ -607,6 +640,44 @@
               {/each}
             </div>
           {/each}
+        </div>
+      {/if}
+
+      {#if showStockCost}
+        <div class="card p-3 mt-3">
+          <h4 class="font-semibold text-sm flex items-center gap-2">
+            <i class="fa-solid fa-coins"></i> Себестоимость строк
+            <span class="text-xs text-surface-400 font-normal">проекция движений склада</span>
+          </h4>
+          {#if loadingCost}
+            <div class="text-xs text-surface-400 pt-2"><i class="fa-solid fa-spinner fa-spin"></i> Чтение движений…</div>
+          {:else if stockCost && stockCost.lines.length > 0}
+            <table class="table table-sm text-xs mt-2">
+              <thead>
+                <tr>
+                  <th>Строка</th>
+                  <th>Номенклатура</th>
+                  <th class="text-right">Кол-во</th>
+                  <th class="text-right">Себестоимость</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each stockCost.lines as cl (cl.line_ref ?? '_none_')}
+                  <tr>
+                    <td class="font-mono">{cl.line_ref ?? '—'}</td>
+                    <td class="font-mono">{cl.nomenclature_id.slice(0, 8)}…</td>
+                    <td class="text-right">{fmtQty3(cl.qty)}</td>
+                    <td class="text-right">{fmtKop(cl.cost)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+            <div class="text-right text-sm font-bold pt-1">
+              Итого себестоимость: {fmtKop(stockCost.total_cost)}
+            </div>
+          {:else}
+            <div class="text-xs text-surface-400 pt-2">Движений склада нет</div>
+          {/if}
         </div>
       {/if}
 

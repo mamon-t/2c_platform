@@ -76,12 +76,12 @@
         </thead>
         <tbody>
           {#each osvRows as row}
-            {@const closing = row.closing_balance ?? (row.opening_balance ?? 0) + row.balance}
+            {@const closing = row.closing_balance}
             <tr>
               <td class="font-mono font-medium">{row.code}</td>
               <td>{row.name}</td>
               <td class="text-center text-surface-400">{typeLabel(row.type)}</td>
-              <td class="text-right">{row.opening_balance != null ? fmtAmount(row.opening_balance) : '—'}</td>
+              <td class="text-right">{fmtAmount(row.opening_balance)}</td>
               <td class="text-right">{fmtAmount(row.debit_turnover)}</td>
               <td class="text-right">{fmtAmount(row.credit_turnover)}</td>
               <td class="text-right font-bold {closing < 0 ? 'text-red-500' : ''}">

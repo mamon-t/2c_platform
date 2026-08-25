@@ -143,6 +143,7 @@ impl Orch {
             .with_function("emit_event",      [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::emit_event_impl)
             .with_function("notify_user", [PTR, PTR, PTR], [PTR], UserData::new(host.clone()), wf::notify_user_impl)
             .with_function("log_message",     [PTR], [], UserData::new(host.clone()), pm::log_message_impl)
+            .with_function("stock_doc_cost",  [PTR], [PTR], UserData::new(host.clone()), wf::stock_doc_cost_impl)
             .with_fuel_limit(50_000_000)
             .build()
             .expect("плагин загружается");
@@ -280,9 +281,8 @@ async fn demo_scenario_full_cycle() {
     let out = orch.call("on_post", serde_json::json!({"id": salok_id}))
         .expect("реализация");
     assert_eq!(out["posted"], true);
-    // TODO(v0.2): COGS проводка через $ref от stock.issue результата.
-    // Сейчас cost_price=0 в документе, т.к. никто не заполняет его после
-    // списания — нужен object.patch op в реестре или host-fn update_data.
+    // COGS проводка строится из результата stock.issue через $ref
+    // ({op}.total_cost) — себестоимость живёт только в движениях склада.
     // Остаток = 15 - 12 = 3
     {
         use app_lib::stock::engine::EngineCtx;
@@ -316,6 +316,280 @@ async fn demo_scenario_full_cycle() {
         let bal = app_lib::stock::engine::balances(&mut ectx, Some(&wh), Some("nom-t1")).await.unwrap();
         assert_eq!(bal["balances"][0]["quantity"].as_f64().unwrap(), 15.0, "сторно вернул остаток");
     }
+
+    drop_collections(&db.client().clone(), &db_name).await;
+}
+
+// ════════════════════════════════════════════════════════════
+// Себестоимость как проекция движений (line_ref → doc_cost)
+// ════════════════════════════════════════════════════════════
+
+use app_lib::stock::engine as stock_engine;
+
+/// Реализация двумя строками из разных партий: себестоимость каждой строки
+/// читается из движений по (doc_id, line_ref).
+#[tokio::test(flavor = "multi_thread")]
+async fn sales_two_lines_cost_per_line() {
+    if !mongo_enabled() { eprintln!("SKIP: TX_TEST_MONGO=1"); return; }
+    let (db, db_name) = connect().await;
+    let company = uuid::Uuid::new_v4();
+    let role = uuid::Uuid::new_v4();
+
+    let mk = |subsystem: &str| PermissionPolicy {
+        _id: uuid::Uuid::new_v4(),
+        code: format!("t.{subsystem}"), name: subsystem.into(), description: None,
+        scope_type: "subsystem".into(), subsystem_code: subsystem.into(),
+        entity_type: None, actions: vec!["*".into()], record_scope: "company".into(),
+        deny: false, priority: 100,
+        created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+    };
+    let p_stock = mk("stock"); let p_docs = mk("documents"); let p_acc = mk("accounting");
+    let col_p = db.collection::<Document>("permission_policies");
+    col_p.insert_one(mongodb::bson::to_document(&p_stock).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_docs).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_acc).unwrap()).await.ok();
+    // Роль с привязкой политик — tx_begin резолвит права через role_ids
+    db.collection::<Document>("roles").insert_one(doc! {
+        "_id": role.to_string(), "company_id": company.to_string(),
+        "code": "TRADE_TEST", "name": "Test",
+        "permission_policy_ids": [p_stock._id.to_string(), p_docs._id.to_string(), p_acc._id.to_string()],
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+    }).await.expect("role");
+    // План счетов по умолчанию (41/60/90.x...) для accounting.post
+    app_lib::ledger::service::LedgerService::ensure_default_chart(&db, &CompanyId(company)).await;
+
+    let mut orch = Orch::new(&db, company, role, uuid::Uuid::nil());
+
+    let wh = format!("loc-wh-{company}");
+    db.collection::<Document>("objects").insert_many(vec![
+        doc! { "_id": "nom-a", "entity_type_id": "NOM", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "item" }, "version": 1i64 },
+        doc! { "_id": "nom-b", "entity_type_id": "NOM", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "item" }, "version": 1i64 },
+        doc! { "_id": &wh, "entity_type_id": "LOC", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "warehouse" }, "version": 1i64 },
+    ]).await.expect("fixtures");
+
+    // Партия A: 2 шт @ 100₽ (unit_cost 10000 коп)
+    let pur_a = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, "PURCHASE_ET", &pur_a, serde_json::json!({
+        "warehouse_id": wh, "lines": [{"nomenclature_id": "nom-a", "qty": 2, "price": 100.0}], "total": 200,
+    })).await;
+    // Нужен entity_type PURCHASE — засеиваем и пересеедим документ
+    let pur_et = seed_entity_type(&db, "PURCHASE").await;
+    let sal_et = seed_entity_type(&db, "SALES").await;
+    let ret_et = seed_entity_type(&db, "CUSTOMER_RETURN").await;
+    db.collection::<Document>("objects").update_one(
+        doc! { "_id": &pur_a },
+        doc! { "$set": { "entity_type_id": &pur_et } },
+    ).await.unwrap();
+
+    orch.call("on_post", serde_json::json!({"id": pur_a})).expect("приход A");
+
+    // Партия B: 3 шт @ 200₽ (unit_cost 20000 коп)
+    let pur_b = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &pur_et, &pur_b, serde_json::json!({
+        "warehouse_id": wh, "lines": [{"nomenclature_id": "nom-b", "qty": 3, "price": 200.0}], "total": 600,
+    })).await;
+    orch.call("on_post", serde_json::json!({"id": pur_b})).expect("приход B");
+
+    // Реализация: строка L1 = 2×nom-a, строка L2 = 3×nom-b
+    let sales_id = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &sal_et, &sales_id, serde_json::json!({
+        "warehouse_id": wh,
+        "lines": [
+            {"line_id": "L1", "nomenclature_id": "nom-a", "qty": 2, "price": 150.0},
+            {"line_id": "L2", "nomenclature_id": "nom-b", "qty": 3, "price": 300.0},
+        ],
+        "total": 1200,
+    })).await;
+    let out = orch.call("on_post", serde_json::json!({"id": sales_id})).expect("реализация");
+    assert_eq!(out["posted"], true);
+
+    // Себестоимость по строкам из движений
+    let cost = stock_engine::doc_cost(&db, &CompanyId(company), &sales_id).await.unwrap();
+    let lines = cost["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2, "две строки: {cost}");
+    let l1 = lines.iter().find(|l| l["line_ref"] == "L1").unwrap();
+    let l2 = lines.iter().find(|l| l["line_ref"] == "L2").unwrap();
+    assert_eq!(l1["nomenclature_id"], "nom-a");
+    assert_eq!(l1["qty"].as_f64().unwrap(), 2.0);
+    assert_eq!(l1["cost"].as_i64().unwrap(), 20_000, "строка L1: 2×10000коп");
+    assert_eq!(l2["cost"].as_i64().unwrap(), 60_000, "строка L2: 3×20000коп");
+    assert_eq!(cost["total_cost"].as_i64().unwrap(), 80_000);
+
+    // COGS проводка через $ref появилась
+    let cogs = db.collection::<Document>(app_lib::ledger::COL_ENTRIES)
+        .count_documents(doc! { "doc_id": &sales_id, "debit_code": "90.2" }).await.unwrap();
+    assert_eq!(cogs, 1, "COGS Дт90.2 Кт41 от $ref total_cost");
+
+    drop_collections(&db.client().clone(), &db_name).await;
+}
+
+/// Частичный возврат от покупателя: себестоимость возвращаемого количества =
+/// средняя по списаниям строки исходной реализации. Одна цифра на склад
+/// (партия возврата) и бухгалтерию (Дт41 Кт90.2).
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_customer_return_avg_line_cost() {
+    if !mongo_enabled() { eprintln!("SKIP: TX_TEST_MONGO=1"); return; }
+    let (db, db_name) = connect().await;
+    let company = uuid::Uuid::new_v4();
+    let role = uuid::Uuid::new_v4();
+
+    let mk = |subsystem: &str| PermissionPolicy {
+        _id: uuid::Uuid::new_v4(),
+        code: format!("t.{subsystem}"), name: subsystem.into(), description: None,
+        scope_type: "subsystem".into(), subsystem_code: subsystem.into(),
+        entity_type: None, actions: vec!["*".into()], record_scope: "company".into(),
+        deny: false, priority: 100,
+        created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+    };
+    let p_stock = mk("stock"); let p_docs = mk("documents"); let p_acc = mk("accounting");
+    let col_p = db.collection::<Document>("permission_policies");
+    col_p.insert_one(mongodb::bson::to_document(&p_stock).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_docs).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_acc).unwrap()).await.ok();
+    // Роль с привязкой политик — tx_begin резолвит права через role_ids
+    db.collection::<Document>("roles").insert_one(doc! {
+        "_id": role.to_string(), "company_id": company.to_string(),
+        "code": "TRADE_TEST", "name": "Test",
+        "permission_policy_ids": [p_stock._id.to_string(), p_docs._id.to_string(), p_acc._id.to_string()],
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+    }).await.expect("role");
+    // План счетов по умолчанию (41/60/90.x...) для accounting.post
+    app_lib::ledger::service::LedgerService::ensure_default_chart(&db, &CompanyId(company)).await;
+
+    let mut orch = Orch::new(&db, company, role, uuid::Uuid::nil());
+
+    let wh = format!("loc-wh-{company}");
+    let pur_et = seed_entity_type(&db, "PURCHASE").await;
+    let sal_et = seed_entity_type(&db, "SALES").await;
+    let ret_et = seed_entity_type(&db, "CUSTOMER_RETURN").await;
+
+    db.collection::<Document>("objects").insert_many(vec![
+        doc! { "_id": "nom-r", "entity_type_id": "NOM", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "item" }, "version": 1i64 },
+        doc! { "_id": &wh, "entity_type_id": "LOC", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "warehouse" }, "version": 1i64 },
+    ]).await.expect("fixtures");
+
+    // Приход 4 @ 250₽ (25000 коп/шт) и реализация 4 шт одной строкой L1
+    let pur = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &pur_et, &pur, serde_json::json!({
+        "warehouse_id": wh, "lines": [{"nomenclature_id": "nom-r", "qty": 4, "price": 250.0}], "total": 1000,
+    })).await;
+    orch.call("on_post", serde_json::json!({"id": pur})).expect("приход");
+
+    let sales_id = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &sal_et, &sales_id, serde_json::json!({
+        "warehouse_id": wh,
+        "lines": [{"line_id": "L1", "nomenclature_id": "nom-r", "qty": 4, "price": 400.0}],
+        "total": 1600,
+    })).await;
+    orch.call("on_post", serde_json::json!({"id": sales_id})).expect("реализация");
+
+    // Частичный возврат 1 шт по source_sales_id
+    let ret_id = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &ret_et, &ret_id, serde_json::json!({
+        "warehouse_id": wh, "source_sales_id": sales_id,
+        "lines": [{"line_id": "R1", "nomenclature_id": "nom-r", "qty": 1, "price": 400.0}],
+        "total": -400,
+    })).await;
+    let out = orch.call("on_post", serde_json::json!({"id": ret_id}));
+    assert!(out.is_ok(), "возврат: {out:?}");
+
+    // Партия возврата: unit_cost = 25000/4×... = средняя строки (100000/4=25000)
+    let batch = db.collection::<Document>(app_lib::stock::COL_BATCHES)
+        .find_one(doc! { "source_doc_id": &ret_id }).await.unwrap()
+        .expect("партия возврата");
+    assert_eq!(batch.get_i64("unit_cost").unwrap(), 25_000, "средняя строки L1");
+
+    // Бухгалтерия возврата: та же цифра в товарной части (Дт41 Кт90.2)
+    let goods_entry = db.collection::<Document>(app_lib::ledger::COL_ENTRIES)
+        .find_one(doc! { "doc_id": &ret_id, "debit_code": "41", "credit_code": "90.2" })
+        .await.unwrap().expect("проводка Дт41 Кт90.2");
+    assert_eq!(goods_entry.get_i64("amount").unwrap(), 25_000, "одна цифра склад/бухгалтерия");
+
+    drop_collections(&db.client().clone(), &db_name).await;
+}
+
+/// Отмена реализации: движения помечены reversed → себестоимость исчезает.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_sales_cost_dissapears() {
+    if !mongo_enabled() { eprintln!("SKIP: TX_TEST_MONGO=1"); return; }
+    let (db, db_name) = connect().await;
+    let company = uuid::Uuid::new_v4();
+    let role = uuid::Uuid::new_v4();
+
+    let mk = |subsystem: &str| PermissionPolicy {
+        _id: uuid::Uuid::new_v4(),
+        code: format!("t.{subsystem}"), name: subsystem.into(), description: None,
+        scope_type: "subsystem".into(), subsystem_code: subsystem.into(),
+        entity_type: None, actions: vec!["*".into()], record_scope: "company".into(),
+        deny: false, priority: 100,
+        created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
+    };
+    let p_stock = mk("stock"); let p_docs = mk("documents"); let p_acc = mk("accounting");
+    let col_p = db.collection::<Document>("permission_policies");
+    col_p.insert_one(mongodb::bson::to_document(&p_stock).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_docs).unwrap()).await.ok();
+    col_p.insert_one(mongodb::bson::to_document(&p_acc).unwrap()).await.ok();
+    // Роль с привязкой политик — tx_begin резолвит права через role_ids
+    db.collection::<Document>("roles").insert_one(doc! {
+        "_id": role.to_string(), "company_id": company.to_string(),
+        "code": "TRADE_TEST", "name": "Test",
+        "permission_policy_ids": [p_stock._id.to_string(), p_docs._id.to_string(), p_acc._id.to_string()],
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+    }).await.expect("role");
+    // План счетов по умолчанию (41/60/90.x...) для accounting.post
+    app_lib::ledger::service::LedgerService::ensure_default_chart(&db, &CompanyId(company)).await;
+
+    let mut orch = Orch::new(&db, company, role, uuid::Uuid::nil());
+
+    let wh = format!("loc-wh-{company}");
+    let pur_et = seed_entity_type(&db, "PURCHASE").await;
+    let sal_et = seed_entity_type(&db, "SALES").await;
+
+    db.collection::<Document>("objects").insert_many(vec![
+        doc! { "_id": "nom-c", "entity_type_id": "NOM", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "item" }, "version": 1i64 },
+        doc! { "_id": &wh, "entity_type_id": "LOC", "kind": "catalog",
+               "company_id": company.to_string(), "state": "active",
+               "data": { "type": "warehouse" }, "version": 1i64 },
+    ]).await.expect("fixtures");
+
+    let pur = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &pur_et, &pur, serde_json::json!({
+        "warehouse_id": wh, "lines": [{"nomenclature_id": "nom-c", "qty": 5, "price": 100.0}], "total": 500,
+    })).await;
+    orch.call("on_post", serde_json::json!({"id": pur})).expect("приход");
+
+    let sales_id = uuid::Uuid::new_v4().to_string();
+    seed_doc(&db, company, &sal_et, &sales_id, serde_json::json!({
+        "warehouse_id": wh,
+        "lines": [{"line_id": "L9", "nomenclature_id": "nom-c", "qty": 5, "price": 200.0}],
+        "total": 1000,
+    })).await;
+    orch.call("on_post", serde_json::json!({"id": sales_id})).expect("реализация");
+
+    let before = stock_engine::doc_cost(&db, &CompanyId(company), &sales_id).await.unwrap();
+    assert_eq!(before["total_cost"].as_i64().unwrap(), 50_000);
+
+    orch.call("on_cancel", serde_json::json!({"id": sales_id}))
+        .expect("отмена реализации");
+
+    let after = stock_engine::doc_cost(&db, &CompanyId(company), &sales_id).await.unwrap();
+    assert_eq!(after["total_cost"].as_i64().unwrap(), 0, "проекция исчезла");
+    assert_eq!(after["lines"].as_array().unwrap().len(), 0);
 
     drop_collections(&db.client().clone(), &db_name).await;
 }

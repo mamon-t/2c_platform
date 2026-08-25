@@ -119,9 +119,13 @@ pub async fn create_test_certificate(
     name: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<String, String> {
-    let state = state.lock().await;
-    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+    // Безопасное извлечение данных ПОД ЛОКОМ (только чтение)
+    let db = {
+        let state = state.lock().await;
+        let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+        ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
+        ctx.db.clone()
+    };
 
     // ANSI-безопасное имя
     let safe: String = name
@@ -137,6 +141,7 @@ pub async fn create_test_certificate(
     let container_out = container.clone();
     let subject_out = subject.clone();
 
+    // Тяжёлая крипто-операция БЕЗ ЛОКА
     let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
         use cpcsp::cpcsp_ffi_linux::raw_constants::*;
         use cpcsp::key::Key;
@@ -172,12 +177,12 @@ pub async fn create_test_certificate(
     .await
     .map_err(|e| format!("Ошибка блокирующего вызова: {e}"))??;
 
-    crate::audit_log!(state, get_db(&state), AuditableAction::CreateTestCertificate,
-        target_id = container_out.clone());
+    // Аудит после успешного создания
+    {
+        let state = state.lock().await;
+        crate::audit_log!(state, db, AuditableAction::CreateTestCertificate,
+            target_id = container_out.clone());
+    }
 
     Ok(format!("{container_out}|{subject_out}|{result}"))
-}
-
-fn get_db(s: &tokio::sync::MutexGuard<'_, AppState>) -> crate::db::MongoClient {
-    s.db.clone().expect("БД не подключена")
 }

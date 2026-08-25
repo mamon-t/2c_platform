@@ -174,19 +174,24 @@ pub async fn devices_disconnect(id: String, state: State<'_, Mutex<AppState>>) -
 /// Тестовое подключение / ожидание данных.
 #[tauri::command]
 pub async fn devices_test(id: String, state: State<'_, Mutex<AppState>>) -> Result<String, String> {
-    let state = state.lock().await;
-    let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
-    ctx.check_permission("devices.manage").map_err(|e| e.to_string())?;
-
-    let cfg = DeviceService::get(&ctx.db, &id).await.map_err(|e| e.to_string())?;
-    if cfg.company_id != ctx.company_id.0.to_string() {
-        return Err("Доступ запрещён: устройство другой компании".into());
-    }
+    let (db, cfg) = {
+        let state = state.lock().await;
+        let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
+        ctx.check_permission("devices.manage").map_err(|e| e.to_string())?;
+        let cfg = DeviceService::get(&ctx.db, &id).await.map_err(|e| e.to_string())?;
+        if cfg.company_id != ctx.company_id.0.to_string() {
+            return Err("Доступ запрещён: устройство другой компании".into());
+        }
+        let db = ctx.db.clone();
+        (db, cfg)
+    };
 
     let result = DeviceService::test_driver(&cfg).await;
-    let _ = &result;
-    crate::audit_log!(state, ctx.db, AuditableAction::TestDevice,
-        target_id = id);
+    {
+        let state = state.lock().await;
+        crate::audit_log!(state, db, AuditableAction::TestDevice,
+            target_id = id);
+    }
     result
 }
 

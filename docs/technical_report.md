@@ -1,6 +1,6 @@
 # 2C Platform — Technical Report
 
-**Дата:** 25.08.2026 · **Версия:** 0.1.3 · **Состояние:** desktop MVP
+**Дата:** 25.08.2026 · **Версия:** 0.1.4 · **Состояние:** desktop MVP
 
 Снимок реализованного по коду для сверки с ТЗ v2.2/v2.3.
 
@@ -13,14 +13,14 @@
 | Backend | Rust / Tauri v2 / Tokio / MongoDB (Atlas, replSet) |
 | Backend модулей | **32** |
 | IPC-команд | **~150** |
-| Host-fn для WASM | **25** |
+| Host-fn для WASM | **26** |
 | Mongo-коллекций | **38** |
 | Capabilities плагинов | **14** |
 | RBAC политик | **64+** (20 подсистем) |
 | Аудит действий | **55+** |
 | Операций tx_exec | **13** |
 | Фронтенд | Svelte 5 + TS · 25+ компонентов · 125+ API-методов |
-| Тестов | **56** (22 unit + 34 интеграционных) |
+| Тестов | **63** (23 unit + 40 интеграционных) |
 
 Стек: Rust/Tokio/MongoDB(Tls 0.9)/Tauri2 · Svelte5+TS+Vite8+Tailwind4+Skeleton(nosh) · Extism/wasmtime · Rhai · Argon2id+JWT · КриптоПро CSP 5.0 · Font Awesome 6 Free.
 
@@ -63,6 +63,7 @@
 | События | emit_event(stream_id, event_type, payload_json) — подключён projection engine | events.emit |
 | Подпись | signature_required(module, action, object_id), **cms_verify**(data_b64, sig_b64) | signature |
 | TX | tx_begin(key), tx_add_op(handle, op, params)→op_id, tx_commit(handle) | transactions |
+| Склад | **stock_doc_cost(doc_id)** — себестоимость списаний документа из движений (по line_ref) | objects.read |
 | Лог | log_message(msg) | logging |
 
 **Манифест** = источник правды: code/version/api_version/capabilities[]/permissions[]/**handles_documents[]**/functions[]. `handles_documents` → post_object делегирует on_post/on_cancel плагину атомарно.
@@ -80,13 +81,13 @@
 ### 2.6 Учёт
 
 Двойная запись нативно (session-aware):
-- **План счетов** (`ledger_accounts`): код per company, AccountType определяет знак сальдо, seed торговли (41/44/50/51/60/62/90.1/90.2), CRUD IPC (`ledger_account_create`, `ledger_account_update`)
+- **План счетов** (`ledger_accounts`): код per company, AccountType, seed торговли (41/44/50/51/60/62/90.1/90.2), CRUD IPC (`ledger_account_create`, `ledger_account_update`)
 - **Проводки** (`ledger_entries`): пара Дт/Кт = документ; posting_id группирует; nomenclature_id — измерение для возвратов; doc_kind/doc_id — ссылка на документ
-- **Обороты** (`ledger_balances`): unique (company, period_key, account_id); сальдо через AccountType::balance_sign; **поле `opening_balance`** (входящее сальдо на начало периода)
-- **Периоды** (`accounting_periods`): ensure при первой проводке, close/reopen (reopen = accounting.manage); проводка в закрытый → отказ
-- **Входящие сальдо**: `save_opening_balances` (массовый ввод), `get_opening_balances` (чтение), `close_period_with_carry_forward` (при закрытии периода: closing = opening + sign*(Dт-Кт) → следующий период)
-- **ОСВ**: обороты + входящее сальдо + исходящее сальдо по каждому счёту; баланс = opening + sign*(Dт-Кт)
-- **Карточка счёта**: running_balance стартует с `opening_balance` (сумма всех периодов до date_from)
+- **Обороты** (`ledger_balances`): unique (company, period_key, account_id); **натуральное хранение сальдо**: активы/расходы ≥ 0, пассивы/капитал/доходы ≤ 0. Правило ввода одно для всех мест: пользователь всегда указывает **положительное число на стороне счёта** (дебетовый остаток для активов, кредитовый — для пассивов); `save_opening_balances` переводит его во внутреннее представление (инвертирует пассивные счета). Внутри системы формула единая: closing = opening + Дт − Кт
+- **Периоды** (`accounting_periods`): ensure при первой проводке, close/reopen (reopen = accounting.manage); проводка в закрытый → отказ; правка входящих сальдо закрытого периода → отказ; carry-forward не перезаписывает opening закрытого следующего периода; валидация period_key (месяц 01–12, год 2000–2100)
+- **Входящие сальдо**: `save_opening_balances` (массовый ввод), `get_opening_balances` (чтение), `close_period_with_carry_forward` (при закрытии: **closing = opening + (Дт − Кт)** единообразно для всех типов счетов → следующий период)
+- **ОСВ**: обороты + сальдо по каждому счёту за диапазон периодов; opening берётся из **самого раннего периода диапазона** (не сумма — после carry-forward поздние периоды уже кумулятивны); balance = Дт − Кт; closing = opening + balance
+- **Карточка счёта**: running_balance стартует с `opening_balance` последнего периода ≤ date_from (кумулятивного) и прибавляет ±amount по стороне счёта; фильтры дат journal/card через `$and` (работают обе границы)
 - Операции tx_exec: `accounting.post` (Σ>0, Дт≠Кт, счета активны, период открыт) / `accounting.reverse_by_doc`
 - Отчёты: ОСВ (отдельная страница), журнал проводок, карточка счёта, входящие сальдо
 
@@ -95,10 +96,12 @@
 WASM-оркестратор поверх склада и учёта.
 - Справочники на Досках: COUNTERPARTY, PRICE_TYPE, PRICE (история цен через закрытие valid_to)
 - Частичные индексы objects (по entity_type UUID): counterparty(data.name, data.inn), price(unique code), price(nom+ptype+valid_from DESC)
-- Документы: PURCHASE/SALES/CUSTOMER_RETURN/SUPPLIER_RETURN
-- on_post: [stock.receipt/issue (+доп.расходы пропорционально сумме строк) → accounting.post (счета из module_settings) → object.post] одной пачкой
+- Документы: PURCHASE/SALES/CUSTOMER_RETURN/SUPPLIER_RETURN; строки документов несут `line_id` → `line_ref` движений
+- on_post: [stock.receipt/issue (+доп.расходы пропорционально сумме строк) → accounting.post → object.post] одной пачкой. **COGS — из результата stock.issue через `$ref` (`{op}.total_cost`)**
+- **Себестоимость = проекция движений**: не пишется в строки документа; читается по `(doc_id, line_ref)` через host-fn/IPC `stock_doc_cost`; при отмене исчезает вместе с движениями (фильтры is_reversal/reversed)
+- **Возврат от покупателя** (`source_sales_id`): себестоимость возврата = средняя по списаниям строки исходной реализации; одна цифра в партии возврата и проводке Дт41 Кт90.2
 - on_cancel: [stock.reverse → accounting.reverse_by_doc → object.cancel]
-- use_accounting=false → без проводок
+- use_accounting=false → без проводок; нулевые суммы проводок отбрасываются accounting.post (сервисные строки)
 - trade_get_price(nom, ptype, date) — нативное чтение цены на дату
 - События: trade.purchase_posted/sales_posted/customer_returned/supplier_returned/doc_cancelled
 
@@ -108,15 +111,17 @@ WASM-оркестратор поверх склада и учёта.
 
 ### 2.9 Устройства
 
-Сканеры (wedge/serial), весы (regex из настроек). Насос: mpsc → Event Store (StreamType::Device) → Rhai scan_handler → Tauri-push + notifications collection. FiscalPrinter — v0.3.
+Сканеры (wedge/serial), весы (regex из настроек). Насос: mpsc → Event Store (StreamType::Device) → Rhai scan_handler → Tauri-push + notifications collection. `devices_test` выполняет serial I/O **без глобального лока AppState** (зависшее устройство не блокирует UI). FiscalPrinter — v0.3.
 
 ### 2.10 RBAC и аудит
 
-Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос). ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
+Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос) **после успешного выполнения** — при отказе операции ложная запись не создаётся. ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
 
 **Audit coverage**: Login (bootstrap + regular), SwitchCompany, CRUD пользователей/компаний/ролей/политик, CRUD документов, проводки/реверсы, настройки оборудования, шаблоны печати, сертификаты, KV модулей, seed метаданных торговли, сохранение входящих сальдо, автозагрузка модулей.
 
 **RBAC fallback**: при пустых policies после входа — автоматическая загрузка всех политик из БД (защита от seed-гонки при первом входе).
+
+**Дисциплина блокировок**: тяжёлые операции не держат глобальный Mutex<AppState> во время I/O — crypto-генерация сертификата (spawn_blocking) и serial-тест устройства выполняются после release лока; post_object/cancel_object читают user+company одним захватом (устранён TOCTOU со switch_company); StdMutex плагина захватывается только вне глобального лока.
 
 ### 2.11 Уведомления
 
@@ -124,11 +129,19 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 
 ### 2.12 Автозагрузка модулей
 
-После логина/смены компании — автоматическая загрузка всех Enabled модулей для текущей компании из MongoDB в память. Команда `preload_company_modules`: загружает WASM-модули, пропускает уже кэшированные, логирует ошибки с `std::backtrace::Backtrace`. Ошибки показываются пользователю через toast. Не блокирует UI. При успешной загрузке ≥1 модуля — аудит-запись (SaveSettings).
+После логина/смены компании — автоматическая загрузка всех Enabled модулей для текущей компании. Команда `preload_company_modules`: **параллельная загрузка** через `futures::join_all` (один лок на проверку уже загруженных, один на вставку результатов). Бинарники тянутся через **локальный кэш байтов**: список берётся без `wasm_bytes` (`list_enabled_meta`), каждый модуль читается из `~/.cache/2c-platform/modules/{code}-{hash16}.wasm`; промах кэша → разовый fetch из БД + запись. Хэш SHA-256 фиксируется при install; обновление модуля докачивает только его, старые версии кэша удаляются. Тайминги этапов в логах: `[Pre-load] list_enabled_meta`, `[Plugin compile] build=…ms`, `[Plugin init] get_info=…ms`. Ошибки показываются пользователю через toast; при успешной загрузке ≥1 модуля — аудит-запись.
 
-### 2.13 Инвалидация кэша
+### 2.13 Кэш WASM-модулей
 
-При `uninstall`/`disable` модуля — выгрузка из кэша `wasm_modules` по UUID и коду. Ранее удалённый модуль продолжал работать до перезапуска приложения.
+Два уровня:
+
+- **Кэш байтов** (`~/.cache/2c-platform/modules/`, ключ sha256): повторный вход не скачивает бинарники по сети, работает офлайн. Ленивая миграция старых записей (хэш досчитывается при первой загрузке).
+- **Дисковый кэш компиляции wasmtime**: `.with_cache_config()` — TOML в `~/.cache/2c-platform/wasmtime-cache/config.toml` (создаётся автоматически, `OnceLock`). Первый запуск модуля — Cranelift-компиляция с сохранением артефакта, далее десериализация.
+
+Замер на trade.wasm (~300 КБ): **первая компиляция ~460 мс, повторная загрузка из кэша ~9 мс (~50×)**. Недоступный каталог → graceful fallback + warn.
+- **Установил → сразу использует**: после успешного `install` модуль загружается в память текущей сессии (с реальными capabilities манифеста) — перезапуск/перелогин не нужен. При повторной установке кода старая версия выгружается `uninstall`'ом.
+- Инвалидация in-memory: при `uninstall`/`disable` — выгрузка из `wasm_modules` по UUID и коду.
+- Юнит-тест конфига кэша (`wasmtime_cache_config_created_and_valid`).
 
 ---
 
@@ -173,19 +186,20 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 
 ---
 
-## 4. Тесты (56)
+## 4. Тесты (57)
 
 | Набор | Кол-во | Покрытие | Гейт |
 |---|---|---|---|
-| unit | 22 | COMMAND_MAP×4, tx::validate/$ref×14, tx::session×4 | — |
+| unit | 23 | COMMAND_MAP×4, tx::validate/$ref×14, tx::session×4, wasmtime-cache×1 | — |
 | requests_plugin | 20 | requests.wasm: маршруты/submit/approve/reject/подписи(valid/invalid)/мультироли/гонка/рассылки/хуки | — |
 | stock_engine | 4 | FIFO математика ТЗ, сторно (частично съеденная партия отклоняется, двойное блокируется), перенос цены, гонка списаний | TX_TEST_MONGO=1 |
 | tx_executor | 5 | Идемпотентность, конкурентность, rollback, $ref-цепочка, deny-by-default | TX_TEST_MONGO=1 |
 | stock_orchestrator | 2 | E2E stock.wasm: MOVE post/cancel, политика подписи | TX_TEST_MONGO=1 |
 | ledger_test | 2 | Постинг+балансы+реверс+повтор отклонён; закрытый период | TX_TEST_MONGO=1 |
-| trade_orchestrator | 1 | E2E trade.wasm: демо п.11 ТЗ (поступление→реализация→COGS→сторно) | TX_TEST_MONGO=1 |
+| trade_orchestrator | 4 | E2E trade.wasm: демо п.11 ТЗ (поступление→реализация→COGS→сторно); себестоимость двух строк из разных партий по line_ref; частичный возврат по средней строки исходника (склад=бухгалтерия); отмена → проекция себестоимости пуста | TX_TEST_MONGO=1 |
+| example_hello | 3 | Пример Plugin API v1 (`example/hello`) против реального хоста: манифест, эхо, сырой host-fn — гвардия совместимости доки | — |
 
-Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
+Live-тесты: любой MongoDB с replica set (локальный или облако). `TX_TEST_MONGO=1` + `MONGODB_URI` в окружении; рецепты поднятия — `docs/mongodb-setup.md`.
 
 ---
 
@@ -193,7 +207,8 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 
 - `.env` — dev-only: MONGODB_URI, MONGODB_DATABASE, JWT_SECRET (в `.gitignore`)
 - `~/.config/2c-platform/connections.json` — список сохранённых подключений к БД (1С-стиль)
-- MongoDB Atlas: `mongodb+srv://...@2cplatform.utphr7u.mongodb.net`, shard-0 replica set, DB 8.0.29
+- `~/.cache/2c-platform/wasmtime-cache/` — дисковый кэш компиляции WASM-модулей
+- MongoDB — строка подключения в `.env` (`MONGODB_URI`, не коммитится): Atlas или локальный replica set (рецепты: `docs/mongodb-setup.md`)
 - Старый локальный backup: `.env.bak.31host`
 
 ---
@@ -206,9 +221,11 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 | Серийные номера | Количественный учёт | v0.2 |
 | Уведомления Email/Push | InApp только | v0.2-v0.3 |
 | Messaging real-time | Поллинг 15с | WebSocket v0.3 |
-| Эскалации | timeout_hours/is_required хранятся, не исполняются | v0.2 |
-| object.patch op | Для записи себестоимости в строки SALES | v0.2 |
+| Эскалации | timeout_hours/is_required хранятся, **не исполняются** — в UI маршрутов помечено «не исполняется» | v0.2 |
+| Возврат «с конца» партии строки | Сейчас средняя по строке исходной реализации | улучшение |
 | Windows | Linux-first | По плану |
+
+**Дизайн-решение**: себестоимость реализаций читается из движений склада по `doc_id` (+`line_ref`), в строки документа не пишется; object.patch для стоимости не нужен (см. `docs/testing-trade.md`).
 
 ---
 
@@ -218,6 +235,7 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 - Склад: `docs/testing-stock.md`
 - Торговля: `docs/testing-trade.md`
 - Заявки: `wasm-modules/requests/README.md`
+- Разработка модулей: `example/README.md` (Plugin API v1) + минимальный образец `example/hello`
 - Демо: кнопка «Заполнить демо» на Dashboard (создаёт «ООО ЛесТорг» в текущей БД)
 
 ### Выбор базы данных
@@ -231,8 +249,8 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 ### Входящие сальдо
 
 1. «План счетов» → создать нужные счета (или принять seed по умолчанию)
-2. «Входящие сальдо» → выбрать период → ввести суммы (в рублях) → Сохранить
-3. При закрытии периода — сальдо автоматически переносятся в следующий
+2. «Входящие сальдо» → выбрать период → ввести суммы (в рублях) → Сохранить. Активные счета — дебетовые остатки, пассивные — кредитовые; знак система учитывает автоматически
+3. При закрытии периода — сальдо автоматически переносятся в следующий (closing = opening + Дт − Кт)
 4. ОСВ показывает входящее/исходящее сальдо по каждому счёту
 
 ### DataMapper (Конвертация)

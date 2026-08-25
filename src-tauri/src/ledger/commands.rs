@@ -173,9 +173,14 @@ pub async fn ledger_osv(
         ]));
     }
 
-    // Собираем все balances rows и группируем по account_id
+    // Собираем все balances rows и группируем по account_id.
+    // Сортировка по period_key обязательна: opening берётся из самого раннего
+    // периода диапазона (после carry-forward поздние периоды уже содержат
+    // ранние — суммирование завышало бы сальдо).
     let mut cursor = db.collection::<Document>(crate::ledger::COL_BALANCES)
-        .find(filter).await.map_err(|e| e.to_string())?;
+        .find(filter)
+        .sort(doc! { "period_key": 1 })
+        .await.map_err(|e| e.to_string())?;
 
     use std::collections::HashMap;
     struct OsvRow {
@@ -196,9 +201,8 @@ pub async fn ledger_osv(
         let ct = b.get_i64("credit_turnover").unwrap_or(0);
         let row = by_account.entry(acc_id.clone()).or_insert(OsvRow {
             code: code.clone(), name: String::new(), acc_type: String::new(),
-            opening: 0, debit: 0, credit: 0,
+            opening, debit: 0, credit: 0,
         });
-        row.opening += opening;
         row.debit += dt;
         row.credit += ct;
 
@@ -215,14 +219,10 @@ pub async fn ledger_osv(
         }
     }
 
-    // Вычисляем сальдо по типу счёта
+    // Вычисляем сальдо: natural convention, closing = opening + (dt − ct)
     let mut rows = Vec::new();
     for (_, row) in by_account {
-        let sign = match row.acc_type.as_str() {
-            "liability" | "equity" | "revenue" => -1i64,
-            _ => 1i64,
-        };
-        let balance = sign * (row.debit - row.credit);
+        let balance = row.debit - row.credit;
         let closing = row.opening + balance;
         rows.push(serde_json::json!({
             "code": row.code,
@@ -256,8 +256,14 @@ pub async fn ledger_journal(
     let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
 
     let mut filter = doc! { "company_id": ctx.company_id.0.to_string() };
-    if let Some(f) = &date_from { filter.insert("date", doc!{"$gte": f}); }
-    if let Some(t) = &date_to { filter.insert("date", doc!{"$lte": t}); }
+    if date_from.is_some() || date_to.is_some() {
+        let mut date_filter = doc! {};
+        if let Some(f) = &date_from { date_filter.insert("$gte", f); }
+        if let Some(t) = &date_to { date_filter.insert("$lte", t); }
+        filter.insert("$and", mongodb::bson::Bson::Array(vec![
+            mongodb::bson::Bson::Document(doc! { "date": date_filter }),
+        ]));
+    }
     if let Some(a) = &account_code {
         filter.insert("$or".to_owned(), mongodb::bson::Bson::Array(vec![
             mongodb::bson::Bson::Document(doc!{ "debit_code": a }),
@@ -311,8 +317,14 @@ pub async fn ledger_card(
             mongodb::bson::Bson::Document(doc!{ "credit_code": &account_code }),
         ]),
     };
-    if let Some(f) = &date_from { filter.insert("date", doc!{"$gte": f}); }
-    if let Some(t) = &date_to { filter.insert("date", doc!{"$lte": t}); }
+    if date_from.is_some() || date_to.is_some() {
+        let mut date_filter = doc! {};
+        if let Some(f) = &date_from { date_filter.insert("$gte", f); }
+        if let Some(t) = &date_to { date_filter.insert("$lte", t); }
+        filter.insert("$and", mongodb::bson::Bson::Array(vec![
+            mongodb::bson::Bson::Document(doc! { "date": date_filter }),
+        ]));
+    }
 
     let mut cursor = db.collection::<Document>(super::COL_ENTRIES)
         .find(filter)
@@ -320,14 +332,15 @@ pub async fn ledger_card(
         .limit(500)
         .await.map_err(|e| e.to_string())?;
 
-    // Определяем тип счёта для знака сальдо
+    // Определяем тип счёта (для UI — не для знака расчёта)
     let acc = LedgerService::get_active_by_code(&db, &ctx.company_id, &account_code).await.ok();
-    let sign = match acc.as_ref().map(|a| a.account_type.as_str()).unwrap_or("asset") {
+    let _sign = match acc.as_ref().map(|a| a.account_type.as_str()).unwrap_or("asset") {
         "liability" | "equity" | "revenue" => -1i64,
         _ => 1i64,
     };
 
-    // Берём opening_balance из ledger_balances для самого раннего периода
+    // Натуральное хранение: opening_balance для пассивов отрицательный,
+    // closing = opening + (dt − ct). Подход единообразен для всех типов счетов.
     let opening = LedgerService::get_opening_balance_for_card(&db, &ctx.company_id, &account_code, &date_from).await.unwrap_or(0);
 
     let mut running_balance: i64 = opening;
@@ -335,7 +348,7 @@ pub async fn ledger_card(
     while let Some(Ok(d)) = cursor.next().await {
         let is_debit = d.get_str("debit_code").unwrap_or("") == account_code;
         let amount = d.get_i64("amount").unwrap_or(0);
-        running_balance += if is_debit { amount * sign } else { -amount * sign };
+        running_balance += if is_debit { amount } else { -amount };
 
         items.push(serde_json::json!({
             "date": d.get_str("date").unwrap_or(""),
@@ -351,7 +364,7 @@ pub async fn ledger_card(
 
     Ok(serde_json::json!({
         "account_code": account_code,
-        "sign": sign,
+        "sign": _sign,
         "entries": items,
         "final_balance": running_balance,
     }))

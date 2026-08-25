@@ -159,6 +159,7 @@ pub fn run() {
             signing::commands::create_test_certificate,
             stock::commands::stock_seed_metadata,
             stock::commands::stock_balances,
+            stock::commands::stock_doc_cost,
             stock::commands::stock_report_handover,
             stock::commands::stock_report_overdue,
             stock::commands::signature_policies_list,

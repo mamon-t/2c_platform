@@ -25,6 +25,7 @@ tokio = { version = "1", features = ["full"] }
 mongodb = "3.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6"
+sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 

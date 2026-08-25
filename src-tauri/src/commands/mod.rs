@@ -648,6 +648,7 @@ pub async fn delete_contact(id: String, state: State<'_, Mutex<AppState>>) -> Re
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserContactService::get(db, id).await.ok();
+    UserContactService::delete(db, id).await.map_err(|e| e.to_string())?;
     crate::audit::macros::fire_audit(
         &state, db, AuditableAction::DeleteContact,
         Some(id.to_string()), None, None,
@@ -656,7 +657,7 @@ pub async fn delete_contact(id: String, state: State<'_, Mutex<AppState>>) -> Re
             .field_old("value", &c.value)),
         None, None,
     ).await;
-    UserContactService::delete(db, id).await.map_err(|e| e.to_string())
+    Ok(())
 }
 
 // ── Рабочие профили ───────────────────────────────────────────
@@ -752,6 +753,7 @@ pub async fn remove_user_profile(id: String, state: State<'_, Mutex<AppState>>) 
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let old = UserProfileService::get(db, id).await.ok();
+    UserProfileService::remove(db, id).await.map_err(|e| e.to_string())?;
     crate::audit::macros::fire_audit(
         &state, db, AuditableAction::RemoveUserProfile,
         Some(id.to_string()), None, None,
@@ -760,7 +762,7 @@ pub async fn remove_user_profile(id: String, state: State<'_, Mutex<AppState>>) 
             .field_old("role_id", &p.role_id.0.to_string())),
         None, None,
     ).await;
-    UserProfileService::remove(db, id).await.map_err(|e| e.to_string())
+    Ok(())
 }
 
 // ── Сертификаты ───────────────────────────────────────────────
@@ -782,9 +784,10 @@ pub async fn deactivate_certificate(id: String, state: State<'_, Mutex<AppState>
     ctx.check_permission("users.update").map_err(|e| e.to_string())?;
     let db = get_db!(state);
     let id = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    UserCertificateService::deactivate(db, id).await.map_err(|e| e.to_string())?;
     crate::audit_log!(state, db, AuditableAction::DeactivateCertificate,
         target_id = id.to_string());
-    UserCertificateService::deactivate(db, id).await.map_err(|e| e.to_string())
+    Ok(())
 }
 
 // ── Мультикомпания ────────────────────────────────────────────
@@ -1660,15 +1663,13 @@ pub async fn post_object(id: String, version: i64, state: State<'_, Mutex<AppSta
         return crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string());
     }
 
-    // Этап 2б: обычное проведение
-    let user_id = {
+    // Этап 2б: обычное проведение — user+company в одном локе (fix TOCTOU)
+    let (user_id, company_id) = {
         let s = state.lock().await;
-        crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id)
-    };
-    let company_id = {
-        let s = state.lock().await;
+        let user_id = crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id);
         let cid = s.current_company_id.as_ref().ok_or("Не выбрана компания")?;
-        crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?)
+        let company_id = crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?);
+        (user_id, company_id)
     };
     let outcome = {
         let mut session_ctx = state.lock().await;
@@ -1710,14 +1711,12 @@ pub async fn cancel_object(id: String, version: i64, state: State<'_, Mutex<AppS
         return crate::objects::service::ObjectService::get(&db, uid).await.map_err(|e| e.to_string());
     }
 
-    let user_id = {
+    let (user_id, company_id) = {
         let s = state.lock().await;
-        crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id)
-    };
-    let company_id = {
-        let s = state.lock().await;
+        let user_id = crate::core::UserId(s.current_user.as_ref().ok_or("Необходима авторизация")?._id);
         let cid = s.current_company_id.as_ref().ok_or("Не выбрана компания")?;
-        crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?)
+        let company_id = crate::core::CompanyId(uuid::Uuid::parse_str(cid).map_err(|e| e.to_string())?);
+        (user_id, company_id)
     };
     let outcome = {
         let s = state.lock().await;

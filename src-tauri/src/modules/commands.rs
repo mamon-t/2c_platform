@@ -1,11 +1,14 @@
 // 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
 // This code is proprietary. See LICENSE file for details.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
+
 use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::commands::AppState;
-use crate::core::{CompanyId, PlatformResult};
+use crate::core::CompanyId;
 use crate::db::MongoClient;
 
 use super::{InstalledModule, ModuleManifest, service::ModuleService, InstallModuleInput};
@@ -136,9 +139,48 @@ pub async fn modules_install(
         }).collect(),
     };
 
-    ModuleService::install(&db, manifest, wasm_bytes, &company_id)
+    let installed = ModuleService::install(&db, manifest, wasm_bytes.clone(), &company_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // ── «Установил → сразу использует»: модуль в память текущей сессии ──
+    // Отдельная загрузка с РЕАЛЬНЫМИ capabilities: валидационный экземпляр
+    // выше собран с пустыми, а host-fn захватывают HostData при билде.
+    {
+        let plugin_ctx = Arc::new(std::sync::RwLock::new(
+            crate::plugin_manager::PluginContext {
+                company_id: Some(company_id.0.to_string()),
+                ..Default::default()
+            },
+        ));
+        let host_data = crate::plugin_manager::HostData {
+            db: Some(db.clone()),
+            ctx: plugin_ctx,
+            module_code: Some(installed.code.clone()),
+            capabilities: installed.capabilities.clone(),
+        };
+        match crate::plugin_manager::WasmPlugin::load(wasm_bytes, installed.code.clone(), host_data).await {
+            Ok(plugin) => {
+                let arc = Arc::new(StdMutex::new(plugin));
+                let mut s = state.lock().await;
+                let map = s.wasm_modules.get_or_insert_with(HashMap::new);
+                // Защитно: ключ кода не должен был пережить установку
+                // (повторный install того же кода отклонён бы ранее)
+                map.remove(&installed.code);
+                map.insert(installed.code.clone(), arc.clone());
+                map.insert(installed.id.to_string(), arc);
+                tracing::info!("[Module installed] {} доступен сразу (без перезапуска)", installed.code);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[Module installed] {} установлен, но не загружен в сессию: {e}. Подхватится при следующем входе",
+                    installed.code
+                );
+            }
+        }
+    }
+
+    Ok(installed)
 }
 
 #[tauri::command]

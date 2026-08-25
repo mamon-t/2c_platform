@@ -55,11 +55,11 @@
         api.ledgerAccountsList(),
         api.ledgerGetOpeningBalances(selectedPeriod),
       ]);
-      const accList = accounts as Array<{ id: string; code: string; name: string; account_type: string; is_active: boolean }>;
+      const accList = accounts as Array<{ _id: string; code: string; name: string; account_type: string; is_active: boolean }>;
       const existingMap = new Map(existing.map(b => [b.account_code, b]));
 
       balances = accList.filter(a => a.is_active).map(a => ({
-        account_id: a.id,
+        account_id: a._id,
         account_code: a.code,
         account_type: a.account_type,
         account_name: a.name,
@@ -101,8 +101,14 @@
   }
 
   onMount(async () => {
-    await loadPeriods();
-    await loadBalances();
+    try {
+      await loadPeriods();
+      await loadBalances();
+    } catch {
+      // loadPeriods/loadBalances handle their own errors
+    } finally {
+      loading = false;
+    }
   });
 </script>
 

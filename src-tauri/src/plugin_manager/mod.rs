@@ -7,7 +7,8 @@ pub mod workflow;
 
 use extism::*;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Instant;
 
 use crate::modules::required_capability;
 
@@ -441,6 +442,33 @@ extism::host_fn!(list_entity_fields_impl(user_data: HostData; entity_type_id: St
     Ok(result)
 });
 
+// ── Wasmtime disk cache ──────────────────────────────────────
+
+/// Возвращает путь к TOML-конфигу кэша wasmtime.
+/// Создаёт каталог + config.toml при первом вызове (OnceLock).
+/// Если `dirs::cache_dir()` недоступен — кэш работает через дефолт wasmtime.
+fn wasmtime_cache_toml() -> Option<&'static std::path::Path> {
+    static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+    PATH.get_or_init(|| {
+        let base = dirs::cache_dir().unwrap_or_else(|| std::env::temp_dir()).join("2c-platform").join("wasmtime-cache");
+        if let Err(e) = std::fs::create_dir_all(&base) {
+            tracing::warn!("[wasmtime-cache] Не удалось создать каталог {base:?}: {e}");
+            return None;
+        }
+        let toml = base.join("config.toml");
+        if !toml.exists() {
+            let content = format!("[cache]\ndirectory = \"{}\"\n", base.display());
+            if let Err(e) = std::fs::write(&toml, &content) {
+                tracing::warn!("[wasmtime-cache] Не удалось создать {}: {e}", toml.display());
+                return None;
+            }
+            tracing::info!("[wasmtime-cache] Создан: {}", toml.display());
+        }
+        Some(toml)
+    }).as_deref()
+}
+
 // ── WasmPlugin ─────────────────────────────────────────────
 
 impl WasmPlugin {
@@ -452,7 +480,7 @@ impl WasmPlugin {
 
         let ctx = host_data.ctx.clone();
         let capabilities = host_data.capabilities.clone();
-        let mut plugin = PluginBuilder::new(&manifest)
+        let mut builder = PluginBuilder::new(&manifest)
             .with_function("create_object", [PTR, PTR], [PTR], UserData::new(host_data.clone()), create_object_impl)
             .with_function("list_objects",  [PTR, PTR], [PTR], UserData::new(host_data.clone()), list_objects_impl)
             .with_function("get_object",    [PTR],      [PTR], UserData::new(host_data.clone()), get_object_impl)
@@ -478,12 +506,22 @@ impl WasmPlugin {
             .with_function("tx_begin",   [PTR],           [PTR], UserData::new(host_data.clone()), workflow::tx_begin_impl)
             .with_function("tx_add_op",  [PTR, PTR, PTR], [PTR], UserData::new(host_data.clone()), workflow::tx_add_op_impl)
             .with_function("tx_commit",  [PTR],           [PTR], UserData::new(host_data.clone()), workflow::tx_commit_impl)
-            .with_fuel_limit(10_000_000)
-            .build()
-            .map_err(|e| format!("Ошибка загрузки плагина: {}", e))?;
+            .with_function("stock_doc_cost", [PTR],       [PTR], UserData::new(host_data.clone()), workflow::stock_doc_cost_impl)
+            .with_fuel_limit(10_000_000);
 
+        if let Some(cache_path) = wasmtime_cache_toml() {
+            builder = builder.with_cache_config(cache_path);
+        }
+
+        let t0 = Instant::now();
+        let mut plugin = builder.build()
+            .map_err(|e| format!("Ошибка загрузки плагина {}: {}", wasm_name, e))?;
+        tracing::info!("[Plugin compile] {} build={}ms", wasm_name, t0.elapsed().as_millis());
+
+        let t1 = Instant::now();
         let info_json = plugin.call::<&[u8], String>("get_info", b"")
             .map_err(|e| format!("get_info() не удался: {}", e))?;
+        tracing::info!("[Plugin init] {} get_info={}ms", wasm_name, t1.elapsed().as_millis());
 
         let wasm_info: WasmModuleInfo = serde_json::from_str(&info_json)
             .map_err(|e| format!("get_info() невалидный JSON: {}", e))?;
@@ -562,4 +600,22 @@ pub struct WasmModuleInfo {
     /// Требуемые RBAC-политики ("subsystem.action"), создаются при install.
     #[serde(default)]
     pub permissions: Vec<String>,
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn wasmtime_cache_config_created_and_valid() {
+        let path = wasmtime_cache_toml();
+        assert!(path.is_some(), "cache toml path должен быть Some");
+        let p = path.unwrap();
+        assert!(p.exists(), "{} должен существовать", p.display());
+        let content = std::fs::read_to_string(p).expect("чтение config.toml");
+        assert!(content.contains("[cache]"), "секция [cache]: {content}");
+        assert!(content.contains("directory"), "ключ directory: {content}");
+        // Повторный вызов возвращает тот же путь (OnceLock)
+        assert_eq!(wasmtime_cache_toml(), path);
+    }
 }

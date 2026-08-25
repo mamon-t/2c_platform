@@ -1,0 +1,16 @@
+2C Platform
+Copyright 2026 Mikhail Alekseev (aka Mamon-T)
+
+This product includes software developed by:
+- Mikhail Alekseev (core platform architecture and implementation)
+- The Rust community (Rust programming language)
+- The MongoDB community (MongoDB database)
+- The Tauri community (Tauri application framework)
+- The Svelte community (Svelte frontend framework)
+- The Extism community (WASM plugin framework)
+
+Third-party dependencies:
+- КриптоПро CSP 5.0 is a proprietary product of Crypto-Pro LLC.
+  This platform integrates with КриптоПро CSP via the cpcsp-rs library,
+  but does not include or redistribute КриптоПро CSP itself.
+  Users must obtain a separate license for КриптоПро CSP from Crypto-Pro LLC.

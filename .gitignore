@@ -2,6 +2,7 @@ node_modules/
 dist/
 target/
 .env
+.env.*
 *.log
 .DS_Store
 Thumbs.db
@@ -15,4 +16,5 @@ tmp/
 .~lock.*
 TZ-v*.doc*
 PROGRESS.md
+REPORT.md
 public/plugins/*.wasm

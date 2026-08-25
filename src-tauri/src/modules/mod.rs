@@ -44,6 +44,7 @@ pub fn required_capability(function_name: &str) -> Option<&'static str> {
         "delete_object" => Some("objects.delete"),
         "transition_object" => Some("objects.update"),
         "get_entity_type" | "list_entity_fields" => Some("metadata.read"),
+        "stock_doc_cost" => Some("objects.read"),
         "emit_event" => Some("events.emit"),
         "next_number" => Some("numbering.next"),
         "log_message" => Some("logging"),
@@ -121,9 +122,30 @@ pub struct InstalledModule {
     pub functions: Vec<ModuleFunction>,
     pub status: ModuleStatus,
     pub wasm_bytes: Vec<u8>,
+    /// SHA-256 бинарника — ключ локального кэша байтов (заполняется при install;
+    /// для старых записей досчитывается при первой загрузке).
+    #[serde(default)]
+    pub wasm_sha256: Option<String>,
     pub manifest: serde_json::Value,
     pub installed_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Метаданные модуля без бинарника — для списков и preload.
+/// Байты добираются через `ModuleService::get_module_bytes` (локальный кэш).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledModuleMeta {
+    #[serde(rename = "_id")]
+    pub id: uuid::Uuid,
+    pub code: String,
+    pub name: String,
+    pub version: String,
+    pub api_version: String,
+    pub capabilities: Vec<String>,
+    pub functions: Vec<ModuleFunction>,
+    pub status: ModuleStatus,
+    #[serde(default)]
+    pub wasm_sha256: Option<String>,
 }
 
 /// Привязка модуля к компании (per-company включение/отключение + настройки).

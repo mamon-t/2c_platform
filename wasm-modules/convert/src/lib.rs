@@ -19,11 +19,39 @@ pub struct PluginFunction {
     pub input_schema: serde_json::Value,
 }
 
+/// Контракт ModuleInfo ≥1.2 (как у requests/trade/stock).
 #[derive(Serialize, Deserialize)]
 pub struct ModuleInfo {
     pub name: String,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub handled_documents: Vec<String>,
     pub functions: Vec<PluginFunction>,
+}
+
+/// Развернуть конверт host-функции {ok, data|error} (контракт SDK).
+fn unwrap_host(raw: String) -> anyhow::Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("host вернул невалидный JSON: {e}"))?;
+    if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
+        Ok(v.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    } else {
+        let code = v["error"]["code"].as_str().unwrap_or("UNKNOWN");
+        let msg = v["error"]["message"].as_str().unwrap_or("");
+        Err(anyhow::anyhow!("{code}: {msg}"))
+    }
 }
 
 // ── Request / Result types ─────────────────────────────────
@@ -108,18 +136,13 @@ pub fn import_data(Json(req): Json<ImportRequest>) -> FnResult<Json<ImportResult
         let call_result = unsafe { create_object(req.entity_type_id.clone(), data_str) };
 
         match call_result {
-            Ok(response) => {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-                    if parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-                        created += 1;
-                        result_objects.push(parsed);
-                    } else if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-                        errors.push(err.to_string());
-                    }
-                } else {
+            Ok(response) => match unwrap_host(response) {
+                Ok(data) => {
                     created += 1;
+                    result_objects.push(data);
                 }
-            }
+                Err(e) => errors.push(e.to_string()),
+            },
             Err(e) => {
                 errors.push(format!("Host error: {}", e));
             }
@@ -148,8 +171,13 @@ pub fn export_data(Json(req): Json<ExportRequest>) -> FnResult<Json<ExportResult
         list_objects(req.entity_type_id.clone(), "500".into())
     }?;
 
-    let objects: Vec<serde_json::Value> = serde_json::from_str(&objects_json)
-        .map_err(|e| anyhow::anyhow!("Parse list_objects response: {}", e))?;
+    // Конверт {ok, data:{objects, total_count}} → массив объектов
+    let objects_val = unwrap_host(objects_json)?;
+    let arr = objects_val
+        .get("objects")
+        .ok_or_else(|| anyhow::anyhow!("list_objects: в data нет objects"))?;
+    let objects: Vec<serde_json::Value> = serde_json::from_value(arr.clone())
+        .map_err(|e| anyhow::anyhow!("Parse list_objects data.objects: {}", e))?;
 
     let _ = unsafe { log_message(format!(
         "[convert] export: got {} objects from host", objects.len()
@@ -168,7 +196,24 @@ pub fn export_data(Json(req): Json<ExportRequest>) -> FnResult<Json<ExportResult
 pub fn get_info() -> FnResult<Json<ModuleInfo>> {
     Ok(Json(ModuleInfo {
         name: "convert".into(),
-        version: "0.1.0".into(),
+        version: "0.2.0".into(),
+        code: Some("convert".into()),
+        author: Some("2C Platform".into()),
+        description: Some(
+            "Импорт/экспорт данных (CSV/JSON/YAML/XML). Своих прав нет: операции выполняются \
+             с правами пользователя на объекты (create_object/list_objects)."
+                .into(),
+        ),
+        api_version: Some("1.0".into()),
+        // Только гранты на host-fn, которые плагин вызывает. RBAC-политик
+        // у модуля нет: доступ определяется правами пользователя на объекты.
+        capabilities: vec![
+            "objects.create".into(),
+            "objects.read".into(),
+            "logging".into(),
+        ],
+        permissions: vec![],
+        handled_documents: vec![],
         functions: vec![
             PluginFunction {
                 name: "import_data".into(),

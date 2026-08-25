@@ -35,7 +35,7 @@
     if (canManage()) {
       api.listEntityTypes().then((types) => {
         seeded = types.some((t) => t.code.startsWith('TRADE_'));
-        if (!seeded) load();
+        load();
       }).catch(() => load());
     } else {
       load();

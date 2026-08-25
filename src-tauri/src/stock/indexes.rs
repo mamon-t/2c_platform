@@ -60,10 +60,16 @@ pub async fn ensure_indexes(db: &MongoClient) {
         .await
     { warn!("stock_movements by_loc: {e}"); }
 
+    // Себестоимость по документу и по строкам документа
     if let Err(e) = movements
-        .create_index(IndexModel::builder().keys(doc! { "doc_id": 1 }).build())
+        .create_index(IndexModel::builder().keys(doc! { "company_id": 1, "doc_id": 1 }).build())
         .await
     { warn!("stock_movements doc_id: {e}"); }
+
+    if let Err(e) = movements
+        .create_index(IndexModel::builder().keys(doc! { "company_id": 1, "doc_id": 1, "line_ref": 1 }).build())
+        .await
+    { warn!("stock_movements doc_line: {e}"); }
 
     // Подотчёт: просроченные возвраты
     if let Err(e) = movements

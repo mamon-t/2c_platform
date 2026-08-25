@@ -3,13 +3,13 @@
 
 use chrono::Utc;
 use futures::StreamExt;
-use mongodb::bson::{self, doc};
+use mongodb::bson::{self, doc, Document};
 
 use crate::core::{CompanyId, PlatformResult};
 use crate::db::MongoClient;
 
 use super::{
-    CompanyModule, InstalledModule, ModuleManifest, ModuleStatus,
+    CompanyModule, InstalledModule, InstalledModuleMeta, ModuleManifest, ModuleStatus,
     COLLECTION_COMPANY_MODULES, COLLECTION_MODULES, CURRENT_API_VERSION,
     already_installed, invalid_manifest, module_not_found, api_version_mismatch,
 };
@@ -63,6 +63,10 @@ impl ModuleService {
 
         let now = Utc::now();
         let module_id = uuid::Uuid::new_v4();
+        // Хэш бинарника — ключ локального кэша; сразу греем кэш,
+        // чтобы первый вход после установки не качал байты.
+        let wasm_hash = Self::sha256_hex(&wasm_bytes);
+        Self::put_cache_bytes(&manifest.code, &wasm_hash, &wasm_bytes);
 
         // ── RBAC-сид: создаём политики из манифеста (permissions: ["subsystem.action"]) ──
         let seeded = Self::seed_permissions(db, &manifest).await;
@@ -81,6 +85,7 @@ impl ModuleService {
             functions: manifest.functions.clone(),
             status: ModuleStatus::Enabled,
             wasm_bytes,
+            wasm_sha256: Some(wasm_hash),
             manifest: manifest_value,
             installed_at: now,
             updated_at: now,
@@ -347,5 +352,117 @@ impl ModuleService {
             .await?;
 
         Ok(())
+    }
+
+    // ── Локальный кэш байтов модулей ───────────────────────
+    //
+    // ~/.cache/2c-platform/modules/{code}-{hash16}.wasm
+    // Ключ — sha256 содержимого: повторный вход не тянет бинарники по сети,
+    // обновление модуля (новый хэш) докачивает только его.
+
+    pub fn cache_dir() -> std::path::PathBuf {
+        dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("2c-platform")
+            .join("modules")
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(data);
+        hex::encode(h.finalize())
+    }
+
+    fn cache_path(code: &str, hash: &str) -> std::path::PathBuf {
+        let safe: String = code.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        Self::cache_dir().join(format!("{safe}-{}.wasm", &hash[..16.min(hash.len())]))
+    }
+
+    /// Записать байты в кэш (tmp + rename) и убрать прочие версии этого кода.
+    pub fn put_cache_bytes(code: &str, hash: &str, bytes: &[u8]) {
+        let dir = Self::cache_dir();
+        if std::fs::create_dir_all(&dir).is_err() { return; }
+        let path = Self::cache_path(code, hash);
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+        // Прочие версии кода больше не нужны
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let prefix = format!("{}-", code);
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with(&prefix) && name != *path.file_name().unwrap_or_default().to_string_lossy() {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+
+    /// Байты модуля для загрузки WASM: сначала локальный кэш по известному
+    /// хэшу, при промахе — разовый fetch из БД + запись в кэш.
+    pub async fn get_module_bytes(
+        db: &MongoClient,
+        meta: &InstalledModuleMeta,
+    ) -> PlatformResult<Vec<u8>> {
+        // 1. Кэш по известному хэшу
+        if let Some(h) = &meta.wasm_sha256 {
+            let path = Self::cache_path(&meta.code, h);
+            if let Ok(bytes) = std::fs::read(&path) {
+                return Ok(bytes);
+            }
+        }
+
+        // 2. Fetch из БД (только поле байтов)
+        let col = db.collection::<Document>(COLLECTION_MODULES);
+        let d = col
+            .find_one(doc! { "_id": meta.id.to_string() })
+            .projection(doc! { "wasm_bytes": 1 })
+            .await?
+            .ok_or_else(|| module_not_found(&meta.code))?;
+        let bytes = d.get_binary_generic("wasm_bytes")
+            .map_err(|_| crate::core::PlatformError::NotFound(
+                format!("модуль {}: нет wasm_bytes", meta.code)))?
+            .to_vec();
+
+        // 3. Хэш → кэш; ленивая миграция поля wasm_sha256
+        let h = Self::sha256_hex(&bytes);
+        Self::put_cache_bytes(&meta.code, &h, &bytes);
+        if meta.wasm_sha256.as_deref() != Some(h.as_str()) {
+            let _ = col.update_one(
+                doc! { "_id": meta.id.to_string() },
+                doc! { "$set": { "wasm_sha256": &h, "updated_at": mongodb::bson::DateTime::now() } },
+            ).await;
+        }
+        Ok(bytes)
+    }
+
+    /// Enabled модули компании БЕЗ бинарников (метаданные + хэш).
+    pub async fn list_enabled_meta(
+        db: &MongoClient,
+        company_id: &CompanyId,
+    ) -> PlatformResult<Vec<InstalledModuleMeta>> {
+        let modules = db.collection::<InstalledModuleMeta>(COLLECTION_MODULES);
+        let company_modules = db.collection::<CompanyModule>(COLLECTION_COMPANY_MODULES);
+
+        let mut cm_cursor = company_modules
+            .find(doc! { "company_id": company_id.0.to_string(), "enabled": true })
+            .await?;
+        let mut ids = Vec::new();
+        while let Some(cm) = cm_cursor.next().await {
+            ids.push(cm?.module_id);
+        }
+        if ids.is_empty() { return Ok(Vec::new()); }
+
+        let mut cursor = modules
+            .find(doc! { "_id": { "$in": ids } })
+            .projection(doc! { "wasm_bytes": 0 })
+            .await?;
+        let mut out = Vec::new();
+        while let Some(m) = cursor.next().await {
+            out.push(m?);
+        }
+        Ok(out)
     }
 }

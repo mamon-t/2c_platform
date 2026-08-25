@@ -1,0 +1,15 @@
+# Локальный конфиг WASM-сборки модуля.
+#
+# Глобальный ~/.cargo/config.toml добавляет всем сборкам
+#   rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+# что ломает rust-lld для wasm32 (gcc-style аргумент в wasm-flavor lld).
+#
+# Пустой массив здесь НЕ работает: cargo считает его «не задано»
+# и проваливается к глобальному значению. Поэтому переопределяем
+# target-scoped rustflags РЕАЛЬНЫМ содержимым.
+[target.wasm32-unknown-unknown]
+linker = "rust-lld"
+rustflags = ["-C", "debuginfo=0"]
+
+[build]
+target = "wasm32-unknown-unknown"

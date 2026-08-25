@@ -164,6 +164,7 @@ async fn write_movement(
     quantity: f64,
     unit_cost: i64,
     doc_ref: DocRef,
+    line_ref: Option<&str>,
     responsible_user_id: Option<&str>,
     expected_return_date: Option<&str>,
     is_reversal: bool,
@@ -191,6 +192,9 @@ async fn write_movement(
     if let Some((dk, di)) = &doc_ref {
         d.insert("doc_kind", dk);
         d.insert("doc_id", di);
+    }
+    if let Some(lr) = line_ref {
+        d.insert("line_ref", lr);
     }
     if let Some(r) = responsible_user_id {
         d.insert("responsible_user_id", r);
@@ -220,6 +224,7 @@ async fn eat_fifo(
     qty_needed: f64,
     kind: MovementKind,
     doc_ref: &DocRef,
+    line_ref: Option<&str>,
 ) -> PlatformResult<IssuedLine> {
     let available = read_balance(e, location_id, nomenclature_id).await;
     let allow_neg = allow_negative(e.db, &e.company_id).await;
@@ -279,7 +284,7 @@ async fn eat_fifo(
                 )));
             }
 
-            write_movement(e, location_id, nomenclature_id, Some(&bid), kind, -take, unit_cost, doc_ref.clone(), None, None, false).await?;
+            write_movement(e, location_id, nomenclature_id, Some(&bid), kind, -take, unit_cost, doc_ref.clone(), line_ref, None, None, false).await?;
             parts.push(EatenPart { batch_id: bid, qty: take, unit_cost });
             need -= take;
         }
@@ -295,7 +300,7 @@ async fn eat_fifo(
         } else {
             0
         };
-        write_movement(e, location_id, nomenclature_id, None, kind, -deficit, avg, doc_ref.clone(), None, None, false).await?;
+        write_movement(e, location_id, nomenclature_id, None, kind, -deficit, avg, doc_ref.clone(), line_ref, None, None, false).await?;
         parts.push(EatenPart { batch_id: String::new(), qty: deficit, unit_cost: avg });
     }
 
@@ -379,7 +384,7 @@ pub async fn receipt(
                 .map_err(|er| PlatformError::Database(er.to_string()))?;
 
             write_movement(e, location_id, &nom_id, Some(&batch_id), MovementKind::Receipt,
-                qty, line.unit_cost, doc_ref.clone(), None, None, false).await?;
+                qty, line.unit_cost, doc_ref.clone(), None, None, None, false).await?;
             bump_balance(e, location_id, &nom_id, qty).await?;
 
             created.push(serde_json::json!({
@@ -392,7 +397,17 @@ pub async fn receipt(
         }
     }
 
-    Ok(serde_json::json!({ "batches": created, "skipped_services": skipped_services }))
+    // Суммарная стоимость приёмки — цель $ref {"op_id.total_cost"}
+    // для бухгалтерских проводок возвратов.
+    let total_cost: i64 = created.iter()
+        .filter_map(|v| {
+            let c = v.get("unit_cost")?.as_i64()?;
+            let q = v.get("qty")?.as_f64()?;
+            Some((q.round() as i64) * c)
+        })
+        .sum();
+
+    Ok(serde_json::json!({ "batches": created, "total_cost": total_cost, "skipped_services": skipped_services }))
 }
 
 /// Списание по FIFO со строки (товары; наборы раскладываются).
@@ -409,13 +424,20 @@ pub async fn issue(
     for line in lines {
         let mut items = Vec::new();
         expand_line(e, &line.nomenclature_id, line.qty, 0, &mut items, &mut skipped_services).await?;
+        // Компоненты набора наследуют line_ref родительской строки
         for (nom_id, qty) in items {
-            let issued_line = eat_fifo(e, location_id, &nom_id, qty, kind, &doc_ref).await?;
+            let issued_line = eat_fifo(e, location_id, &nom_id, qty, kind, &doc_ref, line.line_ref.as_deref()).await?;
             issued.push(serde_json::to_value(&issued_line).unwrap_or_default());
         }
     }
 
-    Ok(serde_json::json!({ "lines": issued, "skipped_services": skipped_services }))
+    // Суммарная себестоимость списания — цель $ref {"op_id.total_cost"}
+    // для бухгалтерских проводок оркестратора.
+    let total: i64 = issued.iter()
+        .filter_map(|v| v.get("total_cost").and_then(|c| c.as_i64()))
+        .sum();
+
+    Ok(serde_json::json!({ "lines": issued, "total_cost": total, "skipped_services": skipped_services }))
 }
 
 /// Перемещение между любыми локациями (в т.ч. выдача/возврат под отчёт).
@@ -451,8 +473,8 @@ pub async fn transfer(
         expand_line(e, &line.nomenclature_id, line.qty, 0, &mut items, &mut skipped_services).await?;
 
         for (nom_id, qty) in items {
-            // Съесть на источнике
-            let issued = eat_fifo(e, from_location_id, &nom_id, qty, kind_out, &doc_ref).await?;
+            // Съесть на источнике (line_ref строки документа)
+            let issued = eat_fifo(e, from_location_id, &nom_id, qty, kind_out, &doc_ref, line.line_ref.as_deref()).await?;
 
             // Воссоздать партии на приёмнике с той же ценой и датой
             for part in &issued.parts {
@@ -477,7 +499,7 @@ pub async fn transfer(
                     .map_err(|er| PlatformError::Database(er.to_string()))?;
 
                 write_movement(e, to_location_id, &nom_id, Some(&new_batch_id), kind_in,
-                    part.qty, part.unit_cost, doc_ref.clone(),
+                    part.qty, part.unit_cost, doc_ref.clone(), line.line_ref.as_deref(),
                     responsible_user_id.as_deref(), expected_return_date.as_deref(), false).await?;
                 bump_balance(e, to_location_id, &nom_id, part.qty).await?;
 
@@ -537,11 +559,11 @@ pub async fn count(
                 .session(&mut *e.session).await
                 .map_err(|er| PlatformError::Database(er.to_string()))?;
             write_movement(e, location_id, &line.nomenclature_id, Some(&batch_id),
-                MovementKind::CountSurplus, diff, avg, doc_ref.clone(), None, None, false).await?;
+                MovementKind::CountSurplus, diff, avg, doc_ref.clone(), None, None, None, false).await?;
             bump_balance(e, location_id, &line.nomenclature_id, diff).await?;
             results.push(serde_json::json!({"nomenclature_id": line.nomenclature_id, "surplus": fmt_qty(diff)}));
         } else if diff < -1e-9 {
-            eat_fifo(e, location_id, &line.nomenclature_id, -diff, MovementKind::CountShortage, &doc_ref).await?;
+            eat_fifo(e, location_id, &line.nomenclature_id, -diff, MovementKind::CountShortage, &doc_ref, line.line_ref.as_deref()).await?;
             results.push(serde_json::json!({"nomenclature_id": line.nomenclature_id, "shortage": fmt_qty(-diff)}));
             save_stock_notification(e, "",
                 format!("Недостача: {}", line.nomenclature_id),
@@ -695,4 +717,65 @@ pub async fn reverse_document(
     }
 
     Ok(serde_json::json!({ "undone_movements": undone, "doc_id": doc_id }))
+}
+
+/// Себестоимость списаний документа — чистая проекция движений склада.
+///
+/// Группирует расходные движения (issue / transfer_out / handover_out /
+/// count_shortage) по (line_ref, nomenclature). Отменённые движения
+/// исключаются фильтрами is_reversal/reversed → при отмене документа
+/// себестоимость «исчезает» сама.
+///
+/// Движения без line_ref (старые документы) попадают в строку с
+/// line_ref: null — карточка покажет их единой неразбитой суммой.
+pub async fn doc_cost(
+    db: &crate::db::MongoClient,
+    company_id: &crate::core::CompanyId,
+    doc_id: &str,
+) -> PlatformResult<serde_json::Value> {
+    let filter = doc! {
+        "company_id": company_id.0.to_string(),
+        "doc_id": doc_id,
+        "kind": { "$in": ["issue", "transfer_out", "handover_out", "count_shortage"] },
+        "is_reversal": { "$ne": true },
+        "reversed": { "$exists": false },
+    };
+    let mut cursor = db.collection::<Document>(COL_MOVEMENTS)
+        .find(filter)
+        .await
+        .map_err(|er| PlatformError::Database(er.to_string()))?;
+
+    use std::collections::BTreeMap;
+    // key = (line_ref, nomenclature_id) — BTreeMap для стабильного порядка
+    let mut rows: BTreeMap<(String, String), (f64, i64)> = BTreeMap::new();
+    while let Some(m) = cursor.next().await {
+        let m = m.map_err(|er| PlatformError::Database(er.to_string()))?;
+        let nom = m.get_str("nomenclature_id").unwrap_or("").to_string();
+        let lref = m.get_str("line_ref").ok().map(String::from);
+        let qty = m.get_f64("quantity").unwrap_or(0.0).abs();
+        let cost = m.get_i64("total_cost").unwrap_or_else(|_| {
+            (qty.round() as i64) * m.get_i64("unit_cost").unwrap_or(0)
+        });
+        let e = rows.entry((lref.unwrap_or_default(), nom.clone())).or_insert((0.0, 0));
+        e.0 += qty;
+        e.1 += cost;
+    }
+
+    let mut lines = Vec::new();
+    let mut total: i64 = 0;
+    for ((lref, nom), (qty, cost)) in rows {
+        total += cost;
+        lines.push(serde_json::json!({
+            "line_ref": if lref.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(lref) },
+            "nomenclature_id": nom,
+            "qty": qty,
+            "cost": cost,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "doc_id": doc_id,
+        "lines": lines,
+        "total_cost": total,
+    }))
 }

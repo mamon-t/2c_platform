@@ -227,6 +227,24 @@ pub async fn stock_balances(
     Ok(serde_json::json!({ "balances": items }))
 }
 
+/// Себестоимость списаний документа (проекция движений склада).
+/// Для карточек реализаций и отчётов; отменённые движения исключены.
+#[tauri::command]
+pub async fn stock_doc_cost(
+    doc_id: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let (db, company_id) = {
+        let s = state.lock().await;
+        let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+        ctx.check_permission("stock.read").map_err(|e| e.to_string())?;
+        let db = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
+        (db, ctx.company_id.clone())
+    };
+
+    super::engine::doc_cost(&db, &company_id, &doc_id).await.map_err(|e| e.to_string())
+}
+
 /// «Что у кого на руках»: остатки на локациях-подотчётниках
 /// с данными последней выдачи.
 #[tauri::command]

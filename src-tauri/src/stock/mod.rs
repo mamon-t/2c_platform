@@ -93,6 +93,10 @@ pub struct ReceiptLine {
 pub struct IssueLine {
     pub nomenclature_id: String,
     pub qty: f64,
+    /// Идентификатор строки документа-источника. Пишется в движения списания:
+    /// ключ к себестоимости по строкам (возвраты от покупателя, карточки).
+    #[serde(default)]
+    pub line_ref: Option<String>,
 }
 
 // ── Вид движения ───────────────────────────────────────────

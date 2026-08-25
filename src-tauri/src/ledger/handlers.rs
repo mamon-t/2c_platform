@@ -50,7 +50,19 @@ impl TxOpHandler for AccountingPostHandler {
         let date = params.get("date").and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_else(|| chrono::Utc::now().date_naive().to_string());
-        let lines = parse_lines(&params)?;
+        let lines: Vec<super::PostingLine> = parse_lines(&params)?
+            .into_iter()
+            .filter(|l| {
+                // Проводки с нулевой суммой не имеют смысла (например,
+                // COGS по документу только из услуг: $ref total_cost = 0).
+                if l.amount == 0 {
+                    tracing::warn!("[accounting.post] отброшена нулевая проводка {}→{}", l.debit_code, l.credit_code);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
         let (company, user, _actor) = actor_of(op.ctx);
 
         let input = super::service::PostInput {

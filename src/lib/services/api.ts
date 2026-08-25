@@ -1041,6 +1041,10 @@ export const api = {
   async stockSeedMetadata(): Promise<string> {
     return getAdapter().invoke<string>('stock_seed_metadata');
   },
+  /** Себестоимость списаний документа по строкам (stock.read). Отменённые движения исключены. */
+  async stockDocCost(docId: string): Promise<StockDocCostTS> {
+    return getAdapter().invoke<StockDocCostTS>('stock_doc_cost', { docId });
+  },
 
   // ── Учёт (ledger) ──
   async ledgerOsv(periodFrom?: string, periodTo?: string): Promise<LedgerOsvTS> {
@@ -1320,6 +1324,21 @@ export interface StockBalanceTS {
 
 export interface StockBalancesTS {
   balances: StockBalanceTS[];
+}
+
+/** Себестоимость списаний документа — проекция движений склада (stock_movements). */
+export interface StockDocCostLineTS {
+  /** Идентификатор строки документа; null для старых движений без привязки */
+  line_ref: string | null;
+  nomenclature_id: string;
+  qty: number;
+  cost: number;
+}
+
+export interface StockDocCostTS {
+  doc_id: string;
+  lines: StockDocCostLineTS[];
+  total_cost: number;
 }
 
 export interface StockHandoverItemTS {

@@ -24,6 +24,8 @@ extern "ExtismHost" {
     fn now_ms() -> String;
     fn notify_user(recipient: String, subject: String, body: String) -> String;
     fn log_message(msg: String);
+    /// Себестоимость списаний документа из движений склада (проекция).
+    fn stock_doc_cost(doc_id: String) -> String;
 }
 
 // ── Манифест ───────────────────────────────────────────────
@@ -224,12 +226,20 @@ pub struct LineData {
     /// Доп. расходы на строку (копейки, только для поступления)
     #[serde(default)]
     pub extra_cost: i64,
-    /// Фактическая себестоимость (заполняется при проведении SALES)
+    /// Идентификатор строки (line_ref движений склада). Пусто → l{индекс}.
+    /// Себестоимость строки в документе НЕ пишется: она читается из движений
+    /// по (doc_id, line_ref) через stock_doc_cost.
     #[serde(default)]
-    pub cost_price: f64,
+    pub line_id: String,
 }
 
 fn d_one() -> f64 { 1.0 }
+
+/// line_ref для движений склада: явный line_id или стабильный индекс строки.
+/// Документ после проведения неизменен — индекс стабилен между попытками постинга.
+fn line_ref_of(l: &LineData, i: usize) -> String {
+    if l.line_id.is_empty() { format!("l{i}") } else { l.line_id.clone() }
+}
 
 impl LineData {
     fn amount_kop(&self) -> i64 {
@@ -274,8 +284,8 @@ pub fn on_post(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Value>
     let h = handle_val["handle"].as_str()
         .ok_or_else(|| anyhow::anyhow!("tx_begin без handle"))?;
 
-    // Складская операция по типу документа
-    let stock_op_result = match type_code.as_str() {
+    // Складская операция по типу документа (op_id для $ref проводок)
+    let stock_op: Option<String> = match type_code.as_str() {
         "PURCHASE" => post_purchase(h, &warehouse, &lines, &data, &input.id)?,
         "SALES" => post_sales(h, &warehouse, &lines, &data, &accounts, &input.id)?,
         "CUSTOMER_RETURN" => post_customer_return(h, &warehouse, &data, &accounts, &lines, &input.id)?,
@@ -287,7 +297,7 @@ pub fn on_post(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Value>
 
     // Учётные проводки (если включены)
     if accounts.use_accounting {
-        add_accounting_entries(h, &type_code, &data, &input.id, &accounts, stock_op_result.as_ref())?;
+        add_accounting_entries(h, &type_code, &data, &input.id, &accounts, stock_op.as_deref())?;
     }
 
     // Переход документа
@@ -335,7 +345,7 @@ pub fn on_post(Json(input): Json<PostInput>) -> FnResult<Json<serde_json::Value>
 fn post_purchase(
     h: &str, warehouse: &str, lines: &[LineData], data: &serde_json::Value,
     doc_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
+) -> anyhow::Result<Option<String>> {
     let extra_total = data["extra_costs_total"].as_f64()
         .map(|v| (v * 100.0).round() as i64).unwrap_or(0);
     let extras = allocate_extra_costs(lines, extra_total);
@@ -365,108 +375,155 @@ fn post_purchase(
 fn post_sales(
     h: &str, warehouse: &str, lines: &[LineData], _data: &serde_json::Value,
     accounts: &Accounts, doc_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
-    let issue_lines: Vec<serde_json::Value> = lines.iter().map(|l| {
-        serde_json::json!({"nomenclature_id": l.nomenclature_id, "qty": l.qty})
+) -> anyhow::Result<Option<String>> {
+    let issue_lines: Vec<serde_json::Value> = lines.iter().enumerate().map(|(i, l)| {
+        serde_json::json!({
+            "nomenclature_id": l.nomenclature_id,
+            "qty": l.qty,
+            "line_ref": line_ref_of(l, i),
+        })
     }).collect();
 
-    add(h, "stock.issue", serde_json::json!({
+    // COGS проводка берётся из результата через $ref ({op}.total_cost)
+    let op_id = add(h, "stock.issue", serde_json::json!({
         "location_id": warehouse,
         "lines": issue_lines,
         "doc_kind": "SALES",
         "doc_id": doc_id,
     }))?;
 
-    // COGS проводка строится из результата stock.issue через $ref
-    // (себестоимость построчно с nomenclature_id)
     let _ = accounts; // используется в add_accounting_entries
-
-    Ok(None)
+    Ok(Some(op_id))
 }
 
-/// Возврат от покупателя: приёмка на склад.
+/// Возврат от покупателя: приёмка на склад по себестоимости строк ИСХОДНОЙ
+/// реализации (проекция движений source_sales_id), средняя по строке:
+/// Σcost_строки / Σqty_строки × возвращаемое_количество.
 fn post_customer_return(
     h: &str, warehouse: &str, data: &serde_json::Value,
     _accounts: &Accounts, lines: &[LineData], doc_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
-    // Приёмка обратно: FIFO сам определит цену новой партии.
-    // Для точного возврата по исходной себестоимости нужен host-fn чтения
-    // ledger_entries — задел v0.2. Сейчас приёмка по текущей средней.
-    let receipt_lines: Vec<serde_json::Value> = lines.iter().map(|l| {
-        serde_json::json!({"nomenclature_id": l.nomenclature_id, "qty": l.qty, "unit_cost": 0})
+) -> anyhow::Result<Option<String>> {
+    // Себестоимость списаний исходной реализации (если указан источник)
+    let src: Option<serde_json::Value> = match data["source_sales_id"].as_str() {
+        Some(sid) if !sid.is_empty() => {
+            let raw = unsafe { stock_doc_cost(sid.to_string()) }?;
+            match unwrap_host(raw) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    let _ = unsafe { log_message(format!(
+                        "[trade] stock_doc_cost({sid}) недоступен: {e}; приёмка по нулевой стоимости"
+                    )) };
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let src_lines = src.as_ref()
+        .and_then(|v| v["lines"].as_array()).cloned().unwrap_or_default();
+
+    let receipt_lines: Vec<serde_json::Value> = lines.iter().enumerate().map(|(i, l)| {
+        let lref = line_ref_of(l, i);
+        // Приоритет: та же строка исходника (line_ref), затем номенклатура
+        let src_line = src_lines.iter()
+            .find(|s| s["line_ref"].as_str() == Some(lref.as_str()))
+            .or_else(|| src_lines.iter()
+                .find(|s| s["nomenclature_id"].as_str() == Some(l.nomenclature_id.as_str())));
+        let unit_cost = src_line
+            .and_then(|s| {
+                let cost = s["cost"].as_f64()?;
+                let sqty = s["qty"].as_f64()?;
+                if sqty <= 0.0 || l.qty <= 0.0 { return None; }
+                Some((cost / sqty * l.qty).round() as i64)
+            })
+            .unwrap_or(0);
+        serde_json::json!({
+            "nomenclature_id": l.nomenclature_id,
+            "qty": l.qty,
+            "unit_cost": unit_cost,
+        })
     }).collect();
 
-    add(h, "stock.receipt", serde_json::json!({
+    let op_id = add(h, "stock.receipt", serde_json::json!({
         "location_id": warehouse,
         "lines": receipt_lines,
         "doc_kind": "CUSTOMER_RETURN",
         "doc_id": doc_id,
     }))?;
 
-    let _ = data; // source_sales_id — для точного возврата себестоимости (v0.2)
-    Ok(None)
+    Ok(Some(op_id))
 }
 
 /// Возврат поставщику: списание с текущего свободного остатка.
 fn post_supplier_return(
     h: &str, warehouse: &str, lines: &[LineData], _data: &serde_json::Value,
     _accounts: &Accounts, doc_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
-    let issue_lines: Vec<serde_json::Value> = lines.iter().map(|l| {
-        serde_json::json!({"nomenclature_id": l.nomenclature_id, "qty": l.qty})
+) -> anyhow::Result<Option<String>> {
+    let issue_lines: Vec<serde_json::Value> = lines.iter().enumerate().map(|(i, l)| {
+        serde_json::json!({
+            "nomenclature_id": l.nomenclature_id,
+            "qty": l.qty,
+            "line_ref": line_ref_of(l, i),
+        })
     }).collect();
 
-    add(h, "stock.issue", serde_json::json!({
+    let op_id = add(h, "stock.issue", serde_json::json!({
         "location_id": warehouse,
         "lines": issue_lines,
         "doc_kind": "SUPPLIER_RETURN",
         "doc_id": doc_id,
     }))?;
 
-    Ok(None)
+    Ok(Some(op_id))
 }
 
 /// Учётные проводки после складской операции.
+/// stock_op — op_id складской операции пачки: себестоимость берётся из ЕЁ
+/// результата через $ref (проекция движений), не из полей документа.
 fn add_accounting_entries(
     handle: &str, type_code: &str, data: &serde_json::Value, doc_id: &str,
-    accounts: &Accounts, _stock_result: Option<&serde_json::Value>,
+    accounts: &Accounts, stock_op: Option<&str>,
 ) -> anyhow::Result<()> {
-    // Дата документа — если не заполнена, хост подставит текущую
     let _ = data;
     let total_kop = data["total"].as_f64()
         .map(|v| (v * 100.0).round() as i64).unwrap_or(0);
 
+    // Нулевые суммы отфильтрует accounting.post (сервисы без себестоимости).
     let entries: Vec<serde_json::Value> = match type_code {
         "PURCHASE" => vec![
             serde_json::json!({"debit_code": accounts.goods, "credit_code": accounts.supplier_settlements, "amount": total_kop}),
         ],
         "SALES" => {
-            // Выручка
-            let revenue_entry = serde_json::json!({
+            let mut v = vec![serde_json::json!({
                 "debit_code": accounts.customer_settlements,
                 "credit_code": accounts.revenue,
                 "amount": total_kop,
-            });
-            // Себестоимость: $ref на выход stock.issue (если op был добавлен)
-            // Для MVP: сумма из данных документа (cost_price × qty по строкам)
-            let cogs: i64 = data["lines"].as_array()
-                .map(|arr| arr.iter().map(|l| {
-                    (l["cost_price"].as_f64().unwrap_or(0.0) * l["qty"].as_f64().unwrap_or(0.0) * 100.0).round() as i64
-                }).sum())
-                .unwrap_or(0);
-            if cogs > 0 {
-                vec![revenue_entry, serde_json::json!({
-                    "debit_code": accounts.cogs, "credit_code": accounts.goods, "amount": cogs,
-                })]
-            } else {
-                vec![revenue_entry]
+            })];
+            if let Some(op) = stock_op {
+                // Себестоимость продаж = Σ total_cost списаний документа
+                v.push(serde_json::json!({
+                    "debit_code": accounts.cogs,
+                    "credit_code": accounts.goods,
+                    "amount": {"$ref": format!("{op}.total_cost")},
+                }));
             }
+            v
         }
         "CUSTOMER_RETURN" => {
             let ret_kop = total_kop.abs();
-            vec![
+            let mut v = vec![
                 serde_json::json!({"debit_code": accounts.revenue, "credit_code": accounts.customer_settlements, "amount": ret_kop}),
-            ]
+            ];
+            if let Some(op) = stock_op {
+                // Товар возвращается на склад по той же цифре, что принята
+                // складом (Дт 41 Кт 90.2) — один источник: результат receipt.
+                v.push(serde_json::json!({
+                    "debit_code": accounts.goods,
+                    "credit_code": accounts.cogs,
+                    "amount": {"$ref": format!("{op}.total_cost")},
+                }));
+            }
+            v
         }
         "SUPPLIER_RETURN" => {
             let ret_kop = total_kop.abs();

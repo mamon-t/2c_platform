@@ -7,7 +7,7 @@
   import { toastSuccess, toastError } from '$lib/components/ui/toast';
 
   interface Account {
-    id: string;
+    _id: string;
     code: string;
     name: string;
     account_type: string;
@@ -122,7 +122,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each accounts as a (a.id)}
+          {#each accounts as a (a._id)}
             <tr class={!a.is_active ? 'opacity-50' : ''}>
               <td class="font-mono font-medium">{a.code}</td>
               <td>{a.name}</td>
