@@ -16,6 +16,26 @@ fn get_db(state: &AppState) -> Result<&MongoClient, String> {
     state.db.as_ref().ok_or_else(|| "База данных не подключена".into())
 }
 
+
+/// Выгрузить модуль из кэша WASM (по id и по коду).
+/// Без этого удалённый/отключённый модуль продолжал бы работать до перезапуска.
+fn evict_cached_module(state: &mut AppState, keys: &[&str]) {
+    if let Some(map) = state.wasm_modules.as_mut() {
+        for k in keys {
+            map.remove(*k);
+        }
+        // выгрузить и записи, чей внутренний id совпадает (двойное кэширование code+uuid)
+        let stale: Vec<String> = map
+            .iter()
+            .filter(|(_, p)| p.lock().map(|p| keys.contains(&p.info.id.as_str())).unwrap_or(false))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in stale {
+            map.remove(&k);
+        }
+    }
+}
+
 fn get_company_id(state: &AppState) -> Result<CompanyId, String> {
     state.current_company_id.as_ref()
         .and_then(|s| uuid::Uuid::parse_str(s).ok())
@@ -130,9 +150,16 @@ pub async fn modules_uninstall(
         let s = state.lock().await;
         (get_db(&s)?.clone(), get_company_id(&s)?)
     };
+    let code = ModuleService::get(&db, &module_id).await.ok().map(|m| m.code);
     ModuleService::uninstall(&db, &module_id, &company_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let mut s = state.lock().await;
+    match &code {
+        Some(c) => evict_cached_module(&mut s, &[module_id.as_str(), c.as_str()]),
+        None => evict_cached_module(&mut s, &[module_id.as_str()]),
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -158,9 +185,16 @@ pub async fn modules_disable(
         let s = state.lock().await;
         (get_db(&s)?.clone(), get_company_id(&s)?)
     };
+    let code = ModuleService::get(&db, &module_id).await.ok().map(|m| m.code);
     ModuleService::disable(&db, &module_id, &company_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let mut s = state.lock().await;
+    match &code {
+        Some(c) => evict_cached_module(&mut s, &[module_id.as_str(), c.as_str()]),
+        None => evict_cached_module(&mut s, &[module_id.as_str()]),
+    }
+    Ok(())
 }
 
 #[tauri::command]

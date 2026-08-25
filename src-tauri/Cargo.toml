@@ -46,3 +46,9 @@ hex = "0.4"
 tokio-serial = { version = "5", features = ["libudev"] }
 serialport = { version = "4", default-features = false, features = ["libudev"] }
 regex = "1"
+
+# Ускорение JIT-компиляции WASM-плагинов в dev-сборке:
+# wasmtime/cranelift с оптимизацией компилирует плагины за секунды
+# вместо минут (в dev все зависимости по умолчанию без оптимизаций).
+[profile.dev.package."*"]
+opt-level = 2
