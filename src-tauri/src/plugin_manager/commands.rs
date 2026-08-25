@@ -122,6 +122,61 @@ pub(crate) async fn invoke_plugin(
 ) -> Result<String, String> {
     let module_id = module_id.to_string();
     let function = function.to_string();
+
+    // Ленивая загрузка: если модуля нет в кэше (например, после перезапуска
+    // приложения) — загрузить из БД по коду или id.
+    {
+        let cached = {
+            let s = state.lock().await;
+            s.wasm_modules.as_ref().map(|m| m.contains_key(&module_id)).unwrap_or(false)
+        };
+        if !cached {
+            let (db, company) = {
+                let s = state.lock().await;
+                (s.db.clone().ok_or("Нет подключения к БД")?, s.current_company_id.clone())
+            };
+            let inst = match crate::modules::service::ModuleService::get_by_code(&db, &module_id).await {
+                Ok(m) => m,
+                Err(_) => crate::modules::service::ModuleService::get(&db, &module_id)
+                    .await
+                    .map_err(|e| format!("Модуль {module_id} не найден: {e}"))?,
+            };
+            if let Some(cid) = &company {
+                let cid = crate::core::CompanyId(
+                    uuid::Uuid::parse_str(cid).map_err(|e| format!("Невалидная компания: {e}"))?,
+                );
+                let enabled = crate::modules::service::ModuleService::list_enabled(&db, &cid)
+                    .await
+                    .map(|list| list.iter().any(|m| m.id == inst.id || m.code == inst.code))
+                    .unwrap_or(false);
+                if !enabled {
+                    return Err(format!("Модуль {} отключён для компании", inst.code));
+                }
+            }
+            let ctx = Arc::new(RwLock::new(PluginContext {
+                company_id: company.clone(),
+                user_id: None,
+                user_login: None,
+                display_name: None,
+                role_id: None,
+                role_ids: Vec::new(),
+            }));
+            let host_data = HostData {
+                db: Some(db),
+                ctx,
+                module_code: Some(inst.code.clone()),
+                capabilities: inst.capabilities.clone(),
+            };
+            let plugin = WasmPlugin::load(inst.wasm_bytes, inst.code.clone(), host_data).await?;
+            let arc = Arc::new(StdMutex::new(plugin));
+            tracing::info!("[Lazy-load] WASM модуль {} загружен из БД", inst.code);
+            let mut s = state.lock().await;
+            let map = s.wasm_modules.get_or_insert_with(HashMap::new);
+            map.insert(inst.code.clone(), arc.clone());
+            map.insert(inst.id.to_string(), arc);
+        }
+    }
+
     let (plugin_arc, fresh_company, fresh_user_id, fresh_login, fresh_display, fresh_role, db) = {
         let s = state.lock().await;
         let modules = s.wasm_modules.as_ref().ok_or("Нет загруженных WASM-модулей")?;

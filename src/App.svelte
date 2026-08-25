@@ -1,5 +1,5 @@
-// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
-// This code is proprietary. See LICENSE file for details.
+<!-- 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+     This code is proprietary. See LICENSE file for details. -->
 
 <script lang="ts">
   import { theme } from '$lib/stores/theme';
@@ -140,6 +140,14 @@
 
   onMount(async () => {
     theme.init();
+    // Автоподключение: backend сам возьмёт MONGODB_URI из .env, если URI пустой
+    try {
+      diagnostics = await api.getDiagnostics();
+      if (!diagnostics?.mongodb.ok) {
+        diagnostics = { ...diagnostics!, mongodb: await api.connectDb('', '') };
+      }
+      connected = diagnostics?.mongodb.ok ?? false;
+    } catch { /* покажем экран ручного подключения */ }
     try {
       const me = await api.getMe();
       if (me) {

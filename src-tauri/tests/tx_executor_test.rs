@@ -39,6 +39,20 @@ async fn connect() -> (MongoClient, String) {
     (client, db_name)
 }
 
+/// Очистка тестовой БД: drop коллекций по одной.
+/// dropDatabase запрещён пользователю Atlas с ролью readWrite (AtlasError 8000).
+async fn drop_collections(client: &mongodb::Client, db_name: &str) {
+    let db = client.database(db_name);
+    let names = match db.list_collection_names().await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        let _ = db.collection::<Document>(&name).drop().await;
+    }
+}
+
+
 fn all_access_policies() -> Vec<PermissionPolicy> {
     // Один wildcard-политики достаточно: documents.* и test.*
     let mk = |subsystem: &str| PermissionPolicy {
@@ -176,11 +190,7 @@ async fn idempotent_replay_does_not_repost() {
     // Результаты идентичны (номер тот же)
     assert_eq!(r1.op_results["post1"], r2.op_results["post1"]);
 
-    db.client()
-        .database(&db_name)
-        .drop()
-        .await
-        .expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[tokio::test]
@@ -230,7 +240,7 @@ async fn concurrent_same_key_single_application() {
         .unwrap();
     assert_eq!(journal_count, 1, "запись журнала должна быть одна");
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[tokio::test]
@@ -269,7 +279,7 @@ async fn unknown_op_rolls_back_everything() {
         .unwrap();
     assert_eq!(n, 0);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[tokio::test]
@@ -313,7 +323,7 @@ async fn ref_chain_feeds_post_params() {
     let (_, version, _) = object_state(&db, obj).await;
     assert_eq!(version, 2);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[tokio::test]
@@ -337,7 +347,7 @@ async fn permission_denied_without_policy() {
     let (state, _, _) = object_state(&db, obj).await;
     assert_eq!(state, "draft");
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[allow(dead_code)]

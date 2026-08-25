@@ -37,6 +37,20 @@ async fn connect() -> (MongoClient, String) {
     (client, db_name)
 }
 
+/// Очистка тестовой БД: drop коллекций по одной.
+/// dropDatabase запрещён пользователю Atlas с ролью readWrite (AtlasError 8000).
+async fn drop_collections(client: &mongodb::Client, db_name: &str) {
+    let db = client.database(db_name);
+    let names = match db.list_collection_names().await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        let _ = db.collection::<Document>(&name).drop().await;
+    }
+}
+
+
 fn seed_policies() -> Vec<PermissionPolicy> {
     let mk = |subsystem: &str| PermissionPolicy {
         _id: uuid::Uuid::new_v4(),
@@ -275,7 +289,7 @@ async fn plugin_post_and_cancel_move_atomically() {
     assert_eq!(bal(wh.clone()).await, 5.0);
     assert_eq!(bal(wh_b.clone()).await, 0.0);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 // ── Политики подписи: оборудование да, канцтовары нет ──────
@@ -359,5 +373,5 @@ async fn signature_policy_by_category() {
     // Нет строк → условие не выполнено
     assert!(!eval(serde_json::json!({"lines":[]})).await);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }

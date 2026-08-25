@@ -760,7 +760,7 @@ export const api = {
   async listEntityFields(entityTypeId: string): Promise<EntityField[]> {
     return getAdapter().invoke<EntityField[]>('list_entity_fields', { entity_type_id: entityTypeId });
   },
-  async createEntityField(input: { entity_type_id: string; code: string; name: string; field_kind: FieldKind; is_required?: boolean; group_name?: string }): Promise<EntityField> {
+  async createEntityField(input: { entity_type_id: string; code: string; name: string; field_kind: FieldKind; is_required?: boolean; is_readonly?: boolean; default_value?: unknown; enum_values?: string[]; reference_entity?: string | null; group_name?: string }): Promise<EntityField> {
     return getAdapter().invoke<EntityField>('create_entity_field', { input });
   },
   async updateEntityField(id: string, input: { name?: string; is_required?: boolean; order?: number }): Promise<EntityField> {

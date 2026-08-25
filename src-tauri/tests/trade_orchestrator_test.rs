@@ -40,6 +40,20 @@ async fn connect() -> (MongoClient, String) {
     (client, db_name)
 }
 
+/// Очистка тестовой БД: drop коллекций по одной.
+/// dropDatabase запрещён пользователю Atlas с ролью readWrite (AtlasError 8000).
+async fn drop_collections(client: &mongodb::Client, db_name: &str) {
+    let db = client.database(db_name);
+    let names = match db.list_collection_names().await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        let _ = db.collection::<Document>(&name).drop().await;
+    }
+}
+
+
 fn policies() -> Vec<PermissionPolicy> {
     let mk = |subsystem: &str| PermissionPolicy {
         _id: uuid::Uuid::new_v4(),
@@ -303,5 +317,5 @@ async fn demo_scenario_full_cycle() {
         assert_eq!(bal["balances"][0]["quantity"].as_f64().unwrap(), 15.0, "сторно вернул остаток");
     }
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }

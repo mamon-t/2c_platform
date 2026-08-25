@@ -63,18 +63,33 @@ pub async fn modules_install(
 
     let wasm_bytes = input.wasm_bytes;
 
-    // Валидация WASM: загружаем минимально и вызываем get_info()
-    let mut extism_manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes.clone())]);
-    extism_manifest.timeout_ms = Some(10_000);
-    extism_manifest.memory.max_pages = Some(256);
+    // Валидация WASM: полная загрузка со всеми host-fn
+    // (модуль импортирует их на уровне линковки), затем get_info()
+    let plugin_ctx = std::sync::Arc::new(std::sync::RwLock::new(
+        crate::plugin_manager::PluginContext {
+            company_id: Some(company_id.0.to_string()),
+            user_id: None,
+            user_login: None,
+            display_name: None,
+            role_id: None,
+            role_ids: Vec::new(),
+        },
+    ));
+    let host_data = crate::plugin_manager::HostData {
+        db: Some(db.clone()),
+        ctx: plugin_ctx,
+        module_code: None,
+        capabilities: Vec::new(),
+    };
+    let mut plugin = crate::plugin_manager::WasmPlugin::load(wasm_bytes.clone(), "install-validate".into(), host_data)
+        .await
+        .map_err(|e| format!("Невалидный WASM-модуль: {e}"))?;
 
-    let mut plugin = extism::PluginBuilder::new(&extism_manifest)
-        .with_fuel_limit(10_000)
-        .build()
-        .map_err(|e| format!("Невалидный WASM-модуль: {}", e))?;
-
-    let info_json = plugin.call::<&[u8], String>("get_info", b"")
-        .map_err(|e| format!("Модуль не экспортирует get_info(): {}", e))?;
+    let info_bytes = plugin
+        .call("get_info", b"")
+        .map_err(|e| format!("Модуль не экспортирует get_info(): {e}"))?;
+    let info_json = String::from_utf8(info_bytes)
+        .map_err(|e| format!("get_info() вернул не-UTF8: {e}"))?;
 
     let wasm_info: super::super::plugin_manager::WasmModuleInfo = serde_json::from_str(&info_json)
         .map_err(|e| format!("get_info() вернул невалидный JSON: {}", e))?;

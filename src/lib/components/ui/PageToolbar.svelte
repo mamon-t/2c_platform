@@ -1,5 +1,5 @@
-// 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
-// This code is proprietary. See LICENSE file for details.
+<!-- 2CPlatform - Copyright (c) 2026 Mikhail Alekseev
+     This code is proprietary. See LICENSE file for details. -->
 
 <script lang="ts">
   import type { Snippet } from 'svelte';

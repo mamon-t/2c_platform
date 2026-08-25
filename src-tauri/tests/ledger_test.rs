@@ -4,6 +4,7 @@
 
 use app_lib::core::{CompanyId, UserId};
 use app_lib::db::MongoClient;
+use mongodb::bson::Document;
 use app_lib::events::ActorSnapshot;
 use app_lib::permission_policy::PermissionPolicy;
 use app_lib::ledger::service::{LedgerService, PostInput};
@@ -26,6 +27,20 @@ async fn connect() -> (MongoClient, String) {
     app_lib::ledger::indexes::ensure_indexes(&client).await;
     (client, db_name)
 }
+
+/// Очистка тестовой БД: drop коллекций по одной.
+/// dropDatabase запрещён пользователю Atlas с ролью readWrite (AtlasError 8000).
+async fn drop_collections(client: &mongodb::Client, db_name: &str) {
+    let db = client.database(db_name);
+    let names = match db.list_collection_names().await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        let _ = db.collection::<Document>(&name).drop().await;
+    }
+}
+
 
 fn test_policies() -> Vec<PermissionPolicy> {
     let mk = |subsystem: &str| PermissionPolicy {
@@ -143,7 +158,7 @@ async fn posting_balances_and_reverse() {
     ).await;
     assert!(err.is_err(), "повторный реверс должен отклоняться");
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -183,5 +198,5 @@ async fn closed_period_blocks_posting() {
         .expect_err("должен отказать");
     assert!(err.to_string().contains("закрыт"), "{err}");
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }

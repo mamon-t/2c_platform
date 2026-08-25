@@ -72,6 +72,7 @@ pub fn get_info() -> FnResult<Json<ModuleInfo>> {
         api_version: Some("1.0".into()),
         capabilities: vec![
             "objects.read".into(),
+            "metadata.read".into(),
             "transactions".into(),
             "logging".into(),
         ],

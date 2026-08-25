@@ -16,8 +16,12 @@ pub struct EntityTypeService;
 impl EntityTypeService {
     pub async fn list(db: &MongoClient, company_id: Option<CompanyId>) -> PlatformResult<Vec<EntityType>> {
         let col = db.collection::<Document>("entity_types");
+        // Компания видит свои типы + глобальные (company_id отсутствует/null)
         let filter = match company_id {
-            Some(cid) => doc! { "company_id": cid.0.to_string() },
+            Some(cid) => doc! { "$or": [
+                doc! { "company_id": cid.0.to_string() },
+                doc! { "company_id": mongodb::bson::Bson::Null },
+            ] },
             None => doc! {},
         };
         let mut cursor = col.find(filter).sort(doc! { "code": 1 }).await

@@ -32,6 +32,20 @@ async fn connect() -> (MongoClient, String) {
     (client, db_name)
 }
 
+/// Очистка тестовой БД: drop коллекций по одной.
+/// dropDatabase запрещён пользователю Atlas с ролью readWrite (AtlasError 8000).
+async fn drop_collections(client: &mongodb::Client, db_name: &str) {
+    let db = client.database(db_name);
+    let names = match db.list_collection_names().await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    for name in names {
+        let _ = db.collection::<Document>(&name).drop().await;
+    }
+}
+
+
 fn policies() -> Vec<PermissionPolicy> {
     let mk = |subsystem: &str| PermissionPolicy {
         _id: uuid::Uuid::new_v4(),
@@ -217,7 +231,7 @@ async fn fifo_math_and_shortage_error() {
     // Баланс не изменился после ошибки
     assert_eq!(balances_of(&db, company, "wh", "nom-1").await, 3.0);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 // ── Сторно (демо шаг 4) ────────────────────────────────────
@@ -266,7 +280,7 @@ async fn cancel_reverses_movements() {
     assert!(r.op_results["rev"]["undone_movements"].as_i64().unwrap() >= 1);
     assert_eq!(balances_of(&db, company, "wh", "nom-1").await, 7.0);
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 fn package_reverse(_op_id: &str, key: &str, target_doc: &str, company: uuid::Uuid) -> TransactionPackage {
@@ -333,7 +347,7 @@ async fn transfer_preserves_cost() {
     assert_eq!(batch.get_i64("unit_cost").unwrap(), 7777, "цена переехала вместе с товаром");
     let _ = r;
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
 
 // ── Гонка списаний одной позиции ───────────────────────────
@@ -395,5 +409,5 @@ async fn concurrent_issues_no_double_write() {
     let final_balance = balances_of(&db, company, "wh", "nom-1").await;
     assert_eq!(final_balance, 2.0, "остаток ровно 2, без двойного списания");
 
-    db.client().database(&db_name).drop().await.expect("cleanup");
+    drop_collections(&db.client().clone(), &db_name).await;
 }
