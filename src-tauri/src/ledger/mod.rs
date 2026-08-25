@@ -135,8 +135,8 @@ pub struct LedgerEntry {
 
 pub type UserIdStr = String;
 
-/// Обороты счёта за период. Сальдо считает читатель:
-/// sign(типа) × (Дт − Кт) накопленно по периодам ≤ целевого.
+/// Обороты счёта за период. Входящее сальдо хранится явно;
+/// исходящее = opening_balance + sign × (Дт − Кт).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerBalance {
     #[serde(rename = "_id")]
@@ -147,6 +147,9 @@ pub struct LedgerBalance {
     pub account_id: crate::core::Id,
     pub account_code: String,
     pub account_type: AccountType,
+    /// Входящее сальдо (на начало периода). Знаковое: положительное для активов.
+    #[serde(default)]
+    pub opening_balance: i64,
     pub debit_turnover: i64,
     pub credit_turnover: i64,
     pub updated_at: DateTime<Utc>,
@@ -178,4 +181,29 @@ impl AccountingPeriod {
 
 pub fn period_key_of_date(date: &str) -> String {
     date.get(..7).unwrap_or("0000-00").to_string()
+}
+
+// ── Входящие сальдо ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpeningBalanceRow {
+    pub account_id: String,
+    pub account_code: String,
+    pub account_type: String,
+    pub opening_balance: i64,
+    pub debit_turnover: i64,
+    pub credit_turnover: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveOpeningBalanceInput {
+    pub account_code: String,
+    pub opening_balance: i64,
+}
+
+struct CarryForwardEntry {
+    account_id: String,
+    account_code: String,
+    account_type: String,
+    closing_balance: i64,
 }

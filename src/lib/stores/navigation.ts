@@ -24,6 +24,7 @@ export const allNavItems: NavItem[] = [
   { code: 'reports', label: 'Отчёты', icon: 'fa-solid fa-chart-bar', path: '/reports', requiredPermission: { subsystem: 'reports', action: 'read' }, group: 'Отчёты' },
   { code: 'messages', label: 'Сообщения', icon: 'fa-solid fa-comments', path: '/messages', group: 'Обслуживание' },
   { code: 'convert', label: 'Конвертация', icon: 'fa-solid fa-right-left', path: '/convert', group: 'Обслуживание' },
+  { code: 'opening_balances', label: 'Входящие сальдо', icon: 'fa-solid fa-scale-unbalanced', path: '/opening-balances', requiredPermission: { subsystem: 'accounting', action: 'read' }, group: 'Обслуживание' },
   // События — скрыты из основного меню (Event Store для разработчиков)
   // { code: 'events', label: 'События', icon: 'fa-solid fa-bolt', path: '/events', requiredPermission: { subsystem: 'audit', action: 'read' }, group: 'Обслуживание' },
   { code: 'audit', label: 'Журнал', icon: 'fa-solid fa-clock-rotate-left', path: '/audit', requiredPermission: { subsystem: 'audit', action: 'read' }, group: 'Обслуживание' },

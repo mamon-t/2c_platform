@@ -11,7 +11,7 @@ use crate::core::middleware::CommandContext;
 use crate::db::MongoClient;
 
 use super::service::{LedgerService, PostInput};
-use super::{COL_ACCOUNTS, AccountType, LedgerAccount};
+use super::{COL_ACCOUNTS, AccountType, LedgerAccount, OpeningBalanceRow, SaveOpeningBalanceInput};
 
 fn db_of(s: &AppState) -> Result<MongoClient, String> {
     s.db.clone().ok_or_else(|| "Не подключено к MongoDB".into())
@@ -112,6 +112,39 @@ pub async fn ledger_period_set_state(
         .map_err(|e| e.to_string())
 }
 
+// ── Входящие сальдо ──────────────────────────────────────
+
+/// Прочитать входящие сальдо для периода.
+#[tauri::command]
+pub async fn ledger_get_opening_balances(
+    period_key: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<OpeningBalanceRow>, String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("accounting.read").map_err(|e| e.to_string())?;
+    let db = db_of(&s)?;
+    LedgerService::get_opening_balances(&db, &ctx.company_id, &period_key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Сохранить входящие сальдо (массовый ввод) для периода.
+#[tauri::command]
+pub async fn ledger_save_opening_balances(
+    period_key: String,
+    balances: Vec<SaveOpeningBalanceInput>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let s = state.lock().await;
+    let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
+    ctx.check_permission("accounting.manage").map_err(|e| e.to_string())?;
+    let db = db_of(&s)?;
+    LedgerService::save_opening_balances(&db, &ctx.company_id, &period_key, &balances)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ── Отчёты (accounting.read) ──────────────────────────────
 
 use futures::StreamExt;
@@ -147,6 +180,7 @@ pub async fn ledger_osv(
         code: String,
         name: String,
         acc_type: String,
+        opening: i64,
         debit: i64,
         credit: i64,
     }
@@ -155,12 +189,14 @@ pub async fn ledger_osv(
     while let Some(Ok(b)) = cursor.next().await {
         let acc_id = b.get_str("account_id").unwrap_or("").to_string();
         let code = b.get_str("account_code").unwrap_or("").to_string();
+        let opening = b.get_i64("opening_balance").unwrap_or(0);
         let dt = b.get_i64("debit_turnover").unwrap_or(0);
         let ct = b.get_i64("credit_turnover").unwrap_or(0);
         let row = by_account.entry(acc_id.clone()).or_insert(OsvRow {
             code: code.clone(), name: String::new(), acc_type: String::new(),
-            debit: 0, credit: 0,
+            opening: 0, debit: 0, credit: 0,
         });
+        row.opening += opening;
         row.debit += dt;
         row.credit += ct;
 
@@ -185,13 +221,16 @@ pub async fn ledger_osv(
             _ => 1i64,
         };
         let balance = sign * (row.debit - row.credit);
+        let closing = row.opening + balance;
         rows.push(serde_json::json!({
             "code": row.code,
             "name": row.name,
             "type": row.acc_type,
+            "opening_balance": row.opening,
             "debit_turnover": row.debit,
             "credit_turnover": row.credit,
             "balance": balance,
+            "closing_balance": closing,
         }));
     }
     rows.sort_by(|a, b| a["code"].as_str().unwrap_or("").cmp(b["code"].as_str().unwrap_or("")));
@@ -286,7 +325,10 @@ pub async fn ledger_card(
         _ => 1i64,
     };
 
-    let mut running_balance: i64 = 0;
+    // Берём opening_balance из ledger_balances для самого раннего периода
+    let opening = LedgerService::get_opening_balance_for_card(&db, &ctx.company_id, &account_code, &date_from).await.unwrap_or(0);
+
+    let mut running_balance: i64 = opening;
     let mut items = Vec::new();
     while let Some(Ok(d)) = cursor.next().await {
         let is_debit = d.get_str("debit_code").unwrap_or("") == account_code;

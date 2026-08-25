@@ -26,6 +26,7 @@
   import ScriptsPage from '$lib/components/ScriptsPage.svelte';
   import ReportsPage from '$lib/components/ReportsPage.svelte';
   import ConvertPage from '$lib/components/ConvertPage.svelte';
+  import OpeningBalancesScreen from '$lib/components/screens/OpeningBalancesScreen.svelte';
 
   import DbConnectScreen from '$lib/components/screens/DbConnectScreen.svelte';
   import LoginScreen from '$lib/components/screens/LoginScreen.svelte';
@@ -274,6 +275,8 @@
 
         {:else if currentNav === 'convert'}
           <ConvertPage />
+        {:else if currentNav === 'opening_balances'}
+          <OpeningBalancesScreen />
         {:else if currentNav === 'objects' || currentNav === 'documents' || currentNav === 'catalogs'}
           <ObjectsPage />
         {:else if currentNav === 'requests'}

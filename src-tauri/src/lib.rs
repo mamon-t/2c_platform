@@ -185,6 +185,8 @@ pub fn run() {
             ledger::commands::ledger_osv,
             ledger::commands::ledger_journal,
             ledger::commands::ledger_card,
+            ledger::commands::ledger_get_opening_balances,
+            ledger::commands::ledger_save_opening_balances,
             trade::commands::trade_seed_metadata,
             trade::commands::trade_get_price,
             commands::notifications_list,

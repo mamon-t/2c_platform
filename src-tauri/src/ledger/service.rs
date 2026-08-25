@@ -16,8 +16,9 @@ use crate::core::{CompanyId, PlatformError, PlatformResult};
 use crate::db::MongoClient;
 
 use super::{
-    period_key_of_date, AccountType, AccountingPeriod, LedgerAccount, LedgerBalance, LedgerEntry,
-    PostingLine, COL_ACCOUNTS, COL_BALANCES, COL_ENTRIES, COL_PERIODS,
+    period_key_of_date, AccountType, AccountingPeriod, CarryForwardEntry, LedgerAccount, LedgerBalance,
+    LedgerEntry, OpeningBalanceRow, PostingLine, SaveOpeningBalanceInput, COL_ACCOUNTS, COL_BALANCES,
+    COL_ENTRIES, COL_PERIODS,
 };
 
 pub struct LedgerService;
@@ -226,6 +227,170 @@ impl LedgerService {
         Ok(out)
     }
 
+    /// Прочитать входящие сальдо для периода.
+    pub async fn get_opening_balances(
+        db: &MongoClient,
+        company_id: &CompanyId,
+        period_key: &str,
+    ) -> PlatformResult<Vec<OpeningBalanceRow>> {
+        let col = db.collection::<Document>(COL_BALANCES);
+        let cursor = col
+            .find(doc! {
+                "company_id": company_id.0.to_string(),
+                "period_key": period_key,
+            })
+            .sort(doc! { "account_code": 1 })
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let mut out = Vec::new();
+        futures::pin_mut!(cursor);
+        while let Some(Ok(d)) = cursor.next().await {
+            out.push(OpeningBalanceRow {
+                account_id: d.get_str("account_id").unwrap_or("").to_string(),
+                account_code: d.get_str("account_code").unwrap_or("").to_string(),
+                account_type: d.get_str("account_type").unwrap_or("asset").to_string(),
+                opening_balance: d.get_i64("opening_balance").unwrap_or(0),
+                debit_turnover: d.get_i64("debit_turnover").unwrap_or(0),
+                credit_turnover: d.get_i64("credit_turnover").unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Сохранить входящие сальдо (массовый ввод) для периода.
+    /// Создаёт/обновляет записи ledger_balances для указанного периода.
+    pub async fn save_opening_balances(
+        db: &MongoClient,
+        company_id: &CompanyId,
+        period_key: &str,
+        rows: &[SaveOpeningBalanceInput],
+    ) -> PlatformResult<()> {
+        let col = db.collection::<Document>(COL_BALANCES);
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        for row in rows {
+            // Резолвим счёт
+            let acc = Self::get_active_by_code(db, company_id, &row.account_code).await?;
+
+            let filter = doc! {
+                "company_id": company_id.0.to_string(),
+                "period_key": period_key,
+                "account_id": acc.id.to_string(),
+            };
+            let update = doc! {
+                "$set": {
+                    "opening_balance": row.opening_balance,
+                    "account_code": &acc.code,
+                    "account_type": acc.account_type.as_str(),
+                    "updated_at": mongodb::bson::DateTime::now(),
+                },
+                "$setOnInsert": {
+                    "company_id": company_id.0.to_string(),
+                    "period_key": period_key,
+                    "account_id": acc.id.to_string(),
+                    "debit_turnover": 0i64,
+                    "credit_turnover": 0i64,
+                },
+            };
+            col.update_one(filter, update)
+                .upsert(true)
+                .session(&mut session)
+                .await
+                .map_err(|e| PlatformError::Database(e.to_string()))?;
+        }
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+        Ok(())
+    }
+
+    /// Закрыть период с переносом исходящих сальдо в следующий.
+    /// Вычисляет closing_balance = opening + sign*(Dт-Кт) для каждого счёта,
+    /// записывает его как opening_balance периода+1.
+    pub async fn close_period_with_carry_forward(
+        db: &MongoClient,
+        company_id: &CompanyId,
+        year: i32,
+        month: u32,
+    ) -> PlatformResult<()> {
+        let key = AccountingPeriod::period_key(year, month);
+        // Следующий период
+        let (next_y, next_m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+        let next_key = AccountingPeriod::period_key(next_y, next_m);
+
+        // Читаем все balances текущего периода
+        let col = db.collection::<Document>(COL_BALANCES);
+        let mut cursor = col
+            .find(doc! {
+                "company_id": company_id.0.to_string(),
+                "period_key": &key,
+            })
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+
+        let mut entries = Vec::new();
+        while let Some(Ok(d)) = cursor.next().await {
+            let acc_type_str = d.get_str("account_type").unwrap_or("asset");
+            let sign = match acc_type_str {
+                "liability" | "equity" | "revenue" => -1i64,
+                _ => 1i64,
+            };
+            let opening = d.get_i64("opening_balance").unwrap_or(0);
+            let dt = d.get_i64("debit_turnover").unwrap_or(0);
+            let ct = d.get_i64("credit_turnover").unwrap_or(0);
+            let closing = opening + sign * (dt - ct);
+
+            entries.push(CarryForwardEntry {
+                account_id: d.get_str("account_id").unwrap_or("").to_string(),
+                account_code: d.get_str("account_code").unwrap_or("").to_string(),
+                account_type: acc_type_str.to_string(),
+                closing_balance: closing,
+            });
+        }
+
+        // Записываем в следующий период
+        let mut session = db.client().start_session().await
+            .map_err(|e| PlatformError::Database(format!("start_session: {}", e)))?;
+        session.start_transaction().await
+            .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
+
+        for e in &entries {
+            let filter = doc! {
+                "company_id": company_id.0.to_string(),
+                "period_key": &next_key,
+                "account_id": &e.account_id,
+            };
+            let update = doc! {
+                "$set": {
+                    "opening_balance": e.closing_balance,
+                    "account_code": &e.account_code,
+                    "account_type": &e.account_type,
+                    "updated_at": mongodb::bson::DateTime::now(),
+                },
+                "$setOnInsert": {
+                    "company_id": company_id.0.to_string(),
+                    "period_key": &next_key,
+                    "account_id": &e.account_id,
+                    "debit_turnover": 0i64,
+                    "credit_turnover": 0i64,
+                },
+            };
+            col.update_one(filter, update)
+                .upsert(true)
+                .session(&mut session)
+                .await
+                .map_err(|e| PlatformError::Database(e.to_string()))?;
+        }
+
+        session.commit_transaction().await
+            .map_err(|e| PlatformError::Database(format!("commit_transaction: {}", e)))?;
+        Ok(())
+    }
+
     pub async fn set_period_state(
         db: &MongoClient,
         company_id: &CompanyId,
@@ -247,10 +412,46 @@ impl LedgerService {
                 "Период {key} не существует (создаётся первой проводкой)"
             )));
         }
+
+        // При закрытии периода — переносим исходящие сальдо в следующий
+        if closed && opened == false {
+            Self::close_period_with_carry_forward(db, company_id, year, month).await?;
+        }
+
         Ok(())
     }
 
     // ── Проводки ───────────────────────────────────────────
+
+    /// Получить opening_balance для карточки счёта.
+    pub async fn get_opening_balance_for_card(
+        db: &MongoClient,
+        company_id: &CompanyId,
+        account_code: &str,
+        date_from: &Option<String>,
+    ) -> PlatformResult<i64> {
+        let period_key = date_from.as_ref().map(|d| period_key_of_date(d));
+        let col = db.collection::<Document>(COL_BALANCES);
+        let mut filter = doc! {
+            "company_id": company_id.0.to_string(),
+            "account_code": account_code,
+        };
+        if let Some(ref pk) = period_key {
+            filter.insert("period_key", doc! { "$lte": pk });
+        }
+        let mut cursor = col.find(filter)
+            .sort(doc! { "period_key": 1 })
+            .await
+            .map_err(|e| PlatformError::Database(e.to_string()))?;
+        let mut total: i64 = 0;
+        while let Some(Ok(d)) = cursor.next().await {
+            let opening = d.get_i64("opening_balance").unwrap_or(0);
+            let dt = d.get_i64("debit_turnover").unwrap_or(0);
+            let ct = d.get_i64("credit_turnover").unwrap_or(0);
+            total += opening + dt - ct;
+        }
+        Ok(total)
+    }
 
     /// Провести пачку пар Дт/Кт. Все проверки Блока 1; записи и обороты —
     /// через переданную опциональную сессию.

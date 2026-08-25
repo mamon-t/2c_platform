@@ -1074,6 +1074,12 @@ export const api = {
   async ledgerAccountsList(): Promise<unknown[]> {
     return getAdapter().invoke<unknown[]>('ledger_accounts_list');
   },
+  async ledgerGetOpeningBalances(periodKey: string): Promise<LedgerOpeningBalanceTS[]> {
+    return getAdapter().invoke<LedgerOpeningBalanceTS[]>('ledger_get_opening_balances', { periodKey });
+  },
+  async ledgerSaveOpeningBalances(periodKey: string, balances: { account_code: string; opening_balance: number }[]): Promise<void> {
+    return getAdapter().invoke<void>('ledger_save_opening_balances', { periodKey, balances });
+  },
 
   // ── Торговля (trade) ──
   async tradeSeedMetadata(): Promise<string> {
@@ -1327,13 +1333,26 @@ export interface StockHandoverReportTS {
 
 // ── Учёт (ledger) ──
 
+export interface AccountingPeriod {
+  _id: string;
+  company_id: string;
+  period_key: string;
+  year: number;
+  month: number;
+  opened: boolean;
+  closed: boolean;
+  created_at: string;
+}
+
 export interface LedgerOsvRowTS {
   code: string;
   name: string;
   type: string;
+  opening_balance: number;
   debit_turnover: number;
   credit_turnover: number;
   balance: number;
+  closing_balance: number;
 }
 
 export interface LedgerOsvTS {
@@ -1368,6 +1387,15 @@ export interface LedgerCardTS {
     running_balance: number;
   }>;
   final_balance: number;
+}
+
+export interface LedgerOpeningBalanceTS {
+  account_id: string;
+  account_code: string;
+  account_type: string;
+  opening_balance: number;
+  debit_turnover: number;
+  credit_turnover: number;
 }
 
 // ── Торговля ──
