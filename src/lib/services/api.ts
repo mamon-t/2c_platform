@@ -20,6 +20,29 @@ export interface DiagnosticsReport {
   }>;
 }
 
+export interface CompanyInput {
+  code?: string | null;
+  name?: string | null;
+  inn?: string | null;
+  kpp?: string | null;
+  ogrn?: string | null;
+  okved?: string | null;
+  legal_address?: string | null;
+  postal_address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  website?: string | null;
+  bank_name?: string | null;
+  bank_bik?: string | null;
+  bank_account?: string | null;
+  bank_correspondent_account?: string | null;
+  director_name?: string | null;
+  director_position?: string | null;
+  accountant_name?: string | null;
+  tax_regime_usn?: boolean;
+  active?: boolean;
+}
+
 export interface SavedConnection {
   id: string;
   name: string;
@@ -37,6 +60,22 @@ export interface Company {
   code: string;
   name: string;
   inn: string | null;
+  kpp: string | null;
+  ogrn: string | null;
+  okved: string | null;
+  legal_address: string | null;
+  postal_address: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  bank_name: string | null;
+  bank_bik: string | null;
+  bank_account: string | null;
+  bank_correspondent_account: string | null;
+  director_name: string | null;
+  director_position: string | null;
+  accountant_name: string | null;
+  tax_regime_usn: boolean;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -613,10 +652,10 @@ export const api = {
   async getCompany(id: string): Promise<Company> {
     return getAdapter().invoke<Company>('get_company', { id });
   },
-  async createCompany(input: { code: string; name: string; inn?: string }): Promise<Company> {
+  async createCompany(input: CompanyInput): Promise<Company> {
     return getAdapter().invoke<Company>('create_company', { input });
   },
-  async updateCompany(id: string, input: { name?: string; inn?: string; active?: boolean }): Promise<Company> {
+  async updateCompany(id: string, input: CompanyInput): Promise<Company> {
     return getAdapter().invoke<Company>('update_company', { id, input });
   },
   async deleteCompany(id: string): Promise<void> {

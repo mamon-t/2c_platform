@@ -19,6 +19,39 @@ pub struct Company {
     pub code: String,
     pub name: String,
     pub inn: Option<String>,
+    #[serde(default)]
+    pub kpp: Option<String>,
+    #[serde(default)]
+    pub ogrn: Option<String>,
+    #[serde(default)]
+    pub okved: Option<String>,
+    #[serde(default)]
+    pub legal_address: Option<String>,
+    #[serde(default)]
+    pub postal_address: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub website: Option<String>,
+    #[serde(default)]
+    pub bank_name: Option<String>,
+    #[serde(default)]
+    pub bank_bik: Option<String>,
+    #[serde(default)]
+    pub bank_account: Option<String>,
+    #[serde(default)]
+    pub bank_correspondent_account: Option<String>,
+    #[serde(default)]
+    pub director_name: Option<String>,
+    #[serde(default)]
+    pub director_position: Option<String>,
+    #[serde(default)]
+    pub accountant_name: Option<String>,
+    /// Налоговый режим: false = ОСН (по умолчанию), true = упрощённая система налогообложения
+    #[serde(default)]
+    pub tax_regime_usn: bool,
     pub active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -29,12 +62,60 @@ pub struct CreateCompanyInput {
     pub code: String,
     pub name: String,
     pub inn: Option<String>,
+    #[serde(default)]
+    pub kpp: Option<String>,
+    #[serde(default)]
+    pub ogrn: Option<String>,
+    #[serde(default)]
+    pub okved: Option<String>,
+    #[serde(default)]
+    pub legal_address: Option<String>,
+    #[serde(default)]
+    pub postal_address: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub website: Option<String>,
+    #[serde(default)]
+    pub bank_name: Option<String>,
+    #[serde(default)]
+    pub bank_bik: Option<String>,
+    #[serde(default)]
+    pub bank_account: Option<String>,
+    #[serde(default)]
+    pub bank_correspondent_account: Option<String>,
+    #[serde(default)]
+    pub director_name: Option<String>,
+    #[serde(default)]
+    pub director_position: Option<String>,
+    #[serde(default)]
+    pub accountant_name: Option<String>,
+    #[serde(default)]
+    pub tax_regime_usn: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateCompanyInput {
     pub name: Option<String>,
     pub inn: Option<String>,
+    pub kpp: Option<String>,
+    pub ogrn: Option<String>,
+    pub okved: Option<String>,
+    pub legal_address: Option<String>,
+    pub postal_address: Option<String>,
+    pub phone: Option<String>,
+    pub email: Option<String>,
+    pub website: Option<String>,
+    pub bank_name: Option<String>,
+    pub bank_bik: Option<String>,
+    pub bank_account: Option<String>,
+    pub bank_correspondent_account: Option<String>,
+    pub director_name: Option<String>,
+    pub director_position: Option<String>,
+    pub accountant_name: Option<String>,
+    pub tax_regime_usn: Option<bool>,
     pub active: Option<bool>,
 }
 
@@ -46,6 +127,22 @@ impl Company {
             code: input.code,
             name: input.name,
             inn: input.inn,
+            kpp: input.kpp,
+            ogrn: input.ogrn,
+            okved: input.okved,
+            legal_address: input.legal_address,
+            postal_address: input.postal_address,
+            phone: input.phone,
+            email: input.email,
+            website: input.website,
+            bank_name: input.bank_name,
+            bank_bik: input.bank_bik,
+            bank_account: input.bank_account,
+            bank_correspondent_account: input.bank_correspondent_account,
+            director_name: input.director_name,
+            director_position: input.director_position,
+            accountant_name: input.accountant_name,
+            tax_regime_usn: input.tax_regime_usn,
             active: true,
             created_at: now,
             updated_at: now,
@@ -118,6 +215,7 @@ impl CompanyService {
                     "code": company.code,
                     "name": company.name,
                     "inn": company.inn,
+                    "tax_regime_usn": company.tax_regime_usn,
                 });
                 let _ = svc.append_with_session(db, &mut session, StreamType::Object, &company._id.to_string(), "company.created", payload, actor, cid.clone(), None, None).await;
 
@@ -158,9 +256,12 @@ impl CompanyService {
             .map_err(|e| PlatformError::Database(format!("start_transaction: {}", e)))?;
 
         let mut update_doc = doc! { "updated_at": mongodb::bson::to_bson(&Utc::now()).unwrap() };
-        if let Some(ref name) = input.name { update_doc.insert("name", name.clone()); }
-        if let Some(ref inn) = input.inn { update_doc.insert("inn", inn.clone()); }
+        macro_rules! patch { ($($field:ident),*) => { $(if let Some(ref v) = input.$field { update_doc.insert(stringify!($field), v.clone()); })* }; }
+        patch!(name, inn, kpp, ogrn, okved, legal_address, postal_address,
+               phone, email, website, bank_name, bank_bik, bank_account,
+               bank_correspondent_account, director_name, director_position, accountant_name);
         if let Some(active) = input.active { update_doc.insert("active", active); }
+        if let Some(usn) = input.tax_regime_usn { update_doc.insert("tax_regime_usn", usn); }
 
         let col = db.collection::<Document>("companies");
         col.update_one(doc! { "_id": id.to_string() }, doc! { "$set": update_doc })
@@ -174,6 +275,7 @@ impl CompanyService {
             "name": updated.name,
             "inn": updated.inn,
             "active": updated.active,
+            "tax_regime_usn": updated.tax_regime_usn,
         });
         let _ = svc.append_with_session(db, &mut session, StreamType::Object, &id.to_string(), "company.updated", payload, actor, cid, None, None).await;
 

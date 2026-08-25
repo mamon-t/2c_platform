@@ -394,6 +394,10 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
 
         let company = CompanyService::create(&db, CreateCompanyInput {
             code: "MAIN".to_string(), name: "Основная компания".to_string(), inn: None,
+            kpp: None, ogrn: None, okved: None, legal_address: None, postal_address: None,
+            phone: None, email: None, website: None, bank_name: None, bank_bik: None,
+            bank_account: None, bank_correspondent_account: None, director_name: None,
+            director_position: None, accountant_name: None, tax_regime_usn: false,
         }, crate::events::ActorSnapshot {
             user_id: crate::core::UserId(uuid::Uuid::nil()),
             login: "system".to_string(),
