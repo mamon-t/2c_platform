@@ -1,6 +1,6 @@
 # 2C Platform — Technical Report
 
-**Дата:** 26.08.2026 · **Версия:** 0.1.0 · **Состояние:** рабочий прототип
+**Дата:** 25.08.2026 · **Версия:** 0.1.3 · **Состояние:** desktop MVP
 
 Снимок реализованного по коду для сверки с ТЗ v2.2/v2.3.
 
@@ -10,21 +10,21 @@
 
 | Показатель | Значение |
 |---|---|
-| Backend | Rust / Tauri v2 / Tokio / MongoDB(replSet) |
+| Backend | Rust / Tauri v2 / Tokio / MongoDB (Atlas, replSet) |
 | Backend модулей | **32** |
-| IPC-команд | **~140** |
+| IPC-команд | **~145** |
 | Host-fn для WASM | **25** |
 | Mongo-коллекций | **38** |
 | Capabilities плагинов | **14** |
 | RBAC политик | **64+** (20 подсистем) |
 | Аудит действий | **52+** |
 | Операций tx_exec | **13** |
-| Фронтенд | Svelte 5 + TS · 17 компонентов · 120+ API-методов |
+| Фронтенд | Svelte 5 + TS · 20+ компонентов · 120+ API-методов |
 | Тестов | **56** (22 unit + 34 интеграционных) |
 
-Стек: Rust/Tokio/MongoDB/Tauri2 · Svelte5+TS+Vite8+Tailwind4+Skeleton · Extism/wasmtime · Rhai · Argon2id+JWT · КриптоПро CSP 5.0.
+Стек: Rust/Tokio/MongoDB(Tls 0.9)/Tauri2 · Svelte5+TS+Vite8+Tailwind4+Skeleton(nosh) · Extism/wasmtime · Rhai · Argon2id+JWT · КриптоПро CSP 5.0 · Font Awesome 6 Free.
 
-Архитектура «Труба и Доски»: Event Store + Objects через метамодель. Гибридная модульность: ядро нейтрально; инварианты — нативные Rust; оркестрация — WASM через `tx_exec`.
+Архитектура «Труба и Доски»: Event Store + Objects через метамодель. Гибридная модульность: ядро нейтрально; инварианты — нативные Rust; оркестрация — WASM через `tx_exec`. MongoDB Atlas (M0 Free tier, шард-0 replica set).
 
 ---
 
@@ -110,32 +110,57 @@ WASM-оркестратор поверх склада и учёта.
 ### 2.10 RBAC и аудит
 
 Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос). ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
-Все модули (stock/trade/devices/signing) пишут в audit_log через audit_log! макрос.
-stock: signature_policies_upsert → SaveSettings; trade: seed_metadata → SaveSettings.
+
+**RBAC fallback**: при пустых policies после входа — автоматическая загрузка всех политик из БД (защита от seed-гонки при первом входе).
 
 ### 2.11 Уведомления
 
-Расширенная модель: severity(info/warning/critical), entity_ref({type,id}), channels[], metadata. Projection engine: событие из Трубы → шаблон → подписка → уведомление. Host-fn: notify_user, users_by_role.
-Devices: error/disconnect события → notifications collection. IPC: list/mark_read/count_unread/subscriptions/templates. UI: колокольчик + бейдж + dropdown панель (поллинг 30с).
+Расширенная модель: severity(info/warning/critical), entity_ref({type,id}), channels[], metadata. Projection engine: событие из Трубы → шаблон → подписка → уведомление. Host-fn: notify_user, users_by_role. Devices: error/disconnect события → notifications collection. IPC: list/mark_read/count_unread/subscriptions/templates. UI: колокольчик + бейдж + dropdown панель (поллинг 30с).
+
+### 2.12 Автозагрузка модулей
+
+После логина/смены компании — автоматическая загрузка всех Enabled модулей для текущей компании из MongoDB в память. Команда `preload_company_modules`: загружает WASM-модули, пропускает уже кэшированные, логирует ошибки с `std::backtrace::Backtrace`. Ошибки показываются пользователю через toast. Не блокирует UI.
+
+### 2.13 Инвалидация кэша
+
+При `uninstall`/`disable` модуля — выгрузка из кэша `wasm_modules` по UUID и коду. Ранее удалённый модуль продолжал работать до перезапуска приложения.
 
 ---
 
 ## 3. Frontend (Svelte 5)
 
-17 компонентов · 20 nav пунктов · 120+ API-методов · ~75 типов.
+20+ компонентов · 20 nav пунктов · 120+ API-методов · ~75 типов.
 
-| Раздел | Компонент |
-|---|---|
-| Объекты/Документы/Справочники | ObjectsPage + ObjectEditor (17 FieldKind, transitions, версии, вес с весов, делегирование оркестратору) |
-| Заявки | RequestsPage (маршруты, ЭЦП, timeline, слепки подписи) |
-| Склад | StockPage (остатки, подотчёт, просрочки, seed) |
-| Торговля | TradePage (ОСВ, журнал проводок, seed) |
-| Сообщения | MessagesPage (rooms list, чат, групповые диалоги) |
-| Устройства | DevicesPage (карточки, COM-порты, wedge-тест, device-event журнал) |
-| Модули | ModulesPage (install/enable/disable, настройки счетов) |
-| Прочее | MetadataPage, EventsPage, AuditPage (37 действий), PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
+### 3.1 Экраны
 
-Инфраструктура: адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures). pluginCall<T> — мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events. Колокольчик уведомлений с поллингом 30с.
+| Экран | Компонент | Описание |
+|---|---|---|
+| Выбор БД | DbConnectScreen + ConnectionsDialog | Выпадающий список сохранённых подключений (1С-стиль) + редактор (добавить/изменить/удалить). Хранилище в `~/.config/2c-platform/connections.json` |
+| Вход | LoginScreen | Выбор БД над логином + кнопка ⚙ для редактирования подключений |
+| Главная | DashboardScreen | Диагностика, запуск демо-сценария |
+| Компании | CompaniesScreen | Карточка с 5 вкладками: Основные/Реквизиты/Банк/Подписанты/Налоги. Галка УСН. Таблица: Код/Название/ИНН/Режим/Статус |
+| Пользователи | UsersScreen | CRUD пользователей |
+| Роли | RolesScreen | CRUD ролей, привязка политик |
+| Объекты | ObjectsPage + ObjectEditor | 17 FieldKind, transitions, версии, делегирование оркестратору |
+| Заявки | RequestsPage | Маршруты, ЭЦП, timeline, слепки подписи |
+| Склад | StockPage | Остатки, подотчёт, просрочки, seed |
+| Торговля | TradePage | ОСВ, журнал проводок, seed |
+| Сообщения | MessagesPage | Rooms list, чат, групповые диалоги |
+| Устройства | DevicesPage | Карточки, COM-порты, wedge-тест, device-event журнал |
+| Модули | ModulesPage | Install/enable/disable, настройки счетов |
+| Прочее | MetadataPage, AuditPage (37 действий), PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
+
+### 3.2 Сайдбар
+
+Группы сворачиваются кликом (▸/▾ chevron). Состояние хранится в localStorage. Администрирование свёрнута по умолчанию. Группы: Торговля · Справочники · Отчёты · Обслуживание · Администрирование.
+
+### 3.3 Уведомления и диалоги
+
+Колокольчик уведомлений с поллингом 30с. Toast-система (success/error/info/warning), позиция: левый верх. Confirm/prompt диалоги (нативные alert/confirm/prompt заменены на компоненты).
+
+### 3.4 Инфраструктура
+
+Адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures). `pluginCall<T>` — мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events. Переключение темы (light/dark).
 
 ---
 
@@ -151,11 +176,20 @@ Devices: error/disconnect события → notifications collection. IPC: list
 | ledger_test | 2 | Постинг+балансы+реверс+повтор отклонён; закрытый период | TX_TEST_MONGO=1 |
 | trade_orchestrator | 1 | E2E trade.wasm: демо п.11 ТЗ (поступление→реализация→COGS→сторно) | TX_TEST_MONGO=1 |
 
-Live-тесты: отдельные БД `*_test_*`/`*_e2e_*` с очисткой; `TX_TEST_MONGO=1` + `MONGODB_URI`.
+Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 
 ---
 
-## 5. Ограничения и задел
+## 5. Хранилище и конфигурация
+
+- `.env` — dev-only: MONGODB_URI, MONGODB_DATABASE, JWT_SECRET (в `.gitignore`)
+- `~/.config/2c-platform/connections.json` — список сохранённых подключений к БД (1С-стиль)
+- MongoDB Atlas: `mongodb+srv://...@2cplatform.utphr7u.mongodb.net`, shard-0 replica set, DB 8.0.29
+- Старый локальный backup: `.env.bak.31host`
+
+---
+
+## 6. Ограничения и задел
 
 | Область | Ограничение | План |
 |---|---|---|
@@ -171,9 +205,18 @@ Live-тесты: отдельные БД `*_test_*`/`*_e2e_*` с очистко�
 
 ---
 
-## 6. Как проверить
+## 7. Как проверить
 
 - Автотесты: `cargo test` + `TX_TEST_MONGO=1 cargo test` (live)
 - Склад: `docs/testing-stock.md`
 - Торговля: `docs/testing-trade.md`
 - Заявки: `wasm-modules/requests/README.md`
+- Демо: кнопка «Заполнить демо» на Dashboard (создаёт «ООО ЛесТорг» в текущей БД)
+
+### Выбор базы данных
+
+При запуске приложения доступны два сохранённых подключения:
+1. **Чистая (2c_platform)** — пустая база для реальной работы
+2. **Демо — ЛесТорг (2c_platform_demo)** — заполняется через кнопку на Dashboard
+
+Переключение: на экране входа → выпадающий список «База данных» → кнопка ⚙ для редактирования списка подключений.
