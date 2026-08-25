@@ -12,14 +12,14 @@
 |---|---|
 | Backend | Rust / Tauri v2 / Tokio / MongoDB (Atlas, replSet) |
 | Backend модулей | **32** |
-| IPC-команд | **~145** |
+| IPC-команд | **~150** |
 | Host-fn для WASM | **25** |
 | Mongo-коллекций | **38** |
 | Capabilities плагинов | **14** |
 | RBAC политик | **64+** (20 подсистем) |
-| Аудит действий | **52+** |
+| Аудит действий | **55+** |
 | Операций tx_exec | **13** |
-| Фронтенд | Svelte 5 + TS · 20+ компонентов · 120+ API-методов |
+| Фронтенд | Svelte 5 + TS · 25+ компонентов · 125+ API-методов |
 | Тестов | **56** (22 unit + 34 интеграционных) |
 
 Стек: Rust/Tokio/MongoDB(Tls 0.9)/Tauri2 · Svelte5+TS+Vite8+Tailwind4+Skeleton(nosh) · Extism/wasmtime · Rhai · Argon2id+JWT · КриптоПро CSP 5.0 · Font Awesome 6 Free.
@@ -34,7 +34,7 @@
 
 | Группа | Модули |
 |---|---|
-| Ядро | core(+middleware), db, actions(COMMAND_MAP), auth(JWT), events(Event Store), audit(52 действия) |
+| Ядро | core(+middleware), db, actions(COMMAND_MAP), auth(JWT), events(Event Store), audit(55 действия) |
 | Данные | objects(+validation), meta(6 типов метамодели), company, user, person, role, user_contact, user_profile, user_certificate, settings |
 | Безопасность | permission_policy(deny-by-default), signing(КриптоПро CMS), crypto(абстракция ЭЦП) |
 | Плагины | plugin_manager(25 host-fn), modules(lifecycle), notify(projection engine), rhai(sandbox) |
@@ -80,12 +80,15 @@
 ### 2.6 Учёт
 
 Двойная запись нативно (session-aware):
-- **План счетов** (`ledger_accounts`): код per company, AccountType определяет знак сальдо, seed торговли (41/44/50/51/60/62/90.1/90.2), CRUD IPC
+- **План счетов** (`ledger_accounts`): код per company, AccountType определяет знак сальдо, seed торговли (41/44/50/51/60/62/90.1/90.2), CRUD IPC (`ledger_account_create`, `ledger_account_update`)
 - **Проводки** (`ledger_entries`): пара Дт/Кт = документ; posting_id группирует; nomenclature_id — измерение для возвратов; doc_kind/doc_id — ссылка на документ
-- **Обороты** (`ledger_balances`): unique (company, period_key, account_id); сальдо через AccountType::balance_sign
+- **Обороты** (`ledger_balances`): unique (company, period_key, account_id); сальдо через AccountType::balance_sign; **поле `opening_balance`** (входящее сальдо на начало периода)
 - **Периоды** (`accounting_periods`): ensure при первой проводке, close/reopen (reopen = accounting.manage); проводка в закрытый → отказ
+- **Входящие сальдо**: `save_opening_balances` (массовый ввод), `get_opening_balances` (чтение), `close_period_with_carry_forward` (при закрытии периода: closing = opening + sign*(Dт-Кт) → следующий период)
+- **ОСВ**: обороты + входящее сальдо + исходящее сальдо по каждому счёту; баланс = opening + sign*(Dт-Кт)
+- **Карточка счёта**: running_balance стартует с `opening_balance` (сумма всех периодов до date_from)
 - Операции tx_exec: `accounting.post` (Σ>0, Дт≠Кт, счета активны, период открыт) / `accounting.reverse_by_doc`
-- Отчёты: ОСВ (обороты+сальдо по типам счетов за период), журнал проводок, карточка счёта
+- Отчёты: ОСВ (отдельная страница), журнал проводок, карточка счёта, входящие сальдо
 
 ### 2.7 Торговля
 
@@ -111,6 +114,8 @@ WASM-оркестратор поверх склада и учёта.
 
 Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope («company»/«own»). Все мутации пишут в audit_log (audit_log! макрос). ExecuteTransaction аудит после tx_exec коммита. ModuleKvPut/Delete для аудита KV модулей.
 
+**Audit coverage**: Login (bootstrap + regular), SwitchCompany, CRUD пользователей/компаний/ролей/политик, CRUD документов, проводки/реверсы, настройки оборудования, шаблоны печати, сертификаты, KV модулей, seed метаданных торговли, сохранение входящих сальдо, автозагрузка модулей.
+
 **RBAC fallback**: при пустых policies после входа — автоматическая загрузка всех политик из БД (защита от seed-гонки при первом входе).
 
 ### 2.11 Уведомления
@@ -119,7 +124,7 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 
 ### 2.12 Автозагрузка модулей
 
-После логина/смены компании — автоматическая загрузка всех Enabled модулей для текущей компании из MongoDB в память. Команда `preload_company_modules`: загружает WASM-модули, пропускает уже кэшированные, логирует ошибки с `std::backtrace::Backtrace`. Ошибки показываются пользователю через toast. Не блокирует UI.
+После логина/смены компании — автоматическая загрузка всех Enabled модулей для текущей компании из MongoDB в память. Команда `preload_company_modules`: загружает WASM-модули, пропускает уже кэшированные, логирует ошибки с `std::backtrace::Backtrace`. Ошибки показываются пользователю через toast. Не блокирует UI. При успешной загрузке ≥1 модуля — аудит-запись (SaveSettings).
 
 ### 2.13 Инвалидация кэша
 
@@ -129,7 +134,7 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 
 ## 3. Frontend (Svelte 5)
 
-20+ компонентов · 20 nav пунктов · 120+ API-методов · ~75 типов.
+25+ компонентов · 23 nav пункта · 125+ API-методов · ~75 типов.
 
 ### 3.1 Экраны
 
@@ -144,15 +149,19 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 | Объекты | ObjectsPage + ObjectEditor | 17 FieldKind, transitions, версии, делегирование оркестратору |
 | Заявки | RequestsPage | Маршруты, ЭЦП, timeline, слепки подписи |
 | Склад | StockPage | Остатки, подотчёт, просрочки, seed |
-| Торговля | TradePage | ОСВ, журнал проводок, seed |
+| Торговля | TradePage | Журнал проводок (фильтры: период, счёт), seed метаданных |
+| **ОСВ** | **OsvPage** | **Отдельная страница: обороты, входящее/исходящее сальдо за период** |
+| **План счетов** | **LedgerAccountsPage** | **CRUD: таблица счетов (код/название/тип/родитель/активен), модалка добавления/редактирования** |
+| **Входящие сальдо** | **OpeningBalancesScreen** | **Массовый ввод: таблица счетов + редактируемые поля ввода (рубли), выбор периода** |
 | Сообщения | MessagesPage | Rooms list, чат, групповые диалоги |
 | Устройства | DevicesPage | Карточки, COM-порты, wedge-тест, device-event журнал |
 | Модули | ModulesPage | Install/enable/disable, настройки счетов |
-| Прочее | MetadataPage, AuditPage (37 действий), PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
+| **Конвертация** | **ConvertPage (DataMapper)** | **4-шаговый мастер: выбор файла (CSV/JSON/XML) → маппинг колонок на поля → превью → импорт/экспорт. Автоматический маппинг по похожести имён. Валидация типов (fieldValidation.ts). Референсы через searchObjectByField** |
+| Прочее | MetadataPage, AuditPage (55 действий), PrintPage, NumberingPage, ScriptsPage, ReportsPage, SettingsPage |
 
 ### 3.2 Сайдбар
 
-Группы сворачиваются кликом (▸/▾ chevron). Состояние хранится в localStorage. Администрирование свёрнута по умолчанию. Группы: Торговля · Справочники · Отчёты · Обслуживание · Администрирование.
+Группы сворачиваются кликом (▸/▾ chevron). Состояние хранится в localStorage. Администрирование свёрнута по умолчанию. Группы: Торговля · Справочники · Отчёты · **Учёт** (ОСВ, План счетов, Входящие сальдо) · Обслуживание · Администрирование.
 
 ### 3.3 Уведомления и диалоги
 
@@ -160,7 +169,7 @@ Deny-by-default. Seed 64+ политик / 20 подсистем. record_scope (
 
 ### 3.4 Инфраструктура
 
-Адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures). `pluginCall<T>` — мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events. Переключение темы (light/dark).
+Адаптеры транспорта (Tauri/HTTP/Mock), stores (auth/navigation/devices/theme), utils (barcodeField/requestSignatures, **fieldValidation.ts** — валидация типов полей, портированная из Rust). **fileConverter.ts** — парсинг/сериализация CSV/JSON/XML. `pluginCall<T>` — мост к WASM. RBAC фильтрация навигации и кнопок. Live device-events. Переключение темы (light/dark). **searchObjectByField** — поиск объектов по точному значению поля.
 
 ---
 
@@ -193,7 +202,6 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 
 | Область | Ограничение | План |
 |---|---|---|
-| ОСВ | Без входящих сальдо | По мере накопления данных |
 | ККМ | Не реализована | v0.3, права заложены |
 | Серийные номера | Количественный учёт | v0.2 |
 | Уведомления Email/Push | InApp только | v0.2-v0.3 |
@@ -201,7 +209,6 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 | Эскалации | timeout_hours/is_required хранятся, не исполняются | v0.2 |
 | object.patch op | Для записи себестоимости в строки SALES | v0.2 |
 | Windows | Linux-first | По плану |
-| ConvertPage.svelte | Осиротевший компонент | Удалить или вернуть |
 
 ---
 
@@ -220,3 +227,15 @@ Live-тесты: Atlas M0 Free tier. `TX_TEST_MONGO=1` + `MONGODB_URI`.
 2. **Демо — ЛесТорг (2c_platform_demo)** — заполняется через кнопку на Dashboard
 
 Переключение: на экране входа → выпадающий список «База данных» → кнопка ⚙ для редактирования списка подключений.
+
+### Входящие сальдо
+
+1. «План счетов» → создать нужные счета (или принять seed по умолчанию)
+2. «Входящие сальдо» → выбрать период → ввести суммы (в рублях) → Сохранить
+3. При закрытии периода — сальдо автоматически переносятся в следующий
+4. ОСВ показывает входящее/исходящее сальдо по каждому счёту
+
+### DataMapper (Конвертация)
+
+1. «Конвертация» → Экспорт: выбрать entity_type → Скачать CSV/JSON/XML
+2. Импорт: выбрать файл → сопоставить колонки (автоматический маппинг) → Превью → Импорт
