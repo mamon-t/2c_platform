@@ -310,5 +310,13 @@ pub async fn preload_company_modules(
 
     let elapsed_ms = t0.elapsed().as_millis() as u64;
     tracing::info!("[Pre-load] Загружено модулей: {loaded}, ошибок: {}, за {elapsed_ms}ms", errors.len());
+
+    if loaded > 0 {
+        let s = state.lock().await;
+        if let Some(audit_db) = s.db.clone() {
+            crate::audit_log!(s, audit_db, crate::audit::AuditableAction::SaveSettings);
+        }
+    }
+
     Ok(PreloadResult { loaded, errors, elapsed_ms })
 }

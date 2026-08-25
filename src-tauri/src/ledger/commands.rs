@@ -27,8 +27,8 @@ pub async fn ledger_accounts_list(
     let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
     ctx.check_permission("accounting.read").map_err(|e| e.to_string())?;
     let db = db_of(&s)?;
+    drop(s);
 
-    // Первый заход в компанию — сеем типовой торговый план
     LedgerService::ensure_default_chart(&db, &ctx.company_id).await;
     LedgerService::list_accounts(&db, &ctx.company_id).await.map_err(|e| e.to_string())
 }
@@ -142,7 +142,9 @@ pub async fn ledger_save_opening_balances(
     let db = db_of(&s)?;
     LedgerService::save_opening_balances(&db, &ctx.company_id, &period_key, &balances)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::audit_log!(s, db, crate::audit::AuditableAction::SaveSettings);
+    Ok(())
 }
 
 // ── Отчёты (accounting.read) ──────────────────────────────

@@ -19,13 +19,13 @@ pub async fn trade_seed_metadata(state: State<'_, Mutex<AppState>>) -> Result<St
     let ctx = CommandContext::extract(&s).map_err(|e| e.to_string())?;
     ctx.check_permission("settings.manage").map_err(|e| e.to_string())?;
     let db: MongoClient = s.db.as_ref().ok_or("Не подключено к MongoDB")?.clone();
-    drop(s);
 
     let result = super::seed::seed(&db).await?;
 
     // Индексы после seed (нужны UUID типов)
     super::indexes::ensure_indexes(&db).await;
 
+    crate::audit_log!(s, db, crate::audit::AuditableAction::SaveSettings);
     Ok(result)
 }
 

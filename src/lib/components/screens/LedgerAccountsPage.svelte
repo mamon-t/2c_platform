@@ -104,8 +104,9 @@
   {/if}
 
   {#if loading}
-    <div class="p-8 text-center text-surface-500">
-      <i class="fa-solid fa-spinner fa-spin"></i>
+    <div class="flex flex-col items-center justify-center py-16 gap-3">
+      <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
+      <span class="text-sm text-surface-500">Загрузка плана счетов...</span>
     </div>
   {:else}
     <div class="overflow-x-auto">

@@ -463,6 +463,8 @@ pub async fn authenticate(login: String, password: String, state: State<'_, Mute
                 state.current_policies = Some(all);
             }
         }
+        crate::audit_log!(state, db, AuditableAction::Login,
+            target_id = user._id.to_string());
         return Ok(AuthResultWithCompanies { token, user, companies, role_code: Some(role.code.clone()), role_name: Some(role.name.clone()), role_id: Some(role_id.to_string()) });
     }
 
@@ -941,7 +943,7 @@ pub async fn list_audit_logs(filters: Option<AuditLogFilters>, state: State<'_, 
     let state = state.lock().await;
     let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
     ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
-    let db = get_db!(state);
+    let db = state.db.clone().ok_or_else(|| "Не подключено к MongoDB".to_string())?;
     let cid = ctx.company_id.0;
 
     let mut audit_filters = AuditFilters::default();
@@ -967,9 +969,10 @@ pub async fn list_audit_logs(filters: Option<AuditLogFilters>, state: State<'_, 
                 .ok().map(|dt| dt.with_timezone(&chrono::Utc));
         }
     }
+    drop(state);
 
     let svc = MongoAuditService::new();
-    svc.list(db, CompanyId(cid), audit_filters).await.map_err(|e| e.to_string())
+    svc.list(&db, CompanyId(cid), audit_filters).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -977,10 +980,11 @@ pub async fn get_audit_entry(id: String, state: State<'_, Mutex<AppState>>) -> R
     let state = state.lock().await;
     let ctx = CommandContext::extract(&state).map_err(|e| e.to_string())?;
     ctx.check_permission("audit.read").map_err(|e| e.to_string())?;
-    let db = get_db!(state);
+    let db = state.db.clone().ok_or_else(|| "Не подключено к MongoDB".to_string())?;
     let eid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    drop(state);
     let svc = MongoAuditService::new();
-    svc.get_entry(db, eid).await.map_err(|e| e.to_string())
+    svc.get_entry(&db, eid).await.map_err(|e| e.to_string())
 }
 
 // ── Permission Policies ─────────────────────────────────────
