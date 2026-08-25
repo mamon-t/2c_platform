@@ -20,6 +20,18 @@ export interface DiagnosticsReport {
   }>;
 }
 
+export interface SavedConnection {
+  id: string;
+  name: string;
+  uri: string;
+  db_name: string;
+}
+
+export interface AppConfigInfo {
+  mongodb_uri: string | null;
+  mongodb_database: string | null;
+}
+
 export interface Company {
   _id: string;
   code: string;
@@ -570,6 +582,20 @@ export const api = {
 
   async connectDb(uri: string, dbName: string): Promise<DiagnosticsReport['mongodb']> {
     return getAdapter().invoke('connect_db', { input: { uri, db_name: dbName } });
+  },
+
+  // Сохранённые подключения (список баз, как в 1С)
+  async listConnections(): Promise<SavedConnection[]> {
+    return getAdapter().invoke('list_saved_connections');
+  },
+  async saveConnection(conn: SavedConnection): Promise<SavedConnection> {
+    return getAdapter().invoke('save_saved_connection', { conn });
+  },
+  async deleteConnection(id: string): Promise<void> {
+    return getAdapter().invoke('delete_saved_connection', { id });
+  },
+  async getAppConfig(): Promise<AppConfigInfo> {
+    return getAdapter().invoke('get_app_config');
   },
 
   async authenticate(login: string, password: string): Promise<AuthResult> {

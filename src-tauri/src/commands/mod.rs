@@ -173,6 +173,69 @@ pub async fn save_app_config(config: AppConfig, state: State<'_, Mutex<AppState>
     let mut state = state.lock().await; state.config = config; Ok(())
 }
 
+// ── Сохранённые подключения к БД (список баз, как в 1С) ────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedConnection {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub uri: String,
+    #[serde(default = "default_db_name")]
+    pub db_name: String,
+}
+
+fn default_db_name() -> String { "2c_platform".to_string() }
+
+fn connections_file() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::config_dir()
+        .ok_or("Не найден каталог конфигурации пользователя")?
+        .join("2c-platform");
+    Ok(dir.join("connections.json"))
+}
+
+fn load_connections() -> Vec<SavedConnection> {
+    std::fs::read_to_string(connections_file().unwrap_or_default())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn store_connections(list: &[SavedConnection]) -> Result<(), String> {
+    let path = connections_file()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_saved_connections() -> Result<Vec<SavedConnection>, String> {
+    Ok(load_connections())
+}
+
+#[tauri::command]
+pub async fn save_saved_connection(mut conn: SavedConnection) -> Result<SavedConnection, String> {
+    if conn.name.trim().is_empty() { return Err("Укажите имя подключения".into()); }
+    if conn.uri.trim().is_empty() { return Err("Укажите URI подключения".into()); }
+    if conn.db_name.trim().is_empty() { conn.db_name = default_db_name(); }
+    let mut list = load_connections();
+    if conn.id.is_empty() { conn.id = uuid::Uuid::new_v4().to_string(); }
+    match list.iter_mut().find(|c| c.id == conn.id) {
+        Some(c) => *c = conn.clone(),
+        None => list.push(conn.clone()),
+    }
+    store_connections(&list)?;
+    Ok(conn)
+}
+
+#[tauri::command]
+pub async fn delete_saved_connection(id: String) -> Result<(), String> {
+    let list: Vec<SavedConnection> = load_connections().into_iter().filter(|c| c.id != id).collect();
+    store_connections(&list)
+}
+
 // ── Компании ──────────────────────────────────────────────────
 
 #[tauri::command]

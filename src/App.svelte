@@ -6,7 +6,8 @@
   import { allNavItems } from '$lib/stores/navigation';
   import { auth, isAuthenticated, hasPermission, type AuthUser } from '$lib/stores/auth';
   import { get } from 'svelte/store';
-  import { api, type DiagnosticsReport, type User } from '$lib/services/api';
+  import { api, type DiagnosticsReport, type User, type SavedConnection } from '$lib/services/api';
+  import { toastSuccess } from '$lib/components/ui/toast';
   import { onMount } from 'svelte';
 
   import AuditPage from '$lib/components/AuditPage.svelte';
@@ -35,6 +36,7 @@
   import NotificationsBell from '$lib/components/NotificationsBell.svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
   import DialogHost from '$lib/components/ui/DialogHost.svelte';
+  import ConnectionsDialog from '$lib/components/ui/ConnectionsDialog.svelte';
 
   let loading = $state(true);
   let connected = $state(false);
@@ -43,6 +45,9 @@
   let sidebarCollapsed = $state(false);
   let currentUser = $state<User | null>(null);
   let authUserData = $state<AuthUser | null>(null);
+  let connections = $state<SavedConnection[]>([]);
+  let currentDbUri = $state('');
+  let showConnections = $state(false);
 
   let filteredNavItems = $derived(
     allNavItems.filter(item =>
@@ -62,6 +67,27 @@
       await api.connectDb(uri, dbName);
       connected = true;
       diagnostics = await api.getDiagnostics();
+      return null;
+    } catch (e) {
+      return typeof e === 'string' ? e : (e as Error)?.message ?? 'Ошибка подключения';
+    }
+  }
+
+  // ── Сохранённые подключения (список баз, как в 1С) ──
+  async function reloadConnections() {
+    try { connections = await api.listConnections(); } catch { connections = []; }
+    try {
+      const cfg = await api.getAppConfig();
+      currentDbUri = cfg.mongodb_uri ?? '';
+    } catch { /* тихо */ }
+  }
+
+  async function handleSelectConnection(conn: SavedConnection): Promise<string | null> {
+    try {
+      await api.connectDb(conn.uri, conn.db_name);
+      diagnostics = await api.getDiagnostics();
+      currentDbUri = conn.uri;
+      toastSuccess(`Подключено: ${conn.name}`);
       return null;
     } catch (e) {
       return typeof e === 'string' ? e : (e as Error)?.message ?? 'Ошибка подключения';
@@ -140,6 +166,7 @@
 
   onMount(async () => {
     theme.init();
+    reloadConnections();
     // Автоподключение: backend сам возьмёт MONGODB_URI из .env, если URI пустой
     try {
       diagnostics = await api.getDiagnostics();
@@ -180,7 +207,13 @@
 {#if !connected && !loading}
   <DbConnectScreen onSubmit={handleConnect} />
 {:else if !$isAuthenticated && !loading}
-  <LoginScreen onSubmit={handleLogin} />
+  <LoginScreen
+    onSubmit={handleLogin}
+    {connections}
+    currentUri={currentDbUri}
+    onSelectConnection={handleSelectConnection}
+    onOpenConnections={() => (showConnections = true)}
+  />
 {:else}
   <div class="flex h-screen overflow-hidden bg-surface-50-950">
     <main class="flex flex-1 flex-col overflow-hidden">
@@ -297,4 +330,9 @@
 
   <Toaster />
   <DialogHost />
+  <ConnectionsDialog
+    open={showConnections}
+    onClose={() => (showConnections = false)}
+    onChanged={reloadConnections}
+  />
 {/if}
