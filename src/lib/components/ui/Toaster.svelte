@@ -12,7 +12,7 @@
   };
 </script>
 
-<div class="fixed bottom-4 right-4 z-[100] flex w-96 max-w-[92vw] flex-col gap-2" aria-live="polite">
+<div class="fixed left-4 top-16 z-[100] flex w-96 max-w-[92vw] flex-col gap-2" aria-live="polite">
   {#each $toasts as t (t.id)}
     <div
       class="alert {META[t.kind].cls} pointer-events-auto flex items-start gap-2 py-2 text-sm shadow-lg"

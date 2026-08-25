@@ -197,7 +197,7 @@ pub fn run() {
         .setup(|app| {
             tracing::info!("2C Platform запускается...");
             let window = app.get_webview_window("main").unwrap();
-            window.set_title("2C Platform v0.1")?;
+            window.set_title(&format!("2C Platform v{}", env!("CARGO_PKG_VERSION")))?;
             Ok(())
         })
         .run(tauri::generate_context!())
