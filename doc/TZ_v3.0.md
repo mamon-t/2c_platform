@@ -211,7 +211,7 @@
 
 **Поля события:**
 1. `_id` (UUID)
-2. `stream_type` (тип потока: object, user, module)
+2. `stream_type` (тип потока: object, user, person, user_contact, user_profile, user_cert, company, role, module)
 3. `stream_id` (ID объекта)
 4. `event_type` (тип события: object.created, document.posted)
 5. `version` (порядковый номер в потоке)

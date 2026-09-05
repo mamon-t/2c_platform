@@ -630,6 +630,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2659,15 +2660,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "core-api",
  "core-application",
  "core-domain",
  "core-infrastructure",
  "dotenvy",
+ "serde",
  "serde_json",
+ "surrealdb",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

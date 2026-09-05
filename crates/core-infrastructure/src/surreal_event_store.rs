@@ -7,6 +7,9 @@ use serde_json::Value;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 
+use crate::connector::connect_db;
+use crate::events::append_events;
+
 /// Append-only journal of events stored in the SurrealDB `events` collection.
 ///
 /// The record id of a stored event equals the event id itself, which makes a
@@ -30,20 +33,7 @@ impl SurrealEventStore {
         ns: &str,
         db_name: &str,
     ) -> Result<Self, DomainError> {
-        let endpoint = format!("ws://{host}");
-        let db = surrealdb::engine::any::connect(&endpoint)
-            .await
-            .map_err(|e| DomainError::Storage(format!("connect {endpoint}: {e}")))?;
-        db.signin(surrealdb::opt::auth::Root {
-            username: user.to_string(),
-            password: pass.to_string(),
-        })
-        .await
-        .map_err(|e| DomainError::Storage(format!("signin: {e}")))?;
-        db.use_ns(ns)
-            .use_db(db_name)
-            .await
-            .map_err(|e| DomainError::Storage(format!("use ns/db {ns}/{db_name}: {e}")))?;
+        let db = connect_db(host, user, pass, ns, db_name).await?;
         Ok(Self { db })
     }
 
@@ -74,22 +64,7 @@ impl EventStore for SurrealEventStore {
         if events.is_empty() {
             return Ok(());
         }
-        for event in events {
-            let mut value = serde_json::to_value(event)
-                .map_err(|e| DomainError::Storage(format!("append encode: {e}")))?;
-            value
-                .as_object_mut()
-                .ok_or_else(|| DomainError::Storage("event is not an object".into()))?
-                .remove("id");
-            let id = format!("{}", event.id);
-            let _: Option<surrealdb::types::Value> = self
-                .db
-                .upsert(("events", id))
-                .content(value)
-                .await
-                .map_err(|e| DomainError::Storage(format!("append: {e}")))?;
-        }
-        Ok(())
+        append_events(&self.db, events).await
     }
 
     async fn read_stream(
@@ -97,11 +72,7 @@ impl EventStore for SurrealEventStore {
         stream_type: StreamType,
         stream_id: &str,
     ) -> Result<Vec<Event>, DomainError> {
-        let type_filter = match stream_type {
-            StreamType::Object => "object",
-            StreamType::User => "user",
-            StreamType::Module => "module",
-        };
+        let type_filter = stream_type.as_str();
         let mut response = self
             .db
             .query(

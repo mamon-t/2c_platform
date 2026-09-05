@@ -1,3 +1,5 @@
+mod commands;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -8,8 +10,12 @@ use axum::{
     Json, Router,
 };
 use core_application::ports::EventStore;
+use core_application::CommandRegistry;
 use core_domain::event::{Event, StreamType};
-use core_infrastructure::SurrealEventStore;
+use core_infrastructure::{
+    connect_db, SurrealCompanyRepository, SurrealEventStore, SurrealRoleRepository,
+    SurrealUserRepository,
+};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -17,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Clone)]
 struct AppState {
     store: Arc<SurrealEventStore>,
+    registry: Arc<CommandRegistry>,
 }
 
 #[tokio::main]
@@ -26,15 +33,39 @@ async fn main() -> Result<()> {
 
     info!("2C Platform Core v0.1.0 запускается...");
 
-    let store = connect_event_store().await?;
+    let db = connect_database().await?;
+    let store = Arc::new(SurrealEventStore::new(db.clone()));
+    store.ensure_schema().await.context("не удалось создать схему events")?;
+
+    let companies = Arc::new(SurrealCompanyRepository::new(db.clone()));
+    companies
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему companies")?;
+    let users = Arc::new(SurrealUserRepository::new(db.clone()));
+    users
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему users")?;
+    let roles = Arc::new(SurrealRoleRepository::new(db));
+    roles
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему roles")?;
+
+    let registry = Arc::new(CommandRegistry::new());
+    commands::register_phase2_commands(&registry, companies, users, roles).await;
+    info!("Команды Фазы 2 зарегистрированы: {}", registry.list().await.join(", "));
 
     let state = AppState {
-        store: Arc::new(store),
+        store,
+        registry,
     };
     let app = Router::new()
         .route("/health", get(health))
         .route("/debug/events", post(debug_append_events))
         .route("/debug/streams/{kind}/{sid}", get(debug_read_stream))
+        .route("/debug/command", post(debug_command))
         .with_state(state);
 
     let addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
@@ -49,22 +80,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn connect_event_store() -> Result<SurrealEventStore> {
+async fn connect_database() -> Result<surrealdb::Surreal<surrealdb::engine::any::Any>> {
     let host = std::env::var("SURREAL_HOST").context("SURREAL_HOST не задан")?;
     let user = std::env::var("SURREAL_USER").context("SURREAL_USER не задан")?;
     let pass = std::env::var("SURREAL_PASS").context("SURREAL_PASS не задан")?;
     let ns = std::env::var("SURREAL_NS").context("SURREAL_NS не задан")?;
     let db_name = std::env::var("SURREAL_DB").context("SURREAL_DB не задан")?;
 
-    let store = SurrealEventStore::connect(&host, &user, &pass, &ns, &db_name)
+    let db = connect_db(&host, &user, &pass, &ns, &db_name)
         .await
         .with_context(|| format!("не удалось подключиться к SurrealDB {host}"))?;
-    store
-        .ensure_schema()
-        .await
-        .context("не удалось создать схему events")?;
     info!("SurrealDB подключена: ws://{host}, ns={ns}, db={db_name}");
-    Ok(store)
+    Ok(db)
 }
 
 async fn health() -> &'static str {
@@ -100,16 +127,33 @@ async fn debug_read_stream(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+async fn debug_command(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let name = payload
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'name'".to_string()))?;
+    let params = payload
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let result = state
+        .registry
+        .execute(name, params)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "ok": true, "command": name, "result": result })))
+}
+
 fn parse_stream_type(kind: &str) -> Result<StreamType, (StatusCode, String)> {
-    match kind {
-        "object" => Ok(StreamType::Object),
-        "user" => Ok(StreamType::User),
-        "module" => Ok(StreamType::Module),
-        _ => Err((
+    StreamType::try_from(kind).map_err(|_| {
+        (
             StatusCode::BAD_REQUEST,
             format!("неизвестный тип потока: {kind}"),
-        )),
-    }
+        )
+    })
 }
 
 async fn shutdown_signal() {

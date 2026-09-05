@@ -177,13 +177,23 @@
 | Файл / модуль | Назначение |
 |---------------|------------|
 | `crates/core-infrastructure/src/surreal_event_store.rs` | SurrealEventStore: connect, ensure_schema (4 индекса), идемпотентный append, read_stream |
-| `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, GET /debug/streams/{kind}/{sid}) |
+| `crates/core-infrastructure/src/surreal_company_repository.rs` | CompanyRepository: CRUD, транзакционная запись «Доска+Труба», ensure_schema (UNIQUE-код) |
+| `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
+| `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
+| `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction |
+| `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
+| `apps/platform-server/src/commands.rs` | Команды Фазы 2 (12): company.*, user.* (+contact/profile), role.*; системный актор |
+| `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
 | `doc/TZ_v3.0.md` | Техническое задание, архитектурные принципы |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
 | `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, command, object, aggregate, error) |
+| `crates/core-domain/src/event.rs` | StreamType (9 видов: object…module), Event, EventMetadata + `system()` |
+| `crates/core-domain/src/company.rs` | Модель Company (Фаза 2) |
+| `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
+| `crates/core-domain/src/role.rs` | Модель Role (Фаза 2) |
 | `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
 | `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
-| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost |
+| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository |
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (Приложение №1) + `remove_by_prefix` |
 | `crates/core-application/src/registry.rs` | CodeRegistry — идемпотентный ensure по кодам (4 регистра) |
 | `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module |
@@ -236,7 +246,7 @@ curl -u root:root -H "Content-Type: application/json" \
 ## 15. История разработки (фазы / этапы)
 
 - [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
-- [ ] Фаза 2: Компании, расширенная модель пользователей, роли
+- [x] Фаза 2: Компании, расширенная модель пользователей, роли
 - [ ] Фаза 3: Метаданные (entity_types, fields, states)
 - [ ] Фаза 4: Объекты, CRUD, оптимистичная блокировка
 - [x] Фаза 5 (частично): События, версии, аудит, снимки исполнителя — Event Store готов

@@ -5,5 +5,7 @@ pub mod registry;
 
 pub use app_registry::AppRegistry;
 pub use command_registry::CommandRegistry;
-pub use ports::{EventStore, ObjectRepository, WasmHost};
+pub use ports::{
+    CompanyRepository, EventStore, ObjectRepository, RoleRepository, UserRepository, WasmHost,
+};
 pub use registry::CodeRegistry;
