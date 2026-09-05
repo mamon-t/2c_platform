@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local working documents
+doc/technical_report.md
+
+# Environment
+.env
+.env.local

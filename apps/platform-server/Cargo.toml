@@ -1,0 +1,16 @@
+[package]
+name = "platform-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core-domain = { path = "../../crates/core-domain" }
+core-application = { path = "../../crates/core-application" }
+core-infrastructure = { path = "../../crates/core-infrastructure" }
+core-api = { path = "../../crates/core-api" }
+tokio = { workspace = true }
+axum = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }

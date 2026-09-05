@@ -1,0 +1,15 @@
+[package]
+name = "surreal-tui"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full", "macros"] }
+surrealdb = { version = "3.2", features = ["protocol-ws"] }
+serde_json = "1.0"
+anyhow = "1.0"
+dotenvy = "0.15"
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+futures = "0.3"
+open = "5.0"

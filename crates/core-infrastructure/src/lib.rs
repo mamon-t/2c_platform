@@ -1,0 +1,1 @@
+//! Infrastructure adapters: SurrealDB Event Store, Extism WASM host, CryptoPro signing.
