@@ -1,1 +1,3 @@
-//! Infrastructure adapters: SurrealDB Event Store, Extism WASM host, CryptoPro signing.
+pub mod surreal_event_store;
+
+pub use surreal_event_store::SurrealEventStore;

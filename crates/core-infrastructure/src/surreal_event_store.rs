@@ -1,0 +1,235 @@
+//! SurrealDB-backed Event Store - the "Pipe" of the Pipe & Board architecture.
+
+use core_application::ports::EventStore;
+use core_domain::error::DomainError;
+use core_domain::event::{Event, StreamType};
+use serde_json::Value;
+use surrealdb::engine::any::Any;
+use surrealdb::Surreal;
+
+/// Append-only journal of events stored in the SurrealDB `events` collection.
+///
+/// The record id of a stored event equals the event id itself, which makes a
+/// retried append idempotent: `upsert` overwrites the same record instead of
+/// creating a duplicate.
+pub struct SurrealEventStore {
+    db: Surreal<Any>,
+}
+
+impl SurrealEventStore {
+    pub fn new(db: Surreal<Any>) -> Self {
+        Self { db }
+    }
+
+    /// Connects over WebSocket, authenticates as root and selects the target
+    /// namespace/database.
+    pub async fn connect(
+        host: &str,
+        user: &str,
+        pass: &str,
+        ns: &str,
+        db_name: &str,
+    ) -> Result<Self, DomainError> {
+        let endpoint = format!("ws://{host}");
+        let db = surrealdb::engine::any::connect(&endpoint)
+            .await
+            .map_err(|e| DomainError::Storage(format!("connect {endpoint}: {e}")))?;
+        db.signin(surrealdb::opt::auth::Root {
+            username: user.to_string(),
+            password: pass.to_string(),
+        })
+        .await
+        .map_err(|e| DomainError::Storage(format!("signin: {e}")))?;
+        db.use_ns(ns)
+            .use_db(db_name)
+            .await
+            .map_err(|e| DomainError::Storage(format!("use ns/db {ns}/{db_name}: {e}")))?;
+        Ok(Self { db })
+    }
+
+    /// Creates the `events` indexes required by the spec, idempotently.
+    pub async fn ensure_schema(&self) -> Result<(), DomainError> {
+        const INDEXES: &[&str] = &[
+            "DEFINE INDEX IF NOT EXISTS events_stream ON events FIELDS stream_type, stream_id, version",
+            "DEFINE INDEX IF NOT EXISTS events_type_time ON events FIELDS event_type, occurred_at",
+            "DEFINE INDEX IF NOT EXISTS events_company_time ON events FIELDS company_id, occurred_at",
+            "DEFINE INDEX IF NOT EXISTS events_correlation ON events FIELDS correlation_id",
+        ];
+        for stmt in INDEXES {
+            let mut response = self
+                .db
+                .query(*stmt)
+                .await
+                .map_err(|e| DomainError::Storage(format!("ensure_schema: {e}")))?;
+            let _: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("ensure_schema take: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+impl EventStore for SurrealEventStore {
+    async fn append(&self, events: &[Event]) -> Result<(), DomainError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        for event in events {
+            let mut value = serde_json::to_value(event)
+                .map_err(|e| DomainError::Storage(format!("append encode: {e}")))?;
+            value
+                .as_object_mut()
+                .ok_or_else(|| DomainError::Storage("event is not an object".into()))?
+                .remove("id");
+            let id = format!("{}", event.id);
+            let _: Option<surrealdb::types::Value> = self
+                .db
+                .upsert(("events", id))
+                .content(value)
+                .await
+                .map_err(|e| DomainError::Storage(format!("append: {e}")))?;
+        }
+        Ok(())
+    }
+
+    async fn read_stream(
+        &self,
+        stream_type: StreamType,
+        stream_id: &str,
+    ) -> Result<Vec<Event>, DomainError> {
+        let type_filter = match stream_type {
+            StreamType::Object => "object",
+            StreamType::User => "user",
+            StreamType::Module => "module",
+        };
+        let mut response = self
+            .db
+            .query(
+                "SELECT \
+                        record::id(id) AS id, stream_type, stream_id, event_type, version, \
+                        payload, metadata, company_id, correlation_id, causation_id, occurred_at \
+                     FROM events \
+                     WHERE stream_type = $stream_type AND stream_id = $stream_id \
+                     ORDER BY version ASC",
+            )
+            .bind(("stream_type", type_filter))
+            .bind(("stream_id", stream_id.to_string()))
+            .await
+            .map_err(|e| DomainError::Storage(format!("read_stream: {e}")))?;
+        let rows: Vec<Value> = response
+            .take(0)
+            .map_err(|e| DomainError::Storage(format!("read_stream take: {e}")))?;
+        let events: Vec<Event> = serde_json::from_value(Value::Array(rows))
+            .map_err(|e| DomainError::Storage(format!("read_stream decode: {e}")))?;
+        Ok(events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use core_domain::event::EventMetadata;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    async fn mem_store() -> SurrealEventStore {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test")
+            .use_db(Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let store = SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+        store
+    }
+
+    fn make_event(id: Uuid, stream_id: &str, version: u64, event_type: &str) -> Event {
+        Event {
+            id,
+            stream_type: StreamType::Object,
+            stream_id: stream_id.to_string(),
+            event_type: event_type.to_string(),
+            version,
+            payload: json!({"text": format!("v{version}")}),
+            metadata: EventMetadata {
+                actor_user_id: "u1".to_string(),
+                actor_login: "admin".to_string(),
+                actor_full_name: "Admin Adminov".to_string(),
+                ip_address: None,
+            },
+            company_id: "c1".to_string(),
+            correlation_id: "corr1".to_string(),
+            causation_id: None,
+            occurred_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn append_read_returns_same_events_in_order() {
+        let store = mem_store().await;
+        let e1 = make_event(Uuid::new_v4(), "obj-1", 1, "object.created");
+        let e2 = make_event(Uuid::new_v4(), "obj-1", 2, "object.created");
+        let e3 = make_event(Uuid::new_v4(), "obj-1", 3, "document.posted");
+
+        store.append(&[e1.clone(), e2.clone(), e3.clone()]).await.unwrap();
+        let read = store
+            .read_stream(StreamType::Object, "obj-1")
+            .await
+            .unwrap();
+
+        assert_eq!(read.len(), 3);
+        assert_eq!(
+            read.iter().map(|e| e.version).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(read[0].id, e1.id);
+        assert_eq!(read[1].stream_id, "obj-1");
+        assert_eq!(read[2].event_type, "document.posted");
+        assert_eq!(read[0].metadata.actor_login, "admin");
+    }
+
+    #[tokio::test]
+    async fn retried_append_is_idempotent() {
+        let store = mem_store().await;
+        let event = make_event(Uuid::new_v4(), "obj-1", 1, "object.created");
+
+        store.append(std::slice::from_ref(&event)).await.unwrap();
+        store.append(std::slice::from_ref(&event)).await.unwrap();
+
+        let read = store
+            .read_stream(StreamType::Object, "obj-1")
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn read_stream_filters_by_stream_id() {
+        let store = mem_store().await;
+        store
+            .append(&[
+                make_event(Uuid::new_v4(), "obj-1", 1, "object.created"),
+                make_event(Uuid::new_v4(), "obj-2", 1, "object.created"),
+                make_event(Uuid::new_v4(), "obj-1", 2, "object.created"),
+            ])
+            .await
+            .unwrap();
+
+        let read = store
+            .read_stream(StreamType::Object, "obj-1")
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].version, 1);
+        assert_eq!(read[1].version, 2);
+    }
+
+    #[tokio::test]
+    async fn ensure_schema_is_idempotent() {
+        let store = mem_store().await;
+        store.ensure_schema().await.unwrap();
+        store.ensure_schema().await.unwrap();
+    }
+}

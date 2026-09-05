@@ -39,6 +39,12 @@
 - Сообщение коммита: `<scope>: <краткое описание>` (conventional commits).
 - Если задача большая — разбивай на подзадачи и коммить по мере готовности.
 
+### 2.5. Снимок состояния после коммита
+После каждого коммита обновляй `doc/technical_report.md`:
+- добавь запись в таблицу §2 (фаза/статус);
+- если изменилась архитектура — актуализируй §4-§6;
+- обнови дату в шапке документа.
+
 ## 3. Запреты (жесткие)
 
 - ❌ Не использовать заглушки: `TODO`, `FIXME`, `unimplemented!()`, `pass`, `// ... implement later`.
@@ -122,10 +128,10 @@
 │   ├── core-domain/        # чистый домен: AggregateId, Event, Command, Object, DomainError
 │   ├── core-application/   # оркестрация: ports (EventStore/ObjectRepository/WasmHost),
 │   │                       #   CommandRegistry, AppRegistry, CodeRegistry
-│   ├── core-infrastructure/# адаптеры: SurrealDB, Extism, CryptoPro (каркас)
+│   ├── core-infrastructure/# SurrealDB (Event Store), Extism, CryptoPro
 │   └── core-api/           # транспорт: Axum, WebSocket, RpcMessage (каркас)
 ├── apps/
-│   └── platform-server/    # бинарник сервера (точка входа, /health, graceful shutdown)
+│   └── platform-server/    # бинарник сервера: /health, debug REST, graceful shutdown
 └── surreal-tui/            # автономная TUI-утилита для SurrealDB, НЕ член workspace
 ```
 
@@ -142,6 +148,8 @@
 
 | Файл / модуль | Назначение |
 |---|---|
+| `crates/core-infrastructure/src/surreal_event_store.rs` | `SurrealEventStore`: connect, ensure_schema (4 индекса), идемпотентный append, read_stream |
+| `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, GET /debug/streams/{kind}/{sid}) |
 | `doc/TZ_v3.0.md` | Техническое задание, архитектурные принципы |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
 | `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, command, object, aggregate, error) |
@@ -151,7 +159,6 @@
 | `crates/core-application/src/command_registry.rs` | `CommandRegistry` (Приложение №1) + `remove_by_prefix` |
 | `crates/core-application/src/registry.rs` | `CodeRegistry` — идемпотентный ensure по кодам (4 регистра) |
 | `crates/core-application/src/app_registry.rs` | `AppRegistry` (Приложение №2): 5 регистров + register_module/unregister_module |
-| `apps/platform-server/src/main.rs` | Бинарник сервера: /health, graceful shutdown, dotenvy |
 
 ## 13. Учётные данные и окружение
 
@@ -174,11 +181,22 @@ cargo test --workspace
 # Статический анализ (внимание: surrealdb-core делает медленным, таймаут >= 600s)
 cargo clippy --workspace --all-targets
 
-# Контроль зависимостей слонов
+# Контроль зависимостей слонов (в доменных слоях не должно быть surrealdb/axum/extism)
 cargo tree -p core-domain -e normal
 
 # Сборка
 cargo build --release
+
+# Живой сервер + debug REST
+cargo run -p platform-server   # читает .env (SURREAL_*, SERVER_ADDR)
+curl :8080/health
+curl -X POST :8080/debug/events -H 'Content-Type: application/json' -d '[{...Event...}]'
+curl :8080/debug/streams/{kind}/{sid}   # kind: object | user | module
+
+# Прямой SQL к SurrealDB (NS/DB через заголовки Surreal-NS/Surreal-DB)
+curl -u root:root -H "Content-Type: application/json" \
+     -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" \
+     :8000/sql --data "SELECT ... FROM events;"
 
 # Деплой
 # Нет конкретных инструкций
@@ -193,7 +211,7 @@ cargo build --release
 - [ ] **Фаза 2:** Компании, расширенная модель пользователей, роли
 - [ ] **Фаза 3:** Метаданные (entity_types, fields, states)
 - [ ] **Фаза 4:** Объекты, CRUD, оптимистичная блокировка
-- [ ] **Фаза 5:** События, версии, аудит, снимки исполнителя
+- [x] **Фаза 5 (частично):** События, версии, аудит, снимки исполнителя — Event Store готов
 - [ ] **Фаза 6:** Права доступа (permission_policies)
 - [x] **Фаза 7:** CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
 - [ ] **Фаза 8:** WASM-модули через Extism, манифест, декларативная регистрация

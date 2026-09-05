@@ -12,3 +12,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# kv-mem активируется только при компиляции тестов (feature unification),
+# prod-сборка остаётся на protocol-ws.
+surrealdb = { workspace = true, features = ["kv-mem"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
