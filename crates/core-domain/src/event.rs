@@ -104,7 +104,7 @@ pub struct Event {
     pub event_type: String,
     pub version: Version,
     pub payload: serde_json::Value,
-    pub metadata: EventMetadata,
+    pub metadata: ActorSnapshot,
     pub company_id: String,
     pub correlation_id: String,
     pub causation_id: Option<String>,
@@ -112,23 +112,27 @@ pub struct Event {
 }
 
 /// Snapshot of the actor who produced the event, kept for readable audit
-/// history even if the person's name or employment later changes.
+/// history even if the person's name, position or employment later changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventMetadata {
-    pub actor_user_id: String,
-    pub actor_login: String,
-    pub actor_full_name: String,
+pub struct ActorSnapshot {
+    pub user_id: Option<Uuid>, // None for the system actor
+    pub login: String,
+    pub full_name: String,
+    pub position: Option<String>,
+    pub company_id: Option<Uuid>,
     pub ip_address: Option<String>,
 }
 
-impl EventMetadata {
+impl ActorSnapshot {
     /// System actor used for commands executed before authentication exists
     /// (Phase 2 bootstrap and debug flows).
     pub fn system() -> Self {
         Self {
-            actor_user_id: "system".to_string(),
-            actor_login: "system".to_string(),
-            actor_full_name: "Система".to_string(),
+            user_id: None,
+            login: "system".to_string(),
+            full_name: "Система".to_string(),
+            position: None,
+            company_id: None,
             ip_address: None,
         }
     }

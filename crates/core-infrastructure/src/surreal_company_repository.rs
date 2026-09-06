@@ -182,7 +182,7 @@ mod tests {
     use super::*;
     use core_application::ports::EventStore;
     use core_domain::company::Company;
-    use core_domain::event::{Event, EventMetadata, StreamType};
+    use core_domain::event::{ActorSnapshot, Event, StreamType};
     use uuid::Uuid;
 
     async fn mem_db() -> Surreal<Any> {
@@ -202,7 +202,7 @@ mod tests {
             event_type: "company.created".to_string(),
             version: 0,
             payload: serde_json::json!({}),
-            metadata: EventMetadata::system(),
+            metadata: ActorSnapshot::system(),
             company_id: company_id.to_string(),
             correlation_id: "corr".to_string(),
             causation_id: None,

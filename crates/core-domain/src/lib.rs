@@ -12,7 +12,7 @@ pub use aggregate::AggregateRoot;
 pub use command::Command;
 pub use company::Company;
 pub use error::DomainError;
-pub use event::{Event, EventMetadata, StreamType};
+pub use event::{ActorSnapshot, Event, StreamType};
 pub use object::{Object, ObjectKind};
 pub use role::Role;
 pub use types::{AggregateId, Version};

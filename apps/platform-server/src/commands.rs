@@ -8,7 +8,7 @@ use chrono::{NaiveDate, Utc};
 use core_application::ports::{CompanyRepository, RoleRepository, UserRepository};
 use core_application::CommandRegistry;
 use core_domain::company::Company;
-use core_domain::event::{Event, EventMetadata, StreamType};
+use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::role::Role;
 use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
@@ -34,7 +34,7 @@ fn system_event(
         event_type: event_type.to_string(),
         version: 0,
         payload,
-        metadata: EventMetadata::system(),
+        metadata: ActorSnapshot::system(),
         company_id: company_id.to_string(),
         correlation_id: Uuid::new_v4().to_string(),
         causation_id: None,

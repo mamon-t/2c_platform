@@ -351,7 +351,7 @@ impl UserRepository for SurrealUserRepository {
 mod tests {
     use super::*;
     use core_application::ports::EventStore;
-    use core_domain::event::{Event, EventMetadata, StreamType};
+    use core_domain::event::{ActorSnapshot, Event, StreamType};
     use core_domain::user::{ContactChannelType, ContactPurpose};
     use uuid::Uuid;
 
@@ -381,7 +381,7 @@ mod tests {
             event_type: event_type.to_string(),
             version: 0,
             payload: serde_json::json!({}),
-            metadata: EventMetadata::system(),
+            metadata: ActorSnapshot::system(),
             company_id: company_id.to_string(),
             correlation_id: "corr".to_string(),
             causation_id: None,

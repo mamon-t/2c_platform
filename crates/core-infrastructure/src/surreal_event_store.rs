@@ -100,7 +100,7 @@ impl EventStore for SurrealEventStore {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use core_domain::event::EventMetadata;
+    use core_domain::event::ActorSnapshot;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -123,10 +123,12 @@ mod tests {
             event_type: event_type.to_string(),
             version,
             payload: json!({"text": format!("v{version}")}),
-            metadata: EventMetadata {
-                actor_user_id: "u1".to_string(),
-                actor_login: "admin".to_string(),
-                actor_full_name: "Admin Adminov".to_string(),
+            metadata: ActorSnapshot {
+                user_id: Some(Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()),
+                login: "admin".to_string(),
+                full_name: "Admin Adminov".to_string(),
+                position: None,
+                company_id: None,
                 ip_address: None,
             },
             company_id: "c1".to_string(),
@@ -157,7 +159,7 @@ mod tests {
         assert_eq!(read[0].id, e1.id);
         assert_eq!(read[1].stream_id, "obj-1");
         assert_eq!(read[2].event_type, "document.posted");
-        assert_eq!(read[0].metadata.actor_login, "admin");
+        assert_eq!(read[0].metadata.login, "admin");
     }
 
     #[tokio::test]

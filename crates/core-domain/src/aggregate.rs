@@ -43,7 +43,7 @@ pub trait AggregateRoot: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventMetadata, StreamType};
+    use crate::event::{ActorSnapshot, StreamType};
     use chrono::{DateTime, Utc};
     use serde_json::json;
     use uuid::Uuid;
@@ -95,10 +95,12 @@ mod tests {
             event_type: "counter.incremented".to_string(),
             version,
             payload: json!({}),
-            metadata: EventMetadata {
-                actor_user_id: "u1".to_string(),
-                actor_login: "login".to_string(),
-                actor_full_name: "Тест Тестов".to_string(),
+            metadata: ActorSnapshot {
+                user_id: Some(Uuid::new_v4()),
+                login: "login".to_string(),
+                full_name: "Тест Тестов".to_string(),
+                position: None,
+                company_id: None,
                 ip_address: None,
             },
             company_id: "c1".to_string(),
