@@ -184,7 +184,7 @@
 4. **user_company_profiles (Рабочие профили).** Хранит привязку к компаниям. Поля: company_id, employee_number, position, department, is_primary, is_active, valid_from, valid_to.
 5. **user_certificates (Сертификаты).** Хранит связь с сертификатами КриптоПро. Поля: provider_code, certificate_ref, subject, issuer, fingerprint, is_active.
 
-В событиях и аудите сохраняется снимок исполнителя (actor_login, actor_full_name, actor_position, actor_company_id), чтобы история оставалась читаемой даже при смене фамилии или увольнении.
+В событиях и аудите сохраняется снимок исполнителя (actor_user_id, actor_login, actor_full_name, ip_address), чтобы история оставалась читаемой даже при смене фамилии или увольнении. Поля position/company_id предусмотрены моделью актора в качестве эволюции (см. «Снимок исполнителя»).
 
 ---
 
@@ -207,13 +207,14 @@
 ## 8. КОМАНДЫ И СОБЫТИЯ (EVENT SOURCING + CQRS)
 
 ### Event Sourcing
+
 События хранятся в коллекции `events`. Это append-only журнал.
 
 **Поля события:**
 1. `_id` (UUID)
-2. `stream_type` (тип потока: object, user, person, user_contact, user_profile, user_cert, company, role, module)
+2. `stream_type` (тип потока — см. ниже)
 3. `stream_id` (ID объекта)
-4. `event_type` (тип события: object.created, document.posted)
+4. `event_type` (тип события: object.created, document.posted, company.updated, и т.д.)
 5. `version` (порядковый номер в потоке)
 6. `payload` (данные события)
 7. `metadata` (actor_user_id, actor_login, actor_full_name, ip_address)
@@ -222,14 +223,63 @@
 10. `causation_id` (ID события-причины)
 11. `occurred_at` (UTC)
 
+**Типы потоков (StreamType):**
+
+Каждая сущность с собственной историей изменений имеет свой тип потока:
+
+| StreamType | Назначение | Примеры событий |
+|------------|------------|-----------------|
+| `Object` | Универсальные объекты из коллекции `objects` | object.created, object.updated, document.posted |
+| `User` | Учётные записи | user.created, user.status_changed |
+| `Person` | Персоны (ФИО) | person.updated |
+| `UserContact` | Контактные каналы пользователя | user_contact.added, user_contact.removed |
+| `UserProfile` | Рабочие профили (привязка к компании) | user_profile.created, user_profile.deactivated |
+| `UserCert` | Сертификаты КриптоПро | user_cert.added, user_cert.revoked |
+| `Company` | Компании | company.created, company.updated |
+| `Role` | Роли (RBAC) | role.created, role.permissions_changed |
+| `Module` | WASM-модули | module.installed, module.enabled |
+
+**Обоснование:** Компании, роли, персоны, контакты, профили и сертификаты — это **отдельные сущности** с собственной историей изменений. Семантическая чистота важнее экономии на расширении enum. Это упрощает проекции, отчёты и аудит.
+
 **Индексы для events:**
-1. `{ stream_type, stream_id, version }`
-2. `{ event_type, occurred_at }`
-3. `{ company_id, occurred_at }`
-4. `{ correlation_id }`
+1. `{ stream_type, stream_id, version }` — для чтения истории конкретного объекта
+2. `{ event_type, occurred_at }` — для поиска событий по типу
+3. `{ company_id, occurred_at }` — для аудита по компании
+4. `{ correlation_id }` — для сквозной трассировки бизнес-операций
 
 ### CQRS
+
 **Проекции (Projections)** слушают события и обновляют материализованные данные (objects, ledger_balances). В v0.1 проекции применяются синхронно внутри транзакции SurrealDB.
+
+**Примеры проекций:**
+- `object.created` → вставка в коллекцию `objects`
+- `object.updated` → обновление поля `data` в `objects`
+- `document.posted` → обновление состояния документа, создание проводок
+- `company.updated` → обновление названия компании в связанных документах
+- `user_profile.created` → привязка пользователя к компании
+
+### Снимок исполнителя (Actor Snapshot)
+
+В каждом событии сохраняется снимок исполнителя на момент события. В текущей
+реализации (Фаза 2) — это `EventMetadata` в `crates/core-domain/src/event.rs`:
+```rust
+pub struct EventMetadata {
+    pub actor_user_id: String,
+    pub actor_login: String,
+    pub actor_full_name: String,
+    pub ip_address: Option<String>,
+}
+```
+
+Это гарантирует, что история остаётся читаемой даже при смене фамилии, должности или увольнении пользователя.
+
+**Системный актор:** Для операций, выполняемых системой (например, декларативная регистрация метаданных модулей), используется `EventMetadata::system()` с `login: "system"`, `full_name: "Система"`.
+
+### Оптимистичная блокировка (OCC)
+
+Каждый объект имеет поле `version` (u64). При обновлении клиент передаёт `expected_version`. Если текущая версия в БД не совпадает с ожидаемой, операция отклоняется с ошибкой `CONFLICT_ERROR`.
+
+**Реализация:** `AggregateRoot::apply` проверяет `expected = version + pending.len() + 1` при каждом событии; при расхождении возвращает `VersionConflict`. 
 
 ---
 
