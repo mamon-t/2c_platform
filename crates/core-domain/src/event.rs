@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::types::Version;
 
-/// Type of the stream an event belongs to.
+/// Тип потока (stream), которому принадлежит событие.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamType {
@@ -21,8 +21,8 @@ pub enum StreamType {
 }
 
 impl StreamType {
-    /// Canonical string form, consistent with the `snake_case` serialization
-    /// used to store and query events in SurrealDB.
+    /// Каноническая строковая форма, согласованная с сериализацией `snake_case`,
+    /// используемой для хранения и запроса событий в SurrealDB.
     pub fn as_str(&self) -> &'static str {
         match self {
             StreamType::Object => "object",
@@ -98,8 +98,8 @@ mod tests {
     }
 }
 
-/// A fact that has already happened and is written to the Event Store.
-/// Stored in the `events` collection, an append-only journal.
+/// Факт, который уже произошёл и записан в хранилище событий.
+/// Хранится в коллекции `events` — журнале, доступном только для добавления.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub id: Uuid,
@@ -115,11 +115,11 @@ pub struct Event {
     pub occurred_at: DateTime<Utc>,
 }
 
-/// Snapshot of the actor who produced the event, kept for readable audit
-/// history even if the person's name, position or employment later changes.
+/// Снимок исполнителя, создавшего событие; хранится для читаемой истории
+/// аудита, даже если имя, должность или место работы позже изменятся.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorSnapshot {
-    pub user_id: Option<Uuid>, // None for the system actor
+    pub user_id: Option<Uuid>, // None для системного исполнителя
     pub login: String,
     pub full_name: String,
     pub position: Option<String>,
@@ -128,8 +128,8 @@ pub struct ActorSnapshot {
 }
 
 impl ActorSnapshot {
-    /// System actor used for commands executed before authentication exists
-    /// (Phase 2 bootstrap and debug flows).
+    /// Системный исполнитель для команд, выполняемых до появления аутентификации
+    /// (bootstrap Фазы 2 и отладочные потоки).
     pub fn system() -> Self {
         Self {
             user_id: None,

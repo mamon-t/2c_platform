@@ -1,15 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-/// An intention to change the state. It may be rejected and is never persisted.
-/// Mirrors `RpcMessage::Command` from the transport layer.
+/// Намерение изменить состояние. Может быть отклонено и никогда не сохраняется.
+/// Отражает `RpcMessage::Command` из транспортного слоя.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Command {
-    /// Correlation ID used for idempotent delivery and tracking.
+    /// Correlation ID, используемый для идемпотентной доставки и отслеживания.
     pub id: String,
-    /// Name of the WASM module that owns the action, e.g. `"warehouse"`.
+    /// Имя WASM-модуля, которому принадлежит действие, например `"warehouse"`.
     pub module: String,
-    /// Name of the action, e.g. `"post_document"`.
+    /// Имя действия, например `"post_document"`.
     pub action: String,
-    /// Command arguments.
+    /// Аргументы команды.
     pub payload: serde_json::Value,
 }

@@ -2,15 +2,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Core company entity. Business specifics (INN, KPP, legal address, etc.)
-/// become configurable through the metadata model in Phase 3, so the kernel
-/// stays neutral.
+/// Базовая сущность компании. Бизнес-специфика (ИНН, КПП, юридический адрес и т.д.)
+/// становится настраиваемой через модель метаданных в Фазе 3, поэтому ядро
+/// остаётся нейтральным.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Company {
     pub id: Uuid,
-    /// Short unique handle used in references, e.g. `"acme"`.
+    /// Короткий уникальный идентификатор, используемый в ссылках, например `"acme"`.
     pub code: String,
-    /// Legal short name, e.g. `"ООО «Акме»"`.
+    /// Краткое юридическое название, например `"ООО «Акме»"`.
     pub name: String,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,

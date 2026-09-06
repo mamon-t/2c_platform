@@ -1,4 +1,4 @@
-//! SurrealDB-backed storage of companies (the "Board" projection).
+//! Хранилище компаний на базе SurrealDB (проекция «Доска»).
 
 use core_application::ports::CompanyRepository;
 use core_domain::company::Company;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::events::{assign_versions, with_transaction, write_events};
 
-/// Materialized `companies` collection with a unique `code` index.
+/// Материализованная коллекция `companies` с уникальным индексом по `code`.
 pub struct SurrealCompanyRepository {
     db: Surreal<Any>,
 }
@@ -21,7 +21,7 @@ impl SurrealCompanyRepository {
         Self { db }
     }
 
-    /// Creates the `companies` table and indexes idempotently.
+    /// Создаёт таблицу `companies` и индексы идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const STATEMENTS: &[&str] = &[
             "DEFINE TABLE IF NOT EXISTS companies SCHEMALESS",

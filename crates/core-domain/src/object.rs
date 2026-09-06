@@ -6,7 +6,7 @@ use crate::error::DomainError;
 use crate::metadata::{EntityField, EntityState, FieldType};
 use crate::types::{AggregateId, Version};
 
-/// Kind of a business object as declared by its entity type.
+/// Вид бизнес-объекта, объявленный его типом сущности.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectKind {
@@ -20,26 +20,26 @@ pub enum ObjectKind {
     Custom,
 }
 
-/// Universal business object stored in the `objects` collection.
-/// A document is an object with `kind == Document`.
+/// Универсальный бизнес-объект, хранимый в коллекции `objects`.
+/// Документ — это объект с `kind == Document`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Object {
     pub id: AggregateId,
-    /// Reference to the object's entity type descriptor (`entity_types`).
+    /// Ссылка на дескриптор типа сущности объекта (`entity_types`).
     pub entity_type: String,
     pub kind: ObjectKind,
     pub company_id: String,
-    /// Current state code from the type's state machine.
+    /// Текущий код состояния из конечного автомата типа.
     pub state: String,
-    /// User-provided field values.
+    /// Значения полей, предоставленные пользователем.
     pub data: serde_json::Value,
-    /// Computed values (formula fields, balances).
+    /// Вычисляемые значения (формульные поля, остатки).
     pub computed: serde_json::Value,
-    /// Document number; unique per entity type and company, assigned on post.
+    /// Номер документа; уникален для типа сущности и компании, присваивается при проведении.
     pub number: Option<String>,
     pub date: Option<NaiveDate>,
     pub parent_id: Option<AggregateId>,
-    /// Incremented on every write to enable OCC.
+    /// Увеличивается при каждой записи для поддержки OCC.
     pub version: Version,
     pub created_by: String,
     pub updated_by: String,
@@ -48,19 +48,19 @@ pub struct Object {
 }
 
 impl Object {
-    /// Whether this object is a document (gets a number, has a posting flow).
+    /// Является ли объект документом (получает номер, имеет поток проведения).
     pub fn is_document(&self) -> bool {
         self.kind == ObjectKind::Document
     }
 
-    /// Validates user-provided `data` against the entity type's field
-    /// declarations: required fields, primitive types, enum options and
-    /// reference targets. Formula and computed fields are excluded (they are
-    /// produced by the system, not the user).
+    /// Проверяет пользовательские `data` на соответствие декларациям полей
+    /// типа сущности: обязательные поля, примитивные типы, варианты enum и
+    /// целевые ссылки. Формульные и вычисляемые поля исключаются (они
+    /// создаются системой, а не пользователем).
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` for the first violated rule.
+    /// Возвращает `DomainError::ValidationError` для первого нарушенного правила.
     pub fn validate(
         &self,
         fields: &[EntityField],
@@ -186,17 +186,17 @@ fn validate_value(field: &EntityField, value: &serde_json::Value) -> Result<(), 
     })
 }
 
-/// Immutable history record of an object's version (criterion 5 of the spec):
-/// the `data`/`state` as of `version`, captured at write time.
+/// Неизменяемая запись истории версии объекта (критерий 5 ТЗ):
+/// `data`/`state` по состоянию на `version`, зафиксированные в момент записи.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectSnapshot {
     pub id: Uuid,
     pub object_id: Uuid,
     pub version: Version,
-    /// Snapshot of `data` for this version.
+    /// Снимок `data` для этой версии.
     pub data: serde_json::Value,
     pub state: String,
-    /// Login of the author taken from the actor snapshot.
+    /// Логин автора, взятый из снимка исполнителя.
     pub changed_by: String,
     pub changed_at: DateTime<Utc>,
 }

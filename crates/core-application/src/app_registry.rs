@@ -5,10 +5,10 @@ use crate::command_registry::CommandRegistry;
 use crate::ports::EntitySchema;
 use crate::registry::CodeRegistry;
 
-/// Groups the five registries of a module and encapsulates ensure-semantics,
-/// per Appendix 2 of the spec. The four code-based registries (permissions,
-/// object schemas, print templates, scripts) mark module presence idempotently;
-/// the manifest blocks that populate them arrive with the WASM layer.
+/// Группирует пять реестров модуля и инкапсулирует ensure-семантику,
+/// согласно Приложению №2 ТЗ. Четыре реестра на основе кодов (прав доступа,
+/// схем объектов, печатных форм, скриптов) идемпотентно отмечают присутствие модуля;
+/// блоки манифеста, заполняющие их, приходят вместе с WASM-слоем.
 pub struct AppRegistry {
     pub commands: Arc<CommandRegistry>,
     pub permissions: Arc<CodeRegistry>,
@@ -28,8 +28,8 @@ impl AppRegistry {
         }
     }
 
-    /// Idempotently marks a module as present in the four code-based registries.
-    /// Command handlers are registered separately through `commands`.
+    /// Идемпотентно отмечает модуль как присутствующий в четырёх реестрах на основе кодов.
+    /// Обработчики команд регистрируются отдельно через `commands`.
     pub async fn register_module(&self, module_code: &str) -> Result<(), DomainError> {
         self.permissions.ensure(module_code).await;
         self.object_schemas.ensure(module_code).await;
@@ -38,7 +38,7 @@ impl AppRegistry {
         Ok(())
     }
 
-    /// Removes a module from all registries, including its prefixed commands.
+    /// Удаляет модуль из всех реестров, включая его команды с префиксами.
     pub async fn unregister_module(&self, module_code: &str) -> Result<(), DomainError> {
         let prefix = format!("plugin.{module_code}.");
         self.commands.remove_by_prefix(&prefix).await;
@@ -49,11 +49,11 @@ impl AppRegistry {
         Ok(())
     }
 
-    /// Declares the entity types shipped by a module in the object schema
-    /// registry, following ensure-semantics. API for the Phase 8 module
-    /// preloader: the manifest blocks are applied on the host side, and this
-    /// marks every `entity_type.code` present so later lookups do not touch
-    /// the database. It is idempotent like `register_module`.
+    /// Объявляет типы сущностей, поставляемые модулем, в реестре схем объектов,
+    /// следуя ensure-семантике. API для прелоадера модулей (Фаза 8):
+    /// блоки манифеста применяются на стороне хоста, а здесь отмечаются как присутствующие
+    /// все `entity_type.code`, чтобы последующие обращения не затрагивали
+    /// базу данных. Метод идемпотентен, как и `register_module`.
     pub async fn preload_metadata_to_registry(&self, schemas: &[EntitySchema]) -> Result<(), DomainError> {
         for schema in schemas {
             self.object_schemas.ensure(&schema.entity_type.code).await;

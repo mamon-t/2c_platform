@@ -1,8 +1,8 @@
-//! Command layer for Phase 2: companies, users, roles.
+//! Командный слой для Фазы 2: компании, пользователи, роли.
 //!
-//! Each mutating command advances both the Pipe (events) and the Board
-//! (materialized collection) atomically through the repository, writing the
-//! audit snapshot with the system actor until authentication exists.
+//! Каждая изменяющая команда атомарно продвигает и Трубу (события), и Доску
+//! (материализованную коллекцию) через репозиторий, записывая снимок аудита
+//! от системного исполнителя, пока не появится аутентификация.
 
 use chrono::{NaiveDate, Utc};
 use core_application::ports::{
@@ -641,10 +641,10 @@ async fn register_metadata_commands(
         .await;
 }
 
-/// Registers the Phase 4 command set: universal objects, CRUD with OCC,
-/// version snapshots and document numbering. Commands validate data against
-/// the metatype model (`Object::validate`) and append object events to the
-/// Pipe together with the Board write.
+/// Регистрирует набор команд Фазы 4: универсальные объекты, CRUD с OCC,
+/// снимки версий и нумерацию документов. Команды валидируют данные против
+/// мета-модели (`Object::validate`) и добавляют события объектов в Трубу
+/// вместе с записью в Доску.
 async fn register_object_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
@@ -1090,7 +1090,7 @@ fn optional_u32(value: &Value, key: &str) -> Result<Option<u32>, String> {
     }
 }
 
-/// Registers the Phase 3 command set into the shared registry.
+/// Регистрирует набор команд Фазы 3 в общем реестре.
 pub async fn register_phase3_commands(
     registry: &CommandRegistry,
     metadata: Arc<SurrealMetadataRepository>,
@@ -1098,7 +1098,7 @@ pub async fn register_phase3_commands(
     register_metadata_commands(registry, metadata).await;
 }
 
-/// Registers the Phase 4 command set into the shared registry.
+/// Регистрирует набор команд Фазы 4 в общем реестре.
 pub async fn register_phase4_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
@@ -1107,7 +1107,7 @@ pub async fn register_phase4_commands(
     register_object_commands(registry, objects, metadata).await;
 }
 
-/// Registers the Phase 2 command set into the shared registry.
+/// Регистрирует набор команд Фазы 2 в общем реестре.
 pub async fn register_phase2_commands(
     registry: &CommandRegistry,
     companies: Arc<SurrealCompanyRepository>,

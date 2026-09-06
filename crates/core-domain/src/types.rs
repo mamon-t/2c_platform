@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
-/// Unique identifier of an aggregate.
+/// Уникальный идентификатор агрегата.
 pub type AggregateId = Uuid;
 
-/// Version used by OCC (Optimistic Concurrency Control).
+/// Версия, используемая OCC (оптимистичной блокировкой).
 pub type Version = u64;

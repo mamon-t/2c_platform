@@ -1,13 +1,14 @@
-//! Shared SurrealDB connection bootstrap.
+//! Общий запуск подключения к SurrealDB.
 
 use core_domain::error::DomainError;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 
-/// Opens a single WebSocket connection to SurrealDB, authenticates as root and
-/// selects the target namespace/database. The returned shared client is cloned
-/// into the event store and all repositories so that one session per process
-/// serves the whole application.
+/// Открывает единственное подключение к SurrealDB по WebSocket, выполняет
+/// аутентификацию пользователя root и выбирает целевое пространство
+/// имён и базу данных. Возвращаемый общий клиент клонируется в хранилище
+/// событий и во все репозитории, так что одна сессия на процесс обслуживает
+/// всё приложение.
 pub async fn connect_db(
     host: &str,
     user: &str,

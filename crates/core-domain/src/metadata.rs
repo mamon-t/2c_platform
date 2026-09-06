@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 pub use crate::object::ObjectKind as EntityKind;
 
-/// Data type of an entity field, per section 7 of the spec. `formula` fields
-/// are computed on read from other fields, `computed` come from modules.
+/// Тип данных поля сущности, согласно разделу 7 ТЗ. Поля `formula`
+/// вычисляются при чтении из других полей, `computed` берутся из модулей.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
@@ -28,7 +28,7 @@ pub enum FieldType {
     Computed,
 }
 
-/// Cardinality of an entity relation.
+/// Кардинальность связи сущности.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
@@ -37,7 +37,7 @@ pub enum RelationKind {
     ManyToMany,
 }
 
-/// Behaviour applied to related objects when the source object is deleted.
+/// Поведение, применяемое к связанным объектам при удалении исходного объекта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnDelete {
@@ -46,49 +46,49 @@ pub enum OnDelete {
     SetNull,
 }
 
-/// Descriptor of a business entity type (the metatype), stored in
-/// `entity_types`. Uniqueness is enforced per `(code, company_id)`.
+/// Дескриптор типа бизнес-сущности (метатип), хранится в
+/// `entity_types`. Уникальность обеспечивается по `(code, company_id)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityType {
     pub id: Uuid,
-    /// Unique machine-readable code within the company, e.g. `"invoice"`.
+    /// Уникальный машиночитаемый код в рамках компании, например `"invoice"`.
     pub code: String,
     pub name: String,
     pub kind: EntityKind,
-    /// Empty for platform-wide types, a company UUID for company-scoped ones.
+    /// Пусто для общеплатформенных типов, UUID компании для типов в рамках компании.
     pub company_id: String,
-    /// Version of the declarative schema (ensure-semantics, per section 9).
+    /// Версия декларативной схемы (ensure-семантика, согласно разделу 9).
     pub metadata_version: u32,
-    /// System-owned types cannot be deleted or renamed by users.
+    /// Системные типы не могут быть удалены или переименованы пользователями.
     pub is_system: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// Field declaration of an entity type, stored in `entity_fields`.
+/// Декларация поля типа сущности, хранится в `entity_fields`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityField {
     pub id: Uuid,
     pub entity_type: String,
-    /// Unique machine-readable code within the entity type, e.g. `"number"`.
+    /// Уникальный машиночитаемый код в рамках типа сущности, например `"number"`.
     pub code: String,
     pub label: String,
     pub data_type: FieldType,
     pub required: bool,
     pub is_unique: bool,
     pub is_indexed: bool,
-    /// Enum options or reference target, depending on `data_type`.
+    /// Варианты enum или целевая ссылка, в зависимости от `data_type`.
     pub options: serde_json::Value,
     pub is_system: bool,
     pub order: u32,
 }
 
-/// State of the entity type's state machine, stored in `entity_states`.
+/// Состояние конечного автомата типа сущности, хранится в `entity_states`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityState {
     pub id: Uuid,
     pub entity_type: String,
-    /// Unique code within the entity type, e.g. `"draft"`, `"posted"`.
+    /// Уникальный код в рамках типа сущности, например `"draft"`, `"posted"`.
     pub code: String,
     pub label: String,
     pub color: Option<String>,
@@ -96,8 +96,8 @@ pub struct EntityState {
     pub is_final: bool,
 }
 
-/// Allowed transition between two states of an entity type, stored in
-/// `entity_transitions`. Both endpoints must exist in `entity_states`.
+/// Разрешённый переход между двумя состояниями типа сущности, хранится в
+/// `entity_transitions`. Обе конечные точки должны существовать в `entity_states`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityTransition {
     pub id: Uuid,
@@ -108,35 +108,35 @@ pub struct EntityTransition {
     pub to_state: String,
 }
 
-/// Declarative UI form of an entity type, stored in `entity_forms`.
+/// Декларативная UI-форма типа сущности, хранится в `entity_forms`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityForm {
     pub id: Uuid,
     pub entity_type: String,
     pub code: String,
     pub label: String,
-    /// Layout metadata consumed by the SDUI renderer (Phase 10).
+    /// Метаданные разметки, потребляемые SDUI-рендерером (Фаза 10).
     pub layout: serde_json::Value,
 }
 
-/// Declarative action of an entity type, stored in `entity_actions`.
+/// Декларативное действие типа сущности, хранится в `entity_actions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityAction {
     pub id: Uuid,
     pub entity_type: String,
     pub code: String,
     pub label: String,
-    /// Handler name; the actual implementation arrives with the WASM layer.
+    /// Имя обработчика; фактическая реализация появится вместе со слоем WASM.
     pub handler: String,
 }
 
-/// Relation from an entity type to another, stored in `entity_relations`.
+/// Связь с другим типом сущности, хранится в `entity_relations`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityRelation {
     pub id: Uuid,
     pub entity_type: String,
     pub code: String,
-    /// `entity_types.code` of the referenced type.
+    /// `entity_types.code` ссылочного типа.
     pub target_type: String,
     pub kind: RelationKind,
     pub on_delete: OnDelete,

@@ -1,5 +1,5 @@
-//! SurrealDB-backed storage of entity metadata (the "Board" projection for the
-//! metatype model: entity_types, entity_fields, entity_states,
+//! Хранилище метаданных сущностей на базе SurrealDB (проекция «Доска» для
+//! метатиповой модели: entity_types, entity_fields, entity_states,
 //! entity_transitions, entity_forms, entity_actions, entity_relations).
 
 use core_application::ports::{EntitySchema, MetadataRepository};
@@ -23,9 +23,9 @@ const ENTITY_FORM_TABLE: &str = "entity_forms";
 const ENTITY_ACTION_TABLE: &str = "entity_actions";
 const ENTITY_RELATION_TABLE: &str = "entity_relations";
 
-/// Records the Board projection of the metatype model. Entity types are
-/// unique per `(code, company_id)`; all child resources are keyed by
-/// `(entity_type, code)` for idempotent ensure-semantics.
+/// Фиксирует проекцию «Доска» метатиповой модели. Типы сущностей
+/// уникальны по `(code, company_id)`; все дочерние ресурсы ключуются по
+/// `(entity_type, code)` для идемпотентной ensure-семантики.
 pub struct SurrealMetadataRepository {
     db: Surreal<Any>,
 }
@@ -35,7 +35,7 @@ impl SurrealMetadataRepository {
         Self { db }
     }
 
-    /// Creates the seven metadata tables and indexes idempotently.
+    /// Создаёт семь таблиц метаданных и индексы идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const STATEMENTS: &[&str] = &[
             "DEFINE TABLE IF NOT EXISTS entity_types SCHEMALESS",
@@ -105,8 +105,9 @@ fn decode_rows<T: serde::de::DeserializeOwned>(
         .map_err(|e| DomainError::Storage(format!("{kind} list decode: {e}")))
 }
 
-/// Upserts a child resource, reusing the existing record id so re-registration
-/// by code is idempotent and never creates duplicates.
+/// Делает upsert дочернего ресурса, переиспользуя существующий
+/// идентификатор записи, чтобы повторная регистрация по коду была
+/// идемпотентной и никогда не создавала дублей.
 async fn upsert_child(
     txn: &Transaction<Any>,
     table: &str,
@@ -158,8 +159,8 @@ async fn upsert_child(
     Ok(())
 }
 
-/// Validates that every transition endpoint exists among the submitted or
-/// already-persisted states of the entity type.
+/// Проверяет, что каждая конечная точка перехода существует среди
+/// переданных или уже сохранённых состояний типа сущности.
 async fn validate_transitions(
     txn: &Transaction<Any>,
     schema: &EntitySchema,
@@ -193,10 +194,10 @@ async fn validate_transitions(
     Ok(())
 }
 
-/// Mirrors the ensure-semantics contract: returns `Ok(false)` when the stored
-/// `metadata_version` is not older than the submitted one (no-op), `Ok(true)`
-/// after the schema was applied.
-///   `require_existing` — when true, the entity type must already exist.
+/// Реализует контракт ensure-семантики: возвращает `Ok(false)`, когда
+/// сохранённая `metadata_version` не старше переданной (no-op), и `Ok(true)`
+/// после применения схемы.
+///   `require_existing` — если равно true, тип сущности уже должен существовать.
 async fn apply_schema(
     txn: &Transaction<Any>,
     schema: &EntitySchema,

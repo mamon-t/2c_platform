@@ -2,23 +2,23 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Lifecycle state of a user account.
+/// Состояние жизненного цикла учётной записи пользователя.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserStatus {
-    /// Invitation sent, password change still pending.
+    /// Приглашение отправлено, смена пароля ещё ожидается.
     Invited,
     Active,
-    /// Manually disabled by an administrator.
+    /// Отключена вручную администратором.
     Disabled,
-    /// Locked out due to repeated failed logins or explicit action.
+    /// Заблокирована из-за повторных неудачных входов или явного действия.
     Locked,
-    /// Retired account kept for audit history (deletion of users with history
-    /// is forbidden by the spec).
+    /// Учётная запись выведена из эксплуатации и сохранена для истории аудита
+    /// (удаление пользователей с историей запрещено ТЗ).
     Archived,
 }
 
-/// Contact channel type, per the extended user model.
+/// Тип контактного канала, согласно расширенной модели пользователя.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContactChannelType {
@@ -27,39 +27,39 @@ pub enum ContactChannelType {
     Telegram,
 }
 
-/// Purposes a contact channel may serve.
+/// Назначения, которые может выполнять контактный канал.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContactPurpose {
-    /// Used as the primary login identifier.
+    /// Используется как основной идентификатор входа.
     Login,
-    /// Receives system notifications.
+    /// Получает системные уведомления.
     Notification,
-    /// Used for cryptographic signing / verification.
+    /// Используется для криптографической подписи / проверки.
     Signing,
 }
 
-/// Extended user account. Passwords are stored as Argon2id hashes.
+/// Расширенная учётная запись пользователя. Пароли хранятся как хеши Argon2id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
     pub login: String,
     pub password_hash: String,
     pub status: UserStatus,
-    /// Codes of roles assigned to this user.
+    /// Коды ролей, назначенных этому пользователю.
     pub role_ids: Vec<String>,
     pub failed_login_count: u32,
     pub locked_until: Option<DateTime<Utc>>,
     pub must_change_password: bool,
     pub locale: String,
     pub timezone: String,
-    /// References the `persons` record holding identity data.
+    /// Ссылается на запись `persons`, содержащую данные о личности.
     pub person_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// Identity data of a natural person, kept separately from the account.
+/// Данные о личности физического лица, хранятся отдельно от учётной записи.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Person {
     pub id: Uuid,
@@ -67,24 +67,24 @@ pub struct Person {
     pub last_name: String,
     pub first_name: String,
     pub middle_name: Option<String>,
-    /// Preferred display name, e.g. `"Иванов Иван Иванович"`.
+    /// Предпочитаемое отображаемое имя, например `"Иванов Иван Иванович"`.
     pub display_name: String,
 }
 
-/// A contact channel of a user, e.g. `ivan@example.com`.
+/// Контактный канал пользователя, например `ivan@example.com`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserContact {
     pub id: Uuid,
     pub user_id: Uuid,
     pub channel_type: ContactChannelType,
     pub value: String,
-    /// Only one contact per `channel_type` may be primary.
+    /// Только один контакт на канал `channel_type` может быть основным.
     pub is_primary: bool,
     pub is_verified: bool,
     pub purposes: Vec<ContactPurpose>,
 }
 
-/// Employment profile of a user within a specific company.
+/// Трудовой профиль пользователя в конкретной компании.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserCompanyProfile {
     pub id: Uuid,
@@ -99,14 +99,14 @@ pub struct UserCompanyProfile {
     pub valid_to: Option<NaiveDate>,
 }
 
-/// Cryptographic certificate attached to a user's profile for signing.
+/// Криптографический сертификат, прикреплённый к профилю пользователя для подписи.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserCertificate {
     pub id: Uuid,
     pub user_id: Uuid,
-    /// Provider code, e.g. `"cryptopro"` (Phase 16 integration).
+    /// Код провайдера, например `"cryptopro"` (интеграция Фазы 16).
     pub provider_code: String,
-    /// Certificate reference/id issued by the provider.
+    /// Ссылка/идентификатор сертификата, выданного провайдером.
     pub certificate_ref: String,
     pub subject: String,
     pub issuer: String,

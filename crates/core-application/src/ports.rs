@@ -13,15 +13,15 @@ use serde_json::Value;
 use std::future::Future;
 use uuid::Uuid;
 
-/// Append-only storage of events, the Pipe in the "Pipe and Board" concept.
-/// Implemented by `core-infrastructure` on top of the `events` collection.
+/// Хранилище событий с журналом только с добавлением — Труба в концепции «Трубы и Доски».
+/// Реализовано в `core-infrastructure` поверх коллекции `events`.
 pub trait EventStore: Send + Sync {
-    /// Persists events atomically, in order, keys-by-stream. Must be idempotent
-    /// per event ID so that a retried batch does not duplicate entries.
+    /// Добавляет события атомарно, по порядку, с ключами по потокам. Должен быть идемпотентным
+    /// для каждого ID события, чтобы повторная отправка пакета не создавала дублей.
     fn append(&self, events: &[Event])
         -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Loads the full history of a stream, ordered by `version`.
+    /// Загружает полную историю потока, упорядоченную по `version`.
     fn read_stream(
         &self,
         stream_type: StreamType,
@@ -29,65 +29,65 @@ pub trait EventStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Event>, DomainError>> + Send;
 }
 
-/// Storage of materialized objects, the Board. Enables OCC through `version`.
+/// Хранилище материализованных объектов — Доска. Поддерживает OCC (оптимистичную блокировку) через `version`.
 ///
-/// Write methods persist the board record, its new version snapshot and the
-/// supplied `events` atomically in a single SurrealDB transaction (the Pipe and
-/// the Board advance together, per the spec).
+/// Методы записи сохраняют запись Доски, снимок её новой версии и переданные
+/// `events` атомарно в единой транзакции SurrealDB (Труба и
+/// Доска продвигаются вместе, согласно ТЗ).
 pub trait ObjectRepository: Send + Sync {
-    /// Fetches an object together with its current version for optimistic
-    /// concurrency checks.
+    /// Получает объект вместе с его текущей версией для проверок оптимистичной
+    /// блокировки.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::NotFound` when the object does not exist.
+    /// Возвращает `DomainError::NotFound`, если объект не существует.
     fn get_with_version(
         &self,
         id: &AggregateId,
     ) -> impl Future<Output = Result<(Object, Version), DomainError>> + Send;
 
-    /// Fetches an object by id.
+    /// Получает объект по id.
     fn get(&self, id: &AggregateId) -> impl Future<Output = Result<Object, DomainError>> + Send;
 
-    /// Creates an object with `version == 1`, writes its initial snapshot and
-    /// appends the events in one transaction.
+    /// Создаёт объект с `version == 1`, записывает его начальный снимок и
+    /// добавляет события в одной транзакции.
     ///
-    /// When the object is a document without a `number`, an atomic document
-    /// number is assigned inside the same transaction.
+    /// Если объект является документом без `number`, в той же транзакции
+    /// присваивается атомарный номер документа.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::NotFound` when the object already exists.
+    /// Возвращает `DomainError::NotFound`, если объект уже существует.
     fn create(
         &self,
         obj: &Object,
         events: &[Event],
     ) -> impl Future<Output = Result<Object, DomainError>> + Send;
 
-    /// Updates an object applying OCC: the stored version must equal
-    /// `obj.version` (the caller's expected version), otherwise
-    /// `DomainError::VersionConflict` is returned. On success the object is
-    /// stored with `version + 1` and a new snapshot is written.
+    /// Обновляет объект с применением OCC: сохранённая версия должна совпадать
+    /// с `obj.version` (ожидаемой версией вызывающей стороны), иначе возвращается
+    /// `DomainError::VersionConflict`. При успехе объект сохраняется
+    /// с `version + 1` и записывается новый снимок.
     fn update(
         &self,
         obj: &Object,
         events: &[Event],
     ) -> impl Future<Output = Result<Object, DomainError>> + Send;
 
-    /// Physically deletes a draft without a change history (`version == 1`).
+    /// Физически удаляет черновик без истории изменений (`version == 1`).
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when the object has a history,
-    /// `DomainError::NotFound` when it does not exist.
+    /// Возвращает `DomainError::ValidationError`, если у объекта есть история,
+    /// `DomainError::NotFound`, если он не существует.
     fn delete(
         &self,
         id: &AggregateId,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Lists objects of an entity type within a company, newest first,
-    /// bounded by `limit`.
+    /// Перечисляет объекты типа сущности в компании, сначала самые новые,
+    /// ограниченные по `limit`.
     fn list(
         &self,
         entity_type: &str,
@@ -95,15 +95,15 @@ pub trait ObjectRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Object>, DomainError>> + Send;
 
-    /// Lists the version history of an object, oldest first.
+    /// Перечисляет историю версий объекта, сначала самые старые.
     fn get_snapshots(
         &self,
         object_id: &AggregateId,
     ) -> impl Future<Output = Result<Vec<ObjectSnapshot>, DomainError>> + Send;
 
-    /// Restores the object to the data/state of `version`, producing a new
-    /// object version (`current + 1`) with a fresh snapshot; the history is
-    /// never overwritten.
+    /// Восстанавливает объект к данным/состоянию `version`, создавая новую
+    /// версию объекта (`current + 1`) со свежим снимком; история
+    /// никогда не перезаписывается.
     fn restore_snapshot(
         &self,
         object_id: &AggregateId,
@@ -111,8 +111,8 @@ pub trait ObjectRepository: Send + Sync {
         events: &[Event],
     ) -> impl Future<Output = Result<Object, DomainError>> + Send;
 
-    /// Atomically advances the per-(entity type, company) counter and returns
-    /// the formatted document number `{entity_type}-{YYYY}-{sequential:04}`.
+    /// Атомарно наращивает счётчик для пары (тип сущности, компания) и возвращает
+    /// форматированный номер документа `{entity_type}-{YYYY}-{sequential:04}`.
     fn next_document_number(
         &self,
         entity_type: &str,
@@ -120,10 +120,10 @@ pub trait ObjectRepository: Send + Sync {
     ) -> impl Future<Output = Result<String, DomainError>> + Send;
 }
 
-/// Host capable of executing a WASM module action and returning its result.
+/// Хост, способный выполнить действие WASM-модуля и вернуть результат.
 pub trait WasmHost: Send + Sync {
-    /// Executes `action` of a module. The host enforces capabilities and
-    /// resource limits declared by the module manifest.
+    /// Выполняет `action` модуля. Хост обеспечивает соблюдение capability и
+    /// лимитов ресурсов, объявленных в манифесте модуля.
     fn execute_module(
         &self,
         module_code: &str,
@@ -132,39 +132,39 @@ pub trait WasmHost: Send + Sync {
     ) -> impl Future<Output = Result<Value, DomainError>> + Send;
 }
 
-/// Storage of materialized companies.
+/// Хранилище материализованных компаний.
 ///
-/// Write methods persist both the board record and the supplied `events`
-/// atomically in a single SurrealDB transaction (the Pipe and the Board
-/// advance together, per the spec).
+/// Методы записи сохраняют и запись Доски, и переданные `events`
+/// атомарно в единой транзакции SurrealDB (Труба и Доска
+/// продвигаются вместе, согласно ТЗ).
 pub trait CompanyRepository: Send + Sync {
-    /// Creates a company and appends its events in one transaction.
+    /// Создаёт компанию и добавляет её события в одной транзакции.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when `code` is already taken.
+    /// Возвращает `DomainError::ValidationError`, если `code` уже занят.
     fn create(
         &self,
         company: &Company,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Fetches a company by id.
+    /// Получает компанию по id.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::NotFound` when the company does not exist.
+    /// Возвращает `DomainError::NotFound`, если компания не существует.
     fn get(&self, id: &Uuid) -> impl Future<Output = Result<Company, DomainError>> + Send;
 
-    /// Lists all companies ordered by `code`.
+    /// Перечисляет все компании, упорядоченные по `code`.
     fn list(&self) -> impl Future<Output = Result<Vec<Company>, DomainError>> + Send;
 
-    /// Updates a company and appends its events in one transaction.
+    /// Обновляет компанию и добавляет её события в одной транзакции.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when `code` collides with
-    /// another company, `DomainError::NotFound` when the company is missing.
+    /// Возвращает `DomainError::ValidationError`, если `code` совпадает
+    /// с другой компанией, `DomainError::NotFound`, если компания отсутствует.
     fn update(
         &self,
         company: &Company,
@@ -172,15 +172,15 @@ pub trait CompanyRepository: Send + Sync {
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 }
 
-/// Storage of materialized users, persons, contacts, profiles and
-/// certificates. Write methods persist the board record and the supplied
-/// `events` atomically in a single SurrealDB transaction.
+/// Хранилище материализованных пользователей, персон, контактов, профилей и
+/// сертификатов. Методы записи сохраняют запись Доски и переданные
+/// `events` атомарно в единой транзакции SurrealDB.
 pub trait UserRepository: Send + Sync {
-    /// Creates a user with its person and appends events in one transaction.
+    /// Создаёт пользователя вместе с персоной и добавляет события в одной транзакции.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when `login` is already taken.
+    /// Возвращает `DomainError::ValidationError`, если `login` уже занят.
     fn create(
         &self,
         user: &User,
@@ -188,89 +188,89 @@ pub trait UserRepository: Send + Sync {
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Fetches a user by id.
+    /// Получает пользователя по id.
     fn get(&self, id: &Uuid) -> impl Future<Output = Result<User, DomainError>> + Send;
 
-    /// Fetches a user by login; used for authentication lookups and duplicate
-    /// login checks.
+    /// Получает пользователя по логину; используется для аутентификации и проверок
+    /// дубликатов логинов.
     fn get_by_login(&self, login: &str) -> impl Future<Output = Result<User, DomainError>> + Send;
 
-    /// Lists all users ordered by `login`.
+    /// Перечисляет всех пользователей, упорядоченных по `login`.
     fn list(&self) -> impl Future<Output = Result<Vec<User>, DomainError>> + Send;
 
-    /// Updates a user and appends events in one transaction.
+    /// Обновляет пользователя и добавляет события в одной транзакции.
     fn update(
         &self,
         user: &User,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Fetches the identity record of a user.
+    /// Получает запись персоны пользователя.
     fn get_person(&self, user_id: &Uuid) -> impl Future<Output = Result<Person, DomainError>> + Send;
 
-    /// Adds a contact channel and appends its event in one transaction.
+    /// Добавляет канал связи и соответствующее ему событие в одной транзакции.
     fn add_contact(
         &self,
         contact: &UserContact,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Lists contact channels of a user.
+    /// Перечисляет каналы связи пользователя.
     fn list_contacts(
         &self,
         user_id: &Uuid,
     ) -> impl Future<Output = Result<Vec<UserContact>, DomainError>> + Send;
 
-    /// Adds an employment profile and appends its event in one transaction.
+    /// Добавляет профиль трудоустройства и соответствующее ему событие в одной транзакции.
     fn add_profile(
         &self,
         profile: &UserCompanyProfile,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Lists employment profiles of a user.
+    /// Перечисляет профили трудоустройства пользователя.
     fn list_profiles(
         &self,
         user_id: &Uuid,
     ) -> impl Future<Output = Result<Vec<UserCompanyProfile>, DomainError>> + Send;
 
-    /// Adds a certificate and appends its event in one transaction.
+    /// Добавляет сертификат и соответствующее ему событие в одной транзакции.
     fn add_certificate(
         &self,
         certificate: &UserCertificate,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Lists certificates of a user.
+    /// Перечисляет сертификаты пользователя.
     fn list_certificates(
         &self,
         user_id: &Uuid,
     ) -> impl Future<Output = Result<Vec<UserCertificate>, DomainError>> + Send;
 }
 
-/// Storage of materialized roles.
+/// Хранилище материализованных ролей.
 pub trait RoleRepository: Send + Sync {
-    /// Creates a role and appends its event in one transaction.
+    /// Создаёт роль и добавляет её событие в одной транзакции.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when `code` is already taken.
+    /// Возвращает `DomainError::ValidationError`, если `code` уже занят.
     fn create(
         &self,
         role: &Role,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Fetches a role by id.
+    /// Получает роль по id.
     fn get(&self, id: &Uuid) -> impl Future<Output = Result<Role, DomainError>> + Send;
 
-    /// Lists all roles ordered by `code`.
+    /// Перечисляет все роли, упорядоченные по `code`.
     fn list(&self) -> impl Future<Output = Result<Vec<Role>, DomainError>> + Send;
 }
 
-/// Full declarative snapshot of an entity type: the type itself plus its
-/// fields, states, transitions, forms, actions and relations. Assembled by
-/// `MetadataRepository::get_schema`, submitted by create/update flows.
+/// Полный декларативный снимок типа сущности: сам тип, а также его
+/// поля, состояния, переходы, формы, действия и связи. Собирается методом
+/// `MetadataRepository::get_schema`, используется в потоках создания/обновления.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntitySchema {
     pub entity_type: EntityType,
@@ -282,57 +282,57 @@ pub struct EntitySchema {
     pub relations: Vec<EntityRelation>,
 }
 
-/// Storage of entity metadata (the metatype model), per section 7 of the spec.
+/// Хранилище метаданных сущностей (метатип-модель), согласно разделу 7 ТЗ.
 ///
-/// Entity types are keyed by `code` within a company (`company_id == ""` for
-/// platform-wide types). Write methods follow ensure-semantics (section 9):
-/// `create_entity_type` creates missing resources and updates existing ones by
-/// code only when the supplied `metadata_version` is newer; resources with a
-/// not-older version are left untouched (user amendments are preserved).
+/// Типы сущностей ключуются по `code` в рамках компании (`company_id == ""` для
+/// общеплатформенных типов). Методы записи следуют ensure-семантике (раздел 9):
+/// `create_entity_type` создаёт отсутствующие ресурсы и обновляет существующие по
+/// коду только когда переданный `metadata_version` новее; ресурсы с
+/// не более новой версией остаются без изменений (пользовательские правки сохраняются).
 pub trait MetadataRepository: Send + Sync {
-    /// Registers an entity type and its resources with ensure-semantics,
-    /// appending the supplied events in the same transaction.
+    /// Регистрирует тип сущности и его ресурсы с ensure-семантикой,
+    /// добавляя переданные события в той же транзакции.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::ValidationError` when a transition references
-    /// a missing state, `DomainError::Storage` on persistence failure.
+    /// Возвращает `DomainError::ValidationError`, когда переход ссылается
+    /// на отсутствующее состояние, `DomainError::Storage` при сбое сохранения.
     fn create_entity_type(
         &self,
         schema: &EntitySchema,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Fetches an entity type by id.
+    /// Получает тип сущности по id.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns `DomainError::NotFound` when the type does not exist.
+    /// Возвращает `DomainError::NotFound`, если тип не существует.
     fn get_entity_type(
         &self,
         id: &Uuid,
     ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
 
-    /// Fetches an entity type by code within a company.
+    /// Получает тип сущности по коду в рамках компании.
     fn get_entity_type_by_code(
         &self,
         company_id: &str,
         code: &str,
     ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
 
-    /// Lists all entity types ordered by `code`.
+    /// Перечисляет все типы сущностей, упорядоченные по `code`.
     fn list_entity_types(&self) -> impl Future<Output = Result<Vec<EntityType>, DomainError>> + Send;
 
-    /// Re-registers an entity type and its resources, appending the supplied
-    /// events in the same transaction. Existing resources are updated by code;
-    /// user amendments carry their own versions and are preserved.
+    /// Повторно регистрирует тип сущности и его ресурсы, добавляя переданные
+    /// события в той же транзакции. Существующие ресурсы обновляются по коду;
+    /// пользовательские правки имеют собственные версии и сохраняются.
     fn update_entity_type(
         &self,
         schema: &EntitySchema,
         events: &[Event],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
 
-    /// Assembles the full schema snapshot of an entity type of a company.
+    /// Собирает полный снимок схемы типа сущности компании.
     fn get_schema(
         &self,
         company_id: &str,

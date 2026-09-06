@@ -1,4 +1,4 @@
-//! SurrealDB-backed Event Store - the "Pipe" of the Pipe & Board architecture.
+//! Хранилище событий на базе SurrealDB — «Труба» архитектуры «Труба и Доска».
 
 use core_application::ports::EventStore;
 use core_domain::error::DomainError;
@@ -10,11 +10,12 @@ use surrealdb::Surreal;
 use crate::connector::connect_db;
 use crate::events::append_events;
 
-/// Append-only journal of events stored in the SurrealDB `events` collection.
+/// Журнал событий только с добавлением, хранящийся в коллекции
+/// SurrealDB `events`.
 ///
-/// The record id of a stored event equals the event id itself, which makes a
-/// retried append idempotent: `upsert` overwrites the same record instead of
-/// creating a duplicate.
+/// Идентификатор записи сохранённого события равен самому идентификатору
+/// события, что делает повторный append идемпотентным: `upsert` перезаписывает
+/// ту же запись вместо создания дубля.
 pub struct SurrealEventStore {
     db: Surreal<Any>,
 }
@@ -24,8 +25,8 @@ impl SurrealEventStore {
         Self { db }
     }
 
-    /// Connects over WebSocket, authenticates as root and selects the target
-    /// namespace/database.
+    /// Подключается по WebSocket, выполняет аутентификацию пользователя root
+    /// и выбирает целевые пространство имён и базу данных.
     pub async fn connect(
         host: &str,
         user: &str,
@@ -37,7 +38,7 @@ impl SurrealEventStore {
         Ok(Self { db })
     }
 
-    /// Creates the `events` indexes required by the spec, idempotently.
+    /// Создаёт индексы коллекции `events`, требуемые спецификацией, идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const INDEXES: &[&str] = &[
             "DEFINE INDEX IF NOT EXISTS events_stream ON events FIELDS stream_type, stream_id, version",

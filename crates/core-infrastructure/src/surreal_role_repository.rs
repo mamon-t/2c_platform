@@ -1,4 +1,4 @@
-//! SurrealDB-backed storage of roles (the "Board" projection).
+//! Хранилище ролей на базе SurrealDB (проекция «Доска»).
 
 use core_application::ports::RoleRepository;
 use core_domain::error::DomainError;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::events::{assign_versions, with_transaction, write_events};
 
-/// Materialized `roles` collection with a unique `code` index.
+/// Материализованная коллекция `roles` с уникальным индексом по `code`.
 pub struct SurrealRoleRepository {
     db: Surreal<Any>,
 }
@@ -21,7 +21,7 @@ impl SurrealRoleRepository {
         Self { db }
     }
 
-    /// Creates the `roles` table and indexes idempotently.
+    /// Создаёт таблицу `roles` и индексы идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const STATEMENTS: &[&str] = &[
             "DEFINE TABLE IF NOT EXISTS roles SCHEMALESS",

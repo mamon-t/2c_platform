@@ -1,9 +1,9 @@
-//! SurrealDB-backed storage of universal business objects (the "Board"
-//! projection for the `objects` collection), their version history
-//! (`object_snapshots`) and atomic document numbering (`document_numbers`).
+//! Хранилище универсальных бизнес-объектов на базе SurrealDB (проекция
+//! «Доска» для коллекции `objects`), их истории версий
+//! (`object_snapshots`) и атомарной нумерации документов (`document_numbers`).
 //!
-//! Field validation against the metatype model is performed on the command
-//! layer via `Object::validate`; this repository only persists.
+//! Проверка полей по метатиповой модели выполняется на командном слое через
+//! `Object::validate`; этот репозиторий только сохраняет.
 
 use core_application::ports::ObjectRepository;
 use core_domain::error::DomainError;
@@ -28,7 +28,7 @@ const OBJECT_FIELDS: &str = "record::id(id) AS id, entity_type, kind, company_id
 const SNAPSHOT_FIELDS: &str = "record::id(id) AS id, object_id, version, data, state, \
     changed_by, changed_at";
 
-/// Records the Board projection of universal objects.
+/// Фиксирует проекцию «Доска» универсальных объектов.
 pub struct SurrealObjectRepository {
     db: Surreal<Any>,
 }
@@ -38,8 +38,8 @@ impl SurrealObjectRepository {
         Self { db }
     }
 
-    /// Creates the objects, snapshots and counter tables and indexes
-    /// idempotently.
+    /// Создаёт таблицы объектов, снимков и счётчиков вместе с индексами
+    /// идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const STATEMENTS: &[&str] = &[
             "DEFINE TABLE IF NOT EXISTS objects SCHEMALESS",
@@ -86,7 +86,7 @@ fn decode_rows<T: serde::de::DeserializeOwned>(
         .map_err(|e| DomainError::Storage(format!("{kind} list decode: {e}")))
 }
 
-/// Builds the snapshot record for the object's upcoming `version`.
+/// Формирует запись снимка для предстоящей `version` объекта.
 async fn write_snapshot(
     txn: &Transaction<Any>,
     obj: &Object,
@@ -110,9 +110,10 @@ async fn write_snapshot(
     Ok(())
 }
 
-/// Atomically advances the per-(entity type, company) counter inside the open
-/// transaction. A rolled-back operation leaves a gap in numbering, which is
-/// acceptable for v0.1 (numbers stay unique, not necessarily contiguous).
+/// Атомарно увеличивает счётчик в разрезе (тип сущности, компания) внутри
+/// открытой транзакции. Откаченная операция оставляет пропуск в нумерации,
+/// что допустимо для v0.1 (номера остаются уникальными, не обязательно
+/// идущими подряд).
 async fn assign_document_number(
     txn: &Transaction<Any>,
     entity_type: &str,
@@ -401,7 +402,7 @@ impl ObjectRepository for SurrealObjectRepository {
     }
 }
 
-/// Loads an object by id inside the open transaction.
+/// Загружает объект по идентификатору внутри открытой транзакции.
 async fn load_object(txn: &Transaction<Any>, id: &Uuid) -> Result<Object, DomainError> {
     let mut response = txn
         .query(format!(
@@ -516,7 +517,7 @@ mod tests {
         assert_eq!(fetched.data, json!({"sum": 1000}));
 
         obj.data = json!({"sum": 2500});
-        obj.version = 1; // expected version
+        obj.version = 1; // ожидаемая версия
         obj.updated_at = Utc::now();
         let updated = repo
             .update(&obj, &[system_event(&obj.id.to_string(), "object.updated")])
@@ -543,14 +544,14 @@ mod tests {
             .await
             .unwrap();
 
-        // First update succeeds.
+        // Первое обновление проходит успешно.
         obj.data = json!({"sum": 200});
         obj.version = 1;
         repo.update(&obj, &[system_event(&obj.id.to_string(), "object.updated")])
             .await
             .unwrap();
 
-        // Stale writer still expects version 1.
+        // Устаревший писатель всё ещё ожидает версию 1.
         let mut stale = obj.clone();
         stale.data = json!({"sum": 999});
         stale.version = 1;
@@ -596,7 +597,7 @@ mod tests {
         assert!(created_b.number.is_some());
         assert_ne!(created_a.number, created_b.number);
 
-        // Numbers are unique per company.
+        // Номера уникальны в рамках компании.
         let obj_c = sample_object("c2", json!({}));
         let created_c = repo
             .create(&obj_c, &[system_event(&obj_c.id.to_string(), "object.created")])
@@ -643,7 +644,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Update creates a history → delete is forbidden.
+        // Обновление создаёт историю → удаление запрещено.
         obj.data = json!({"sum": 1});
         obj.version = 1;
         repo.update(&obj, &[system_event(&obj.id.to_string(), "object.updated")])
@@ -655,7 +656,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DomainError::ValidationError(_)));
 
-        // A pristine draft (version 1) can be physically deleted.
+        // Чистовой черновик (версия 1) можно удалить физически.
         let draft = sample_object("c1", json!({}));
         let created = repo
             .create(&draft, &[system_event(&draft.id.to_string(), "object.created")])

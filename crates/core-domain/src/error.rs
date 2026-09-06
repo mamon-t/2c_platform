@@ -1,7 +1,7 @@
 use crate::types::Version;
 
-/// Domain-level errors mapped to `RpcMessage::Error` codes by the transport
-/// layer. Messages are user-facing and therefore written in Russian.
+/// Ошибки доменного уровня, сопоставляемые транспортным слоем с кодами
+/// `RpcMessage::Error`. Сообщения предназначены для пользователя и потому написаны на русском.
 #[derive(Debug, thiserror::Error)]
 pub enum DomainError {
     #[error("Объект не найден: {0}")]
@@ -21,7 +21,7 @@ pub enum DomainError {
 }
 
 impl DomainError {
-    /// Machine-readable code consistent with `RpcMessage::Error.code`.
+    /// Машиночитаемый код, согласованный с `RpcMessage::Error.code`.
     pub fn code(&self) -> &'static str {
         match self {
             DomainError::NotFound(_) => "NOT_FOUND_ERROR",

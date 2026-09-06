@@ -9,11 +9,11 @@ type CommandHandler = Arc<
     dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync,
 >;
 
-/// Dynamic registry of async commands, per Appendix 1 of the spec.
+/// Динамический реестр асинхронных команд, согласно Приложению №1 ТЗ.
 ///
-/// A read-heavy workload (many `execute`, few `register`) makes
-/// `tokio::sync::RwLock` the right choice over `std::sync::Mutex`: readers run
-/// concurrently without blocking the executor.
+/// Нагрузка с преобладанием чтения (много `execute`, мало `register`) делает
+/// `tokio::sync::RwLock` правильным выбором вместо `std::sync::Mutex`: читатели
+/// выполняются конкурентно, не блокируя исполнитель.
 #[derive(Default)]
 pub struct CommandRegistry {
     handlers: RwLock<HashMap<String, CommandHandler>>,
@@ -26,7 +26,7 @@ impl CommandRegistry {
         }
     }
 
-    /// Registers (or replaces) an async command handler.
+    /// Регистрирует (или заменяет) асинхронный обработчик команды.
     pub async fn register<F, Fut>(&self, name: &str, handler: F)
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
@@ -39,21 +39,21 @@ impl CommandRegistry {
         );
     }
 
-    /// Removes one command handler.
+    /// Удаляет один обработчик команды.
     pub async fn unregister(&self, name: &str) {
         let mut map = self.handlers.write().await;
         map.remove(name);
     }
 
-    /// Removes every command whose name starts with `prefix`, used when a
-    /// module is uninstalled or disabled.
+    /// Удаляет все команды, чьё имя начинается с `prefix`; используется при
+    /// удалении или отключении модуля.
     pub async fn remove_by_prefix(&self, prefix: &str) {
         let mut map = self.handlers.write().await;
         map.retain(|name, _| !name.starts_with(prefix));
     }
 
-    /// Executes a command and returns its result. Command IDs are unique
-    /// because handlers are registered under prefixed names, e.g.
+    /// Выполняет команду и возвращает её результат. Идентификаторы команд уникальны,
+    /// поскольку обработчики регистрируются под именами с префиксами, например
     /// `plugin.warehouse.post_document`.
     pub async fn execute(&self, name: &str, params: Value) -> Result<Value, String> {
         let map = self.handlers.read().await;
@@ -63,7 +63,7 @@ impl CommandRegistry {
         }
     }
 
-    /// Lists all registered command names.
+    /// Перечисляет имена всех зарегистрированных команд.
     pub async fn list(&self) -> Vec<String> {
         let map = self.handlers.read().await;
         map.keys().cloned().collect()

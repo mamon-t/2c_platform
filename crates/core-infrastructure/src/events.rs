@@ -1,4 +1,4 @@
-//! Shared helpers for persisting domain events in SurrealDB.
+//! Общие хелперы для сохранения доменных событий в SurrealDB.
 
 use core_domain::error::DomainError;
 use core_domain::event::{Event, StreamType};
@@ -8,9 +8,9 @@ use surrealdb::engine::any::Any;
 use surrealdb::method::Transaction;
 use surrealdb::Surreal;
 
-/// Encodes an event into its stored record. The record id equals the event id
-/// (`events/<uuid>`), which makes a retried append idempotent: `upsert`
-/// overwrites the same record instead of creating a duplicate.
+/// Кодирует событие в его сохраняемую запись. Идентификатор записи равен
+/// идентификатору события (`events/<uuid>`), что делает повторный append
+/// идемпотентным: `upsert` перезаписывает ту же запись вместо создания дубля.
 pub fn event_record(event: &Event) -> Result<Value, DomainError> {
     let mut value = serde_json::to_value(event)
         .map_err(|e| DomainError::Storage(format!("event encode: {e}")))?;
@@ -21,8 +21,8 @@ pub fn event_record(event: &Event) -> Result<Value, DomainError> {
     Ok(value)
 }
 
-/// Appends events on the client connection, outside of a transaction.
-/// Bounded by a per-event `event_record` conversion.
+/// Добавляет события на клиентском подключении вне транзакции.
+/// Ограничивается конвертацией по одному событию через `event_record`.
 pub async fn append_events(db: &Surreal<Any>, events: &[Event]) -> Result<(), DomainError> {
     for event in events {
         let value = event_record(event)?;
@@ -36,9 +36,9 @@ pub async fn append_events(db: &Surreal<Any>, events: &[Event]) -> Result<(), Do
     Ok(())
 }
 
-/// Assigns per-stream `version` numbers to the events, counting already
-/// persisted events inside the transaction. Events of the same stream receive
-/// consecutive versions in the order they appear in `events`.
+/// Присваивает событиям номера `version` по потокам, подсчитывая уже
+/// сохранённые события внутри транзакции. События одного потока получают
+/// последовательные версии в порядке их появления в `events`.
 pub async fn assign_versions(
     txn: &Transaction<Any>,
     events: &mut [Event],
@@ -86,7 +86,7 @@ async fn stream_base_version(
         .unwrap_or(0))
 }
 
-/// Persists events inside the open transaction `txn`.
+/// Сохраняет события внутри открытой транзакции `txn`.
 pub async fn write_events(txn: &Transaction<Any>, events: &[Event]) -> Result<(), DomainError> {
     for event in events {
         let value = event_record(event)?;
@@ -100,11 +100,11 @@ pub async fn write_events(txn: &Transaction<Any>, events: &[Event]) -> Result<()
     Ok(())
 }
 
-/// Runs `f` inside a SurrealDB transaction, committing on success and
-/// cancelling (rollback) on error so the session never stays in a dangling
-/// transaction state. The closure owns the `Transaction` (it borrows it
-/// internally) and must return it back alongside its outcome, which is
-/// propagated as the function's result.
+/// Выполняет `f` внутри транзакции SurrealDB: фиксирует при успехе и
+/// отменяет (откат) при ошибке, чтобы сессия никогда не оставалась в
+/// подвешенном состоянии транзакции. Замыкание владеет `Transaction`
+/// (использует её внутри по заимствованию) и должно вернуть её вместе
+/// с результатом, который становится результатом функции.
 pub async fn with_transaction<O, F, Fut>(db: &Surreal<Any>, f: F) -> Result<O, DomainError>
 where
     F: FnOnce(Transaction<Any>) -> Fut,

@@ -1,5 +1,5 @@
-//! SurrealDB-backed storage of users, persons, contacts, profiles and
-//! certificates (the "Board" projection).
+//! Хранилище пользователей, персон, контактов, профилей и сертификатов
+//! на базе SurrealDB (проекция «Доска»).
 
 use core_application::ports::UserRepository;
 use core_domain::error::DomainError;
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::events::{assign_versions, with_transaction, write_events};
 
-/// Materialized storage of the extended user model.
+/// Материализованное хранилище расширенной модели пользователя.
 pub struct SurrealUserRepository {
     db: Surreal<Any>,
 }
@@ -24,7 +24,7 @@ impl SurrealUserRepository {
         Self { db }
     }
 
-    /// Creates tables and indexes of the extended user model idempotently.
+    /// Создаёт таблицы и индексы расширенной модели пользователя идемпотентно.
     pub async fn ensure_schema(&self) -> Result<(), DomainError> {
         const STATEMENTS: &[&str] = &[
             "DEFINE TABLE IF NOT EXISTS users SCHEMALESS",

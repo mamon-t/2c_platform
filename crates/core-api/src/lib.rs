@@ -1,1 +1,1 @@
-//! Transport layer: RpcMessage envelope, REST and WebSocket endpoints on top of Axum.
+//! Транспортный слой: конверт RpcMessage, REST- и WebSocket-эндпоинты поверх Axum.

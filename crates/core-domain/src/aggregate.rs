@@ -2,24 +2,24 @@ use crate::error::DomainError;
 use crate::event::Event;
 use crate::types::Version;
 
-/// Contract for event-sourced aggregates.
+/// Контракт для агрегатов на основе событий.
 ///
-/// Implementations must store a domain state, the version of the last
-/// committed event and a buffer of uncommitted events. `apply` validates the
-/// sequence number of the event against OCC rules before dispatching it.
+/// Реализации должны хранить состояние домена, версию последнего
+/// зафиксированного события и буфер незафиксированных событий. `apply` проверяет
+/// порядковый номер события по правилам OCC перед его диспетчеризацией.
 pub trait AggregateRoot: Send + Sync {
-    /// Version of the last committed event.
+    /// Версия последнего зафиксированного события.
     fn version(&self) -> Version;
 
-    /// Events produced but not yet committed to the Event Store.
+    /// События, созданные, но ещё не зафиксированные в хранилище событий.
     fn pending_events(&self) -> &[Event];
 
-    /// Validates the event's sequence number and dispatches it to `handle`.
+    /// Проверяет порядковый номер события и передаёт его в `handle`.
     ///
-    /// # Errors
+    /// # Ошибки
     ///
-    /// Returns [`DomainError::VersionConflict`] when the event version does not
-    /// match the expected next version (`version + pending.len() + 1`).
+    /// Возвращает [`DomainError::VersionConflict`], когда версия события не
+    /// совпадает с ожидаемой следующей версией (`version + pending.len() + 1`).
     fn apply(&mut self, event: Event) -> Result<(), DomainError> {
         let expected = self.version() + self.pending_events().len() as Version + 1;
         if event.version != expected {
@@ -31,12 +31,12 @@ pub trait AggregateRoot: Send + Sync {
         self.handle(event)
     }
 
-    /// Domain-specific reaction to an applied event. On success the event must
-    /// be appended to the pending buffer.
+    /// Специфическая реакция домена на применённое событие. При успехе событие должно
+    /// быть добавлено в буфер ожидающих событий.
     fn handle(&mut self, event: Event) -> Result<(), DomainError>;
 
-    /// Clears the pending buffer after a successful commit and advances the
-    /// committed version by the number of cleared events.
+    /// Очищает буфер ожидающих событий после успешной фиксации и увеличивает
+    /// зафиксированную версию на число очищенных событий.
     fn mark_committed(&mut self);
 }
 

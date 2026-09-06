@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use tokio::sync::RwLock;
 
-/// Idempotent code-based storage shared by the permission, object schema,
-/// print template and script registries. Module-level ensure-semantics: a code
-/// is inserted at most once.
+/// Идемпотентное хранилище кодов, общее для реестров прав доступа, схем объектов,
+/// печатных форм и скриптов. Ensure-семантика на уровне модуля: код
+/// вставляется не более одного раза.
 #[derive(Default)]
 pub struct CodeRegistry {
     codes: RwLock<HashSet<String>>,
@@ -16,13 +16,13 @@ impl CodeRegistry {
         }
     }
 
-    /// Registers a code if absent. Returns `true` when newly inserted.
+    /// Регистрирует код, если он отсутствует. Возвращает `true` при новой вставке.
     pub async fn ensure(&self, code: &str) -> bool {
         let mut set = self.codes.write().await;
         set.insert(code.to_string())
     }
 
-    /// Removes a code. Returns `true` when it was present.
+    /// Удаляет код. Возвращает `true`, если он присутствовал.
     pub async fn remove(&self, code: &str) -> bool {
         let mut set = self.codes.write().await;
         set.remove(code)
@@ -33,7 +33,7 @@ impl CodeRegistry {
         set.contains(code)
     }
 
-    /// Returns codes in sorted order for stable iteration and display.
+    /// Возвращает коды в отсортированном порядке для стабильной итерации и отображения.
     pub async fn list(&self) -> Vec<String> {
         let set = self.codes.read().await;
         let mut items: Vec<String> = set.iter().cloned().collect();
