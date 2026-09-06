@@ -18,7 +18,7 @@ pub use metadata::{
     EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
     EntityType, FieldType, OnDelete, RelationKind,
 };
-pub use object::{Object, ObjectKind};
+pub use object::{Object, ObjectKind, ObjectSnapshot};
 pub use role::Role;
 pub use types::{AggregateId, Version};
 pub use user::{

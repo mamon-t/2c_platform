@@ -4,7 +4,7 @@ use core_domain::event::{Event, StreamType};
 use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityRelation, EntityState, EntityTransition, EntityType,
 };
-use core_domain::object::Object;
+use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
 use core_domain::types::{AggregateId, Version};
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
@@ -30,6 +30,10 @@ pub trait EventStore: Send + Sync {
 }
 
 /// Storage of materialized objects, the Board. Enables OCC through `version`.
+///
+/// Write methods persist the board record, its new version snapshot and the
+/// supplied `events` atomically in a single SurrealDB transaction (the Pipe and
+/// the Board advance together, per the spec).
 pub trait ObjectRepository: Send + Sync {
     /// Fetches an object together with its current version for optimistic
     /// concurrency checks.
@@ -41,6 +45,79 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         id: &AggregateId,
     ) -> impl Future<Output = Result<(Object, Version), DomainError>> + Send;
+
+    /// Fetches an object by id.
+    fn get(&self, id: &AggregateId) -> impl Future<Output = Result<Object, DomainError>> + Send;
+
+    /// Creates an object with `version == 1`, writes its initial snapshot and
+    /// appends the events in one transaction.
+    ///
+    /// When the object is a document without a `number`, an atomic document
+    /// number is assigned inside the same transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::NotFound` when the object already exists.
+    fn create(
+        &self,
+        obj: &Object,
+        events: &[Event],
+    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+
+    /// Updates an object applying OCC: the stored version must equal
+    /// `obj.version` (the caller's expected version), otherwise
+    /// `DomainError::VersionConflict` is returned. On success the object is
+    /// stored with `version + 1` and a new snapshot is written.
+    fn update(
+        &self,
+        obj: &Object,
+        events: &[Event],
+    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+
+    /// Physically deletes a draft without a change history (`version == 1`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::ValidationError` when the object has a history,
+    /// `DomainError::NotFound` when it does not exist.
+    fn delete(
+        &self,
+        id: &AggregateId,
+        events: &[Event],
+    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+
+    /// Lists objects of an entity type within a company, newest first,
+    /// bounded by `limit`.
+    fn list(
+        &self,
+        entity_type: &str,
+        company_id: &str,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<Object>, DomainError>> + Send;
+
+    /// Lists the version history of an object, oldest first.
+    fn get_snapshots(
+        &self,
+        object_id: &AggregateId,
+    ) -> impl Future<Output = Result<Vec<ObjectSnapshot>, DomainError>> + Send;
+
+    /// Restores the object to the data/state of `version`, producing a new
+    /// object version (`current + 1`) with a fresh snapshot; the history is
+    /// never overwritten.
+    fn restore_snapshot(
+        &self,
+        object_id: &AggregateId,
+        version: Version,
+        events: &[Event],
+    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+
+    /// Atomically advances the per-(entity type, company) counter and returns
+    /// the formatted document number `{entity_type}-{YYYY}-{sequential:04}`.
+    fn next_document_number(
+        &self,
+        entity_type: &str,
+        company_id: &str,
+    ) -> impl Future<Output = Result<String, DomainError>> + Send;
 }
 
 /// Host capable of executing a WASM module action and returning its result.

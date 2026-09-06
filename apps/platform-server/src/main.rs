@@ -14,7 +14,7 @@ use core_application::CommandRegistry;
 use core_domain::event::{Event, StreamType};
 use core_infrastructure::{
     connect_db, SurrealCompanyRepository, SurrealEventStore, SurrealMetadataRepository,
-    SurrealRoleRepository, SurrealUserRepository,
+    SurrealObjectRepository, SurrealRoleRepository, SurrealUserRepository,
 };
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -52,16 +52,22 @@ async fn main() -> Result<()> {
         .ensure_schema()
         .await
         .context("не удалось создать схему roles")?;
-    let metadata = Arc::new(SurrealMetadataRepository::new(db));
+    let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
     metadata
         .ensure_schema()
         .await
         .context("не удалось создать схему метаданных")?;
+    let objects = Arc::new(SurrealObjectRepository::new(db));
+    objects
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему объектов")?;
 
     let registry = Arc::new(CommandRegistry::new());
     commands::register_phase2_commands(&registry, companies, users, roles).await;
-    commands::register_phase3_commands(&registry, metadata).await;
-    info!("Команды Фаз 2-3 зарегистрированы: {}", registry.list().await.join(", "));
+    commands::register_phase3_commands(&registry, metadata.clone()).await;
+    commands::register_phase4_commands(&registry, objects, metadata).await;
+    info!("Команды Фаз 2-4 зарегистрированы: {}", registry.list().await.join(", "));
 
     let state = AppState {
         store,

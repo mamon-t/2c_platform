@@ -6,7 +6,8 @@
 
 use chrono::{NaiveDate, Utc};
 use core_application::ports::{
-    CompanyRepository, EntitySchema, MetadataRepository, RoleRepository, UserRepository,
+    CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository, RoleRepository,
+    UserRepository,
 };
 use core_application::CommandRegistry;
 use core_domain::company::Company;
@@ -15,12 +16,14 @@ use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
     EntityType, FieldType, OnDelete, RelationKind,
 };
+use core_domain::object::{Object, ObjectKind};
 use core_domain::role::Role;
 use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
 };
 use core_infrastructure::{
-    SurrealCompanyRepository, SurrealMetadataRepository, SurrealRoleRepository, SurrealUserRepository,
+    SurrealCompanyRepository, SurrealMetadataRepository, SurrealObjectRepository,
+    SurrealRoleRepository, SurrealUserRepository,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -638,6 +641,262 @@ async fn register_metadata_commands(
         .await;
 }
 
+/// Registers the Phase 4 command set: universal objects, CRUD with OCC,
+/// version snapshots and document numbering. Commands validate data against
+/// the metatype model (`Object::validate`) and append object events to the
+/// Pipe together with the Board write.
+async fn register_object_commands(
+    registry: &CommandRegistry,
+    objects: Arc<SurrealObjectRepository>,
+    metadata: Arc<SurrealMetadataRepository>,
+) {
+    registry
+        .register("object.create", {
+            let objects = objects.clone();
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                let metadata = metadata.clone();
+                async move {
+                    let entity_type = require(&params, "entity_type")?;
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let schema = metadata
+                        .get_schema(&company_id, &entity_type)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let kind = parse_enum::<ObjectKind>(&params, "kind")?;
+                    let state = match optional(&params, "state")? {
+                        Some(state) => state,
+                        None => schema
+                            .states
+                            .iter()
+                            .find(|s| s.is_initial)
+                            .map(|s| s.code.clone())
+                            .unwrap_or_else(|| "draft".to_string()),
+                    };
+                    let now = Utc::now();
+                    let object = Object {
+                        id: Uuid::new_v4(),
+                        entity_type: entity_type.clone(),
+                        kind,
+                        company_id: company_id.clone(),
+                        state,
+                        data: params.get("data").cloned().unwrap_or(json!({})),
+                        computed: json!({}),
+                        number: None,
+                        date: parse_optional_date(&params, "date")?,
+                        parent_id: parse_optional_uuid(&params, "parent_id")?,
+                        version: 1,
+                        created_by: "system".to_string(),
+                        updated_by: "system".to_string(),
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    object
+                        .validate(&schema.fields, &schema.states)
+                        .map_err(|e| e.to_string())?;
+                    let event = system_event(
+                        StreamType::Object,
+                        object.id.to_string(),
+                        "object.created",
+                        &company_id,
+                        encode(&object)?,
+                    );
+                    let stored = objects
+                        .create(&object, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&stored)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.get", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let id = parse_uuid(&params, "id")?;
+                    let object = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    encode(&object)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.list", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let entity_type = require(&params, "entity_type")?;
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let limit = optional_u32(&params, "limit")?.unwrap_or(100) as usize;
+                    let list = objects
+                        .list(&entity_type, &company_id, limit)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.update", {
+            let objects = objects.clone();
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                let metadata = metadata.clone();
+                async move {
+                    let id = parse_uuid(&params, "id")?;
+                    let expected_version = parse_u64(&params, "expected_version")?;
+                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let schema = metadata
+                        .get_schema(&existing.company_id, &existing.entity_type)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let updated = Object {
+                        id,
+                        entity_type: existing.entity_type.clone(),
+                        kind: existing.kind,
+                        company_id: existing.company_id.clone(),
+                        state: optional(&params, "state")?.unwrap_or(existing.state.clone()),
+                        data: match params.get("data") {
+                            None => existing.data.clone(),
+                            Some(data) => data.clone(),
+                        },
+                        computed: existing.computed.clone(),
+                        number: existing.number.clone(),
+                        date: match parse_optional_date(&params, "date")? {
+                            Some(date) => Some(date),
+                            None if params.get("date").is_some() => existing.date,
+                            None => existing.date,
+                        },
+                        parent_id: match parse_optional_uuid(&params, "parent_id")? {
+                            Some(parent_id) => Some(parent_id),
+                            None if params.get("parent_id").is_some() => existing.parent_id,
+                            None => existing.parent_id,
+                        },
+                        version: expected_version,
+                        created_by: existing.created_by.clone(),
+                        updated_by: "system".to_string(),
+                        created_at: existing.created_at,
+                        updated_at: Utc::now(),
+                    };
+                    updated
+                        .validate(&schema.fields, &schema.states)
+                        .map_err(|e| e.to_string())?;
+                    let event = system_event(
+                        StreamType::Object,
+                        id.to_string(),
+                        "object.updated",
+                        &existing.company_id,
+                        encode(&updated)?,
+                    );
+                    let stored = objects
+                        .update(&updated, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&stored)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.delete", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let id = parse_uuid(&params, "id")?;
+                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let event = system_event(
+                        StreamType::Object,
+                        id.to_string(),
+                        "object.deleted",
+                        &existing.company_id,
+                        json!({}),
+                    );
+                    objects
+                        .delete(&id, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(json!({ "deleted": true, "id": id.to_string() }))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.snapshot.list", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let id = parse_uuid(&params, "object_id")?;
+                    let snapshots = objects
+                        .get_snapshots(&id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let rows: Result<Vec<Value>, String> = snapshots.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("object.snapshot.restore", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let id = parse_uuid(&params, "object_id")?;
+                    let version = parse_u64(&params, "version")?;
+                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let event = system_event(
+                        StreamType::Object,
+                        id.to_string(),
+                        "object.restored",
+                        &existing.company_id,
+                        json!({ "version": version }),
+                    );
+                    let stored = objects
+                        .restore_snapshot(&id, version, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&stored)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("document.number.next", {
+            let objects = objects.clone();
+            move |params: Value| {
+                let objects = objects.clone();
+                async move {
+                    let entity_type = require(&params, "entity_type")?;
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let number = objects
+                        .next_document_number(&entity_type, &company_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(json!({ "number": number }))
+                }
+            }
+        })
+        .await;
+}
+
 fn metadata_event(schema: &EntitySchema, event_type: &str) -> Event {
     Event {
         id: Uuid::new_v4(),
@@ -814,6 +1073,13 @@ fn parse_u32(value: &Value, key: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
 }
 
+fn parse_u64(value: &Value, key: &str) -> Result<u64, String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
+}
+
 fn optional_u32(value: &Value, key: &str) -> Result<Option<u32>, String> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -832,6 +1098,15 @@ pub async fn register_phase3_commands(
     register_metadata_commands(registry, metadata).await;
 }
 
+/// Registers the Phase 4 command set into the shared registry.
+pub async fn register_phase4_commands(
+    registry: &CommandRegistry,
+    objects: Arc<SurrealObjectRepository>,
+    metadata: Arc<SurrealMetadataRepository>,
+) {
+    register_object_commands(registry, objects, metadata).await;
+}
+
 /// Registers the Phase 2 command set into the shared registry.
 pub async fn register_phase2_commands(
     registry: &CommandRegistry,
@@ -847,6 +1122,13 @@ pub async fn register_phase2_commands(
 fn parse_uuid(value: &Value, key: &str) -> Result<Uuid, String> {
     let raw = require(value, key)?;
     Uuid::parse_str(&raw).map_err(|e| format!("некорректный UUID '{key}': {e}"))
+}
+
+fn parse_optional_uuid(value: &Value, key: &str) -> Result<Option<Uuid>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => parse_uuid(value, key).map(Some),
+    }
 }
 
 fn parse_optional_enum<T: serde::de::DeserializeOwned>(

@@ -103,11 +103,12 @@ pub async fn write_events(txn: &Transaction<Any>, events: &[Event]) -> Result<()
 /// Runs `f` inside a SurrealDB transaction, committing on success and
 /// cancelling (rollback) on error so the session never stays in a dangling
 /// transaction state. The closure owns the `Transaction` (it borrows it
-/// internally) and must return it back alongside its outcome.
-pub async fn with_transaction<F, Fut>(db: &Surreal<Any>, f: F) -> Result<(), DomainError>
+/// internally) and must return it back alongside its outcome, which is
+/// propagated as the function's result.
+pub async fn with_transaction<O, F, Fut>(db: &Surreal<Any>, f: F) -> Result<O, DomainError>
 where
     F: FnOnce(Transaction<Any>) -> Fut,
-    Fut: Future<Output = (Transaction<Any>, Result<(), DomainError>)>,
+    Fut: Future<Output = (Transaction<Any>, Result<O, DomainError>)>,
 {
     let txn = db
         .clone()
@@ -116,11 +117,11 @@ where
         .map_err(|e| DomainError::Storage(format!("begin: {e}")))?;
     let (txn, outcome) = f(txn).await;
     match outcome {
-        Ok(()) => {
+        Ok(value) => {
             txn.commit()
                 .await
                 .map_err(|e| DomainError::Storage(format!("commit: {e}")))?;
-            Ok(())
+            Ok(value)
         }
         Err(e) => {
             let _ = txn.cancel().await;
