@@ -184,7 +184,7 @@
 4. **user_company_profiles (Рабочие профили).** Хранит привязку к компаниям. Поля: company_id, employee_number, position, department, is_primary, is_active, valid_from, valid_to.
 5. **user_certificates (Сертификаты).** Хранит связь с сертификатами КриптоПро. Поля: provider_code, certificate_ref, subject, issuer, fingerprint, is_active.
 
-В событиях и аудите сохраняется снимок исполнителя (actor_user_id, actor_login, actor_full_name, ip_address), чтобы история оставалась читаемой даже при смене фамилии или увольнении. Поля position/company_id предусмотрены моделью актора в качестве эволюции (см. «Снимок исполнителя»).
+В событиях и аудите сохраняется снимок исполнителя (actor_login, actor_full_name, actor_position, actor_company_id), чтобы история оставалась читаемой даже при смене фамилии или увольнении.
 
 ---
 
@@ -217,7 +217,7 @@
 4. `event_type` (тип события: object.created, document.posted, company.updated, и т.д.)
 5. `version` (порядковый номер в потоке)
 6. `payload` (данные события)
-7. `metadata` (actor_user_id, actor_login, actor_full_name, ip_address)
+7. `metadata` (actor_user_id, actor_login, actor_full_name, actor_position, actor_company_id, ip_address)
 8. `company_id`
 9. `correlation_id` (сквозной ID бизнес-операции)
 10. `causation_id` (ID события-причины)
@@ -260,20 +260,20 @@
 
 ### Снимок исполнителя (Actor Snapshot)
 
-В каждом событии сохраняется снимок исполнителя на момент события. В текущей
-реализации (Фаза 2) — это `EventMetadata` в `crates/core-domain/src/event.rs`:
+В каждом событии сохраняется снимок исполнителя на момент события:
 ```rust
-pub struct EventMetadata {
-    pub actor_user_id: String,
-    pub actor_login: String,
-    pub actor_full_name: String,
-    pub ip_address: Option<String>,
+pub struct ActorSnapshot {
+    pub user_id: Option<Uuid>,      // None для системного актора
+    pub login: String,
+    pub full_name: String,
+    pub position: Option<String>,
+    pub company_id: Option<Uuid>,
 }
 ```
 
 Это гарантирует, что история остаётся читаемой даже при смене фамилии, должности или увольнении пользователя.
 
-**Системный актор:** Для операций, выполняемых системой (например, декларативная регистрация метаданных модулей), используется `EventMetadata::system()` с `login: "system"`, `full_name: "Система"`.
+**Системный актор:** Для операций, выполняемых системой (например, декларативная регистрация метаданных модулей), используется `ActorSnapshot::system()` с `login: "system"`, `full_name: "Система"`.
 
 ### Оптимистичная блокировка (OCC)
 
