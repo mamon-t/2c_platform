@@ -180,9 +180,10 @@
 | `crates/core-infrastructure/src/surreal_company_repository.rs` | CompanyRepository: CRUD, транзакционная запись «Доска+Труба», ensure_schema (UNIQUE-код) |
 | `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
 | `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
-| `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction |
+| `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 4): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
+| `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction (обобщённая по типу результата) |
 | `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
-| `apps/platform-server/src/commands.rs` | Команды Фаз 2-3: company.*, user.* (+contact/profile), role.*, metadata.*; системный актор |
+| `apps/platform-server/src/commands.rs` | Команды Фаз 2-4: company.*, user.* (+contact/profile), role.*, metadata.*, object.* (+snapshot), document.number.*; системный актор |
 | `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
 | `doc/TZ_v3.0.md` | Техническое задание, архитектурные принципы |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
@@ -192,6 +193,7 @@
 | `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
 | `crates/core-domain/src/role.rs` | Модель Role (Фаза 2) |
 | `crates/core-domain/src/metadata.rs` | Метаданные (Фаза 3): EntityType, EntityField, EntityState, EntityTransition, EntityForm, EntityAction, EntityRelation, FieldType, RelationKind, OnDelete; EntityKind = ObjectKind |
+| `crates/core-domain/src/object.rs` | Объекты (Фаза 4): Object, ObjectSnapshot, ObjectKind, `validate(fields, states)`, `is_document()` |
 | `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
 | `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
 | `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, MetadataRepository + EntitySchema |
@@ -249,7 +251,7 @@ curl -u root:root -H "Content-Type: application/json" \
 - [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
 - [x] Фаза 2: Компании, расширенная модель пользователей, роли
 - [x] Фаза 3: Метаданные (entity_types, fields, states, transitions, forms, relations, actions)
-- [ ] Фаза 4: Объекты, CRUD, оптимистичная блокировка
+- [x] Фаза 4: Объекты, CRUD, оптимистичная блокировка
 - [x] Фаза 5 (частично): События, версии, аудит, снимки исполнителя — Event Store готов
 - [ ] Фаза 6: Права доступа (permission_policies)
 - [x] Фаза 7: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
