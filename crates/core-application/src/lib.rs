@@ -6,6 +6,7 @@ pub mod registry;
 pub use app_registry::AppRegistry;
 pub use command_registry::CommandRegistry;
 pub use ports::{
-    CompanyRepository, EventStore, ObjectRepository, RoleRepository, UserRepository, WasmHost,
+    CompanyRepository, EntitySchema, EventStore, MetadataRepository, ObjectRepository,
+    RoleRepository, UserRepository, WasmHost,
 };
 pub use registry::CodeRegistry;

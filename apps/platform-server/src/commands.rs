@@ -5,16 +5,22 @@
 //! audit snapshot with the system actor until authentication exists.
 
 use chrono::{NaiveDate, Utc};
-use core_application::ports::{CompanyRepository, RoleRepository, UserRepository};
+use core_application::ports::{
+    CompanyRepository, EntitySchema, MetadataRepository, RoleRepository, UserRepository,
+};
 use core_application::CommandRegistry;
 use core_domain::company::Company;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_domain::metadata::{
+    EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
+    EntityType, FieldType, OnDelete, RelationKind,
+};
 use core_domain::role::Role;
 use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
 };
 use core_infrastructure::{
-    SurrealCompanyRepository, SurrealRoleRepository, SurrealUserRepository,
+    SurrealCompanyRepository, SurrealMetadataRepository, SurrealRoleRepository, SurrealUserRepository,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -514,6 +520,316 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
             }
         })
         .await;
+}
+
+async fn register_metadata_commands(
+    registry: &CommandRegistry,
+    metadata: Arc<SurrealMetadataRepository>,
+) {
+    registry
+        .register("metadata.entity_type.create", {
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let schema = parse_schema(&params)?;
+                    let event = metadata_event(&schema, "metadata.entity_type.created");
+                    metadata
+                        .create_entity_type(&schema, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&schema)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("metadata.entity_type.get", {
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let id = parse_uuid(&params, "id")?;
+                    let entity_type = metadata
+                        .get_entity_type(&id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&entity_type)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("metadata.entity_type.get_by_code", {
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let code = require(&params, "code")?;
+                    let entity_type = metadata
+                        .get_entity_type_by_code(&company_id, &code)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&entity_type)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("metadata.entity_type.list", {
+            let metadata = metadata.clone();
+            move |_params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let list = metadata.list_entity_types().await.map_err(|e| e.to_string())?;
+                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("metadata.entity_type.update", {
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let mut schema = parse_schema(&params)?;
+                    let company_id = schema.entity_type.company_id.clone();
+                    let existing = metadata
+                        .get_entity_type_by_code(&company_id, &schema.entity_type.code)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    schema.entity_type.id = existing.id;
+                    schema.entity_type.created_at = existing.created_at;
+                    schema.entity_type.updated_at = Utc::now();
+                    let event = metadata_event(&schema, "metadata.entity_type.updated");
+                    metadata
+                        .update_entity_type(&schema, &[event])
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&schema)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("metadata.schema.get", {
+            let metadata = metadata.clone();
+            move |params: Value| {
+                let metadata = metadata.clone();
+                async move {
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let code = require(&params, "code")?;
+                    let schema = metadata
+                        .get_schema(&company_id, &code)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&schema)
+                }
+            }
+        })
+        .await;
+}
+
+fn metadata_event(schema: &EntitySchema, event_type: &str) -> Event {
+    Event {
+        id: Uuid::new_v4(),
+        stream_type: StreamType::Metadata,
+        stream_id: schema.entity_type.id.to_string(),
+        event_type: event_type.to_string(),
+        version: 0,
+        payload: encode(schema).unwrap_or_else(|_| json!({})),
+        metadata: ActorSnapshot::system(),
+        company_id: schema.entity_type.company_id.clone(),
+        correlation_id: Uuid::new_v4().to_string(),
+        causation_id: None,
+        occurred_at: Utc::now(),
+    }
+}
+
+fn parse_schema(value: &Value) -> Result<EntitySchema, String> {
+    let entity_type_value = value
+        .get("entity_type")
+        .ok_or_else(|| "отсутствует обязательный параметр 'entity_type'".to_string())?;
+    let id = match entity_type_value.get("id") {
+        Some(Value::String(raw)) => Uuid::parse_str(raw)
+            .map_err(|e| format!("некорректный UUID 'entity_type.id': {e}"))?,
+        _ => Uuid::new_v4(),
+    };
+    let code = require(entity_type_value, "code")?;
+    let name = require(entity_type_value, "name")?;
+    let kind = parse_enum::<EntityKind>(entity_type_value, "kind")?;
+    let company_id = optional(entity_type_value, "company_id")?.unwrap_or_default();
+    let metadata_version = parse_u32(entity_type_value, "metadata_version")?;
+    let is_system = optional_bool(entity_type_value, "is_system")?.unwrap_or(false);
+    let now = Utc::now();
+    let entity_type = EntityType {
+        id,
+        code: code.clone(),
+        name,
+        kind,
+        company_id,
+        metadata_version,
+        is_system,
+        created_at: now,
+        updated_at: now,
+    };
+    Ok(EntitySchema {
+        fields: parse_fields(value, &code)?,
+        states: parse_states(value, &code)?,
+        transitions: parse_transitions(value, &code)?,
+        forms: parse_forms(value, &code)?,
+        actions: parse_actions(value, &code)?,
+        relations: parse_relations(value, &code)?,
+        entity_type,
+    })
+}
+
+fn parse_fields(value: &Value, entity_type_code: &str) -> Result<Vec<EntityField>, String> {
+    let items = items(value, "fields")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityField {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                label: require(item, "label")?,
+                data_type: parse_enum::<FieldType>(item, "data_type")?,
+                required: optional_bool(item, "required")?.unwrap_or(false),
+                is_unique: optional_bool(item, "is_unique")?.unwrap_or(false),
+                is_indexed: optional_bool(item, "is_indexed")?.unwrap_or(false),
+                options: item.get("options").cloned().unwrap_or(json!({})),
+                is_system: optional_bool(item, "is_system")?.unwrap_or(false),
+                order: optional_u32(item, "order")?.unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn parse_states(value: &Value, entity_type_code: &str) -> Result<Vec<EntityState>, String> {
+    let items = items(value, "states")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityState {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                label: require(item, "label")?,
+                color: optional(item, "color")?,
+                is_initial: optional_bool(item, "is_initial")?.unwrap_or(false),
+                is_final: optional_bool(item, "is_final")?.unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn parse_transitions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityTransition>, String> {
+    let items = items(value, "transitions")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityTransition {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                label: require(item, "label")?,
+                from_state: require(item, "from_state")?,
+                to_state: require(item, "to_state")?,
+            })
+        })
+        .collect()
+}
+
+fn parse_forms(value: &Value, entity_type_code: &str) -> Result<Vec<EntityForm>, String> {
+    let items = items(value, "forms")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityForm {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                label: require(item, "label")?,
+                layout: item.get("layout").cloned().unwrap_or(json!({})),
+            })
+        })
+        .collect()
+}
+
+fn parse_actions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityAction>, String> {
+    let items = items(value, "actions")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityAction {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                label: require(item, "label")?,
+                handler: require(item, "handler")?,
+            })
+        })
+        .collect()
+}
+
+fn parse_relations(value: &Value, entity_type_code: &str) -> Result<Vec<EntityRelation>, String> {
+    let items = items(value, "relations")?;
+    items
+        .iter()
+        .map(|item| {
+            Ok(EntityRelation {
+                id: Uuid::new_v4(),
+                entity_type: entity_type_code.to_string(),
+                code: require(item, "code")?,
+                target_type: require(item, "target_type")?,
+                kind: parse_enum::<RelationKind>(item, "kind")?,
+                on_delete: parse_enum::<OnDelete>(item, "on_delete")?,
+            })
+        })
+        .collect()
+}
+
+fn items(value: &Value, key: &str) -> Result<Vec<Value>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => Ok(items.clone()),
+        Some(_) => Err(format!("параметр '{key}' должен быть массивом")),
+    }
+}
+
+fn parse_u32(value: &Value, key: &str) -> Result<u32, String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
+}
+
+fn optional_u32(value: &Value, key: &str) -> Result<Option<u32>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(|v| Some(v as u32))
+            .ok_or_else(|| format!("параметр '{key}' должен быть целым числом")),
+    }
+}
+
+/// Registers the Phase 3 command set into the shared registry.
+pub async fn register_phase3_commands(
+    registry: &CommandRegistry,
+    metadata: Arc<SurrealMetadataRepository>,
+) {
+    register_metadata_commands(registry, metadata).await;
 }
 
 /// Registers the Phase 2 command set into the shared registry.

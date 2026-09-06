@@ -2,6 +2,7 @@ use core_domain::error::DomainError;
 use std::sync::Arc;
 
 use crate::command_registry::CommandRegistry;
+use crate::ports::EntitySchema;
 use crate::registry::CodeRegistry;
 
 /// Groups the five registries of a module and encapsulates ensure-semantics,
@@ -45,6 +46,18 @@ impl AppRegistry {
         self.object_schemas.remove(module_code).await;
         self.print_templates.remove(module_code).await;
         self.scripts.remove(module_code).await;
+        Ok(())
+    }
+
+    /// Declares the entity types shipped by a module in the object schema
+    /// registry, following ensure-semantics. API for the Phase 8 module
+    /// preloader: the manifest blocks are applied on the host side, and this
+    /// marks every `entity_type.code` present so later lookups do not touch
+    /// the database. It is idempotent like `register_module`.
+    pub async fn preload_metadata_to_registry(&self, schemas: &[EntitySchema]) -> Result<(), DomainError> {
+        for schema in schemas {
+            self.object_schemas.ensure(&schema.entity_type.code).await;
+        }
         Ok(())
     }
 }
@@ -93,5 +106,47 @@ mod tests {
         assert!(!registry.object_schemas.contains("stock").await);
         assert!(!registry.print_templates.contains("stock").await);
         assert!(!registry.scripts.contains("stock").await);
+    }
+
+    #[tokio::test]
+    async fn preload_metadata_is_idempotent() {
+        use crate::ports::EntitySchema;
+        use core_domain::metadata::{EntityKind, EntityType};
+
+        let registry = AppRegistry::new();
+        let schema = EntitySchema {
+            entity_type: EntityType {
+                id: uuid::Uuid::new_v4(),
+                code: "invoice".to_string(),
+                name: "Счёт".to_string(),
+                kind: EntityKind::Document,
+                company_id: String::new(),
+                metadata_version: 1,
+                is_system: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            fields: vec![],
+            states: vec![],
+            transitions: vec![],
+            forms: vec![],
+            actions: vec![],
+            relations: vec![],
+        };
+
+        registry
+            .preload_metadata_to_registry(std::slice::from_ref(&schema))
+            .await
+            .unwrap();
+        registry
+            .preload_metadata_to_registry(std::slice::from_ref(&schema))
+            .await
+            .unwrap();
+
+        assert!(registry.object_schemas.contains("invoice").await);
+        assert_eq!(
+            registry.object_schemas.list().await,
+            vec!["invoice".to_string()]
+        );
     }
 }

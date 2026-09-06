@@ -1,10 +1,14 @@
 use core_domain::company::Company;
 use core_domain::error::DomainError;
 use core_domain::event::{Event, StreamType};
+use core_domain::metadata::{
+    EntityAction, EntityField, EntityForm, EntityRelation, EntityState, EntityTransition, EntityType,
+};
 use core_domain::object::Object;
 use core_domain::role::Role;
 use core_domain::types::{AggregateId, Version};
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
 use uuid::Uuid;
@@ -185,4 +189,76 @@ pub trait RoleRepository: Send + Sync {
 
     /// Lists all roles ordered by `code`.
     fn list(&self) -> impl Future<Output = Result<Vec<Role>, DomainError>> + Send;
+}
+
+/// Full declarative snapshot of an entity type: the type itself plus its
+/// fields, states, transitions, forms, actions and relations. Assembled by
+/// `MetadataRepository::get_schema`, submitted by create/update flows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySchema {
+    pub entity_type: EntityType,
+    pub fields: Vec<EntityField>,
+    pub states: Vec<EntityState>,
+    pub transitions: Vec<EntityTransition>,
+    pub forms: Vec<EntityForm>,
+    pub actions: Vec<EntityAction>,
+    pub relations: Vec<EntityRelation>,
+}
+
+/// Storage of entity metadata (the metatype model), per section 7 of the spec.
+///
+/// Entity types are keyed by `code` within a company (`company_id == ""` for
+/// platform-wide types). Write methods follow ensure-semantics (section 9):
+/// `create_entity_type` creates missing resources and updates existing ones by
+/// code only when the supplied `metadata_version` is newer; resources with a
+/// not-older version are left untouched (user amendments are preserved).
+pub trait MetadataRepository: Send + Sync {
+    /// Registers an entity type and its resources with ensure-semantics,
+    /// appending the supplied events in the same transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::ValidationError` when a transition references
+    /// a missing state, `DomainError::Storage` on persistence failure.
+    fn create_entity_type(
+        &self,
+        schema: &EntitySchema,
+        events: &[Event],
+    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+
+    /// Fetches an entity type by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::NotFound` when the type does not exist.
+    fn get_entity_type(
+        &self,
+        id: &Uuid,
+    ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
+
+    /// Fetches an entity type by code within a company.
+    fn get_entity_type_by_code(
+        &self,
+        company_id: &str,
+        code: &str,
+    ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
+
+    /// Lists all entity types ordered by `code`.
+    fn list_entity_types(&self) -> impl Future<Output = Result<Vec<EntityType>, DomainError>> + Send;
+
+    /// Re-registers an entity type and its resources, appending the supplied
+    /// events in the same transaction. Existing resources are updated by code;
+    /// user amendments carry their own versions and are preserved.
+    fn update_entity_type(
+        &self,
+        schema: &EntitySchema,
+        events: &[Event],
+    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+
+    /// Assembles the full schema snapshot of an entity type of a company.
+    fn get_schema(
+        &self,
+        company_id: &str,
+        entity_type: &str,
+    ) -> impl Future<Output = Result<EntitySchema, DomainError>> + Send;
 }

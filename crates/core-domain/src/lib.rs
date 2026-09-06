@@ -3,6 +3,7 @@ pub mod command;
 pub mod company;
 pub mod error;
 pub mod event;
+pub mod metadata;
 pub mod object;
 pub mod role;
 pub mod types;
@@ -13,6 +14,10 @@ pub use command::Command;
 pub use company::Company;
 pub use error::DomainError;
 pub use event::{ActorSnapshot, Event, StreamType};
+pub use metadata::{
+    EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
+    EntityType, FieldType, OnDelete, RelationKind,
+};
 pub use object::{Object, ObjectKind};
 pub use role::Role;
 pub use types::{AggregateId, Version};

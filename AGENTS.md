@@ -182,21 +182,22 @@
 | `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
 | `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction |
 | `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
-| `apps/platform-server/src/commands.rs` | Команды Фазы 2 (12): company.*, user.* (+contact/profile), role.*; системный актор |
+| `apps/platform-server/src/commands.rs` | Команды Фаз 2-3: company.*, user.* (+contact/profile), role.*, metadata.*; системный актор |
 | `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
 | `doc/TZ_v3.0.md` | Техническое задание, архитектурные принципы |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
-| `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, command, object, aggregate, error) |
-| `crates/core-domain/src/event.rs` | StreamType (9 видов: object…module), Event, EventMetadata + `system()` |
+| `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, metadata, object, aggregate, error, …) |
+| `crates/core-domain/src/event.rs` | StreamType (10 видов: object…module, metadata), Event, ActorSnapshot + `system()` |
 | `crates/core-domain/src/company.rs` | Модель Company (Фаза 2) |
 | `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
 | `crates/core-domain/src/role.rs` | Модель Role (Фаза 2) |
+| `crates/core-domain/src/metadata.rs` | Метаданные (Фаза 3): EntityType, EntityField, EntityState, EntityTransition, EntityForm, EntityAction, EntityRelation, FieldType, RelationKind, OnDelete; EntityKind = ObjectKind |
 | `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
 | `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
-| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository |
+| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, MetadataRepository + EntitySchema |
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (Приложение №1) + `remove_by_prefix` |
 | `crates/core-application/src/registry.rs` | CodeRegistry — идемпотентный ensure по кодам (4 регистра) |
-| `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module |
+| `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module/preload_metadata_to_registry |
 
 ## 13. Учётные данные и окружение
 
@@ -247,7 +248,7 @@ curl -u root:root -H "Content-Type: application/json" \
 
 - [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
 - [x] Фаза 2: Компании, расширенная модель пользователей, роли
-- [ ] Фаза 3: Метаданные (entity_types, fields, states)
+- [x] Фаза 3: Метаданные (entity_types, fields, states, transitions, forms, relations, actions)
 - [ ] Фаза 4: Объекты, CRUD, оптимистичная блокировка
 - [x] Фаза 5 (частично): События, версии, аудит, снимки исполнителя — Event Store готов
 - [ ] Фаза 6: Права доступа (permission_policies)
