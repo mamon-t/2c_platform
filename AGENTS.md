@@ -180,12 +180,13 @@
 | `crates/core-infrastructure/src/surreal_event_store.rs` | SurrealEventStore: connect, ensure_schema (4 индекса), идемпотентный append, read_stream |
 | `crates/core-infrastructure/src/surreal_company_repository.rs` | CompanyRepository: CRUD, транзакционная запись «Доска+Труба», ensure_schema (UNIQUE-код) |
 | `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
-| `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
+| `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: create/get/get_by_code/list/get_policies_for_user, транзакции, ensure_schema (UNIQUE `(company_id, code)`, миграция индекса в Фазе 5) |
+| `crates/core-infrastructure/src/surreal_permission_policy_repository.rs` | PermissionPolicyRepository (Фаза 5): upsert = ensure по `code`, get_by_code/get_by_codes; UNIQUE `code` |
 | `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 6 по ТЗ v3.1): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
 | `crates/core-infrastructure/src/surreal_audit_repository.rs` | AuditRepository (Фаза 4 по ТЗ v3.1): audit_log + 5 индексов, append-only log через with_transaction, query с билдером биндов (ORDER BY timestamp DESC, LIMIT); 8 интеграционных тестов |
 | `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction (обобщённая по типу результата) |
 | `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
-| `apps/platform-server/src/commands.rs` | Команды: company.*, user.* (+contact/profile), role.*, metadata.*, object.* (+snapshot), document.number.*; системный актор |
+| `apps/platform-server/src/commands.rs` | Команды: company.*, user.* (+contact/profile), role.* (в т.ч. role.seed), metadata.*, object.* (+snapshot), document.number.*, audit.*, system.migrate_permissions; системный актор |
 | `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
 | `doc/TZ_v3.1.md` | Техническое задание v3.1, архитектурные принципы (аудит, RBAC, CommandExecutionPipeline) |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
@@ -193,13 +194,17 @@
 | `crates/core-domain/src/event.rs` | StreamType (10 видов: object…module, metadata), Event, ActorSnapshot + `system()` |
 | `crates/core-domain/src/company.rs` | Модель Company (Фаза 2) |
 | `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
-| `crates/core-domain/src/role.rs` | Модель Role (Фаза 2) |
+| `crates/core-domain/src/role.rs` | Модель Role (Фазы 2/5, поля `permission_policy_codes`, `is_system`) |
+| `crates/core-domain/src/permission.rs` | Модель PermissionPolicy (Фаза 5): scope_type, entity_type, actions, record_access, deny, priority; PermissionScopeType, RecordAccessLevel (Прил. №7 ТЗ v3.1) |
+| `crates/core-domain/src/audit.rs` | Модель аудита (Фаза 4 по ТЗ v3.1): AuditEntry, AuditTarget, AuditResult, AuditFilter |
 | `crates/core-domain/src/metadata.rs` | Метаданные (Фаза 3): EntityType, EntityField, EntityState, EntityTransition, EntityForm, EntityAction, EntityRelation, FieldType, RelationKind, OnDelete; EntityKind = ObjectKind |
 | `crates/core-domain/src/object.rs` | Объекты (Фаза 6 по ТЗ v3.1): Object, ObjectSnapshot, ObjectKind, `validate(fields, states)`, `is_document()` |
 | `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
 | `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
-| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, MetadataRepository + EntitySchema |
-| `crates/core-application/src/command_registry.rs` | CommandRegistry (Приложение №1) + `remove_by_prefix` |
+| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, PermissionPolicyRepository, AuditRepository, MetadataRepository + EntitySchema |
+| `crates/core-application/src/command_registry.rs` | CommandRegistry (Приложение №1) + multicast `remove_by_prefix` + `CommandExecutionPipeline` (аудит + проверка прав) |
+| `crates/core-application/src/permission_manager.rs` | PermissionManager (Фаза 5): детерминированная проверка прав по политикам и ролям, deny-by-default, deny overrides allow |
+| `crates/core-application/src/seed.rs` | seed_system_roles_and_policies (Фаза 5): идемпотентный сид 4 ролей + 4 политик, аудит `role.seed.company` |
 | `crates/core-application/src/registry.rs` | CodeRegistry — идемпотентный ensure по кодам (4 регистра) |
 | `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module/preload_metadata_to_registry |
 
