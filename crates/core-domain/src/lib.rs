@@ -1,4 +1,5 @@
 pub mod aggregate;
+pub mod audit;
 pub mod command;
 pub mod company;
 pub mod error;
@@ -10,6 +11,7 @@ pub mod types;
 pub mod user;
 
 pub use aggregate::AggregateRoot;
+pub use audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
 pub use command::Command;
 pub use company::Company;
 pub use error::DomainError;

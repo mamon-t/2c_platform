@@ -4,12 +4,13 @@
 //! (материализованную коллекцию) через репозиторий, записывая снимок аудита
 //! от системного исполнителя, пока не появится аутентификация.
 
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use core_application::ports::{
-    CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository, RoleRepository,
-    UserRepository,
+    AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
+    RoleRepository, UserRepository,
 };
 use core_application::CommandRegistry;
+use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
 use core_domain::company::Company;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::metadata::{
@@ -22,8 +23,8 @@ use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
 };
 use core_infrastructure::{
-    SurrealCompanyRepository, SurrealMetadataRepository, SurrealObjectRepository,
-    SurrealRoleRepository, SurrealUserRepository,
+    SurrealAuditRepository, SurrealCompanyRepository, SurrealMetadataRepository,
+    SurrealObjectRepository, SurrealRoleRepository, SurrealUserRepository,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -1117,6 +1118,112 @@ pub async fn register_phase2_commands(
     register_company_commands(registry, companies).await;
     register_user_commands(registry, users).await;
     register_role_commands(registry, roles).await;
+}
+
+/// Регистрирует набор команд Фазы 4 по ТЗ v3.1: операционный аудит
+/// (`audit_log`) — запись и чтение записей действий пользователей и системы.
+/// Команды пока используют системного исполнителя (`ActorSnapshot::system()`),
+/// аутентификация появится позже.
+pub async fn register_phase4_audit_commands(
+    registry: &CommandRegistry,
+    audit: Arc<SurrealAuditRepository>,
+) {
+    registry
+        .register("audit.log", {
+            let audit = audit.clone();
+            move |params: Value| {
+                let audit = audit.clone();
+                async move {
+                    let args: LogAuditArgs = serde_json::from_value(params)
+                        .map_err(|e| format!("audit.log параметры: {e}"))?;
+                    let entry = AuditEntry {
+                        id: Uuid::new_v4(),
+                        action: args.action,
+                        actor: args.actor.unwrap_or_else(ActorSnapshot::system),
+                        target: args.target,
+                        result: args.result.unwrap_or(AuditResult::Success),
+                        details: args.details,
+                        ip_address: args.ip_address,
+                        user_agent: args.user_agent,
+                        company_id: args.company_id,
+                        timestamp: Utc::now(),
+                    };
+                    audit.log(entry.clone()).await.map_err(|e| e.to_string())?;
+                    encode(&entry)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register("audit.query", {
+            let audit = audit.clone();
+            move |params: Value| {
+                let audit = audit.clone();
+                async move {
+                    let args: QueryAuditArgs = serde_json::from_value(params)
+                        .map_err(|e| format!("audit.query параметры: {e}"))?;
+                    let filter = AuditFilter {
+                        action: args.action,
+                        actor_user_id: args.actor_user_id,
+                        target_entity_type: args.target_entity_type,
+                        target_entity_id: args.target_entity_id,
+                        company_id: args.company_id,
+                        result_success: args.result_success,
+                        from: args.from,
+                        to: args.to,
+                        limit: args.limit,
+                    };
+                    let entries = audit.query(filter).await.map_err(|e| e.to_string())?;
+                    let rows: Result<Vec<Value>, String> = entries.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+}
+
+/// Параметры команды `audit.log`.
+#[derive(serde::Deserialize)]
+struct LogAuditArgs {
+    action: String,
+    #[serde(default)]
+    actor: Option<ActorSnapshot>,
+    #[serde(default)]
+    target: Option<AuditTarget>,
+    #[serde(default)]
+    result: Option<AuditResult>,
+    #[serde(default)]
+    details: Option<Value>,
+    #[serde(default)]
+    ip_address: Option<String>,
+    #[serde(default)]
+    user_agent: Option<String>,
+    #[serde(default)]
+    company_id: Option<Uuid>,
+}
+
+/// Параметры команды `audit.query`.
+#[derive(serde::Deserialize)]
+struct QueryAuditArgs {
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    actor_user_id: Option<Uuid>,
+    #[serde(default)]
+    target_entity_type: Option<String>,
+    #[serde(default)]
+    target_entity_id: Option<Uuid>,
+    #[serde(default)]
+    company_id: Option<Uuid>,
+    #[serde(default)]
+    result_success: Option<bool>,
+    #[serde(default)]
+    from: Option<DateTime<Utc>>,
+    #[serde(default)]
+    to: Option<DateTime<Utc>>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 fn parse_uuid(value: &Value, key: &str) -> Result<Uuid, String> {

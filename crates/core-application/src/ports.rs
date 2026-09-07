@@ -1,3 +1,4 @@
+use core_domain::audit::{AuditEntry, AuditFilter};
 use core_domain::company::Company;
 use core_domain::error::DomainError;
 use core_domain::event::{Event, StreamType};
@@ -338,4 +339,21 @@ pub trait MetadataRepository: Send + Sync {
         company_id: &str,
         entity_type: &str,
     ) -> impl Future<Output = Result<EntitySchema, DomainError>> + Send;
+}
+
+/// Хранилище операционного аудита (`audit_log`) — отдельная подсистема,
+/// отличная от Event Store (раздел 8.5 ТЗ v3.1). Записи только добавляются
+/// (append-only); физическое удаление и архивация — вне области действия
+/// этого порта.
+pub trait AuditRepository: Send + Sync {
+    /// Добавляет новую запись аудита. Идентификатор формируется вызывающей
+    /// стороной; повторная передача той же записи идемпотентна.
+    fn log(&self, entry: AuditEntry) -> impl Future<Output = Result<(), DomainError>> + Send;
+
+    /// Возвращает записи, удовлетворяющие фильтру, в порядке убывания
+    /// `timestamp` (самые новые первыми).
+    fn query(
+        &self,
+        filter: AuditFilter,
+    ) -> impl Future<Output = Result<Vec<AuditEntry>, DomainError>> + Send;
 }
