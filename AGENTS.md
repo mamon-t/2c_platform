@@ -182,6 +182,7 @@
 | `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
 | `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
 | `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 6 по ТЗ v3.1): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
+| `crates/core-infrastructure/src/surreal_audit_repository.rs` | AuditRepository (Фаза 4 по ТЗ v3.1): audit_log + 5 индексов, append-only log через with_transaction, query с билдером биндов (ORDER BY timestamp DESC, LIMIT); 8 интеграционных тестов |
 | `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction (обобщённая по типу результата) |
 | `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
 | `apps/platform-server/src/commands.rs` | Команды: company.*, user.* (+contact/profile), role.*, metadata.*, object.* (+snapshot), document.number.*; системный актор |
