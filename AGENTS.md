@@ -253,8 +253,8 @@ curl -u root:root -H "Content-Type: application/json" \
 - [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
 - [x] Фаза 2: Компании, расширенная модель пользователей, роли
 - [x] Фаза 3: Метаданные (entity_types, fields, states, transitions, forms, relations, actions)
-- [ ] Фаза 4: Аудит действий (audit_log), AuditRepository (Приложение №6 ТЗ v3.1)
-- [ ] Фаза 5: Права доступа (permission_policies), PermissionManager, CommandExecutionPipeline, системные роли (Приложение №7 ТЗ v3.1)
+- [x] Фаза 4: Аудит действий (audit_log), AuditRepository (Приложение №6 ТЗ v3.1) — коммит `5ed7dbb`
+- [x] Фаза 5: Права доступа (permission_policies), PermissionManager, CommandExecutionPipeline, системные роли (Приложение №7 ТЗ v3.1) — коммит `65ee830`
 - [x] Фаза 6: Объекты, CRUD, оптимистичная блокировка
 - [x] Фаза 7: События, версии, аудит, снимки исполнителя — Event Store готов
 - [x] Фаза 8: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
