@@ -5,10 +5,12 @@
 //! от системного исполнителя, пока не появится аутентификация.
 
 use chrono::{DateTime, NaiveDate, Utc};
+use core_application::command_registry::CommandMetadata;
 use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
     RoleRepository, UserRepository,
 };
+use core_application::seed::seed_system_roles_and_policies;
 use core_application::CommandRegistry;
 use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
 use core_domain::company::Company;
@@ -24,7 +26,8 @@ use core_domain::user::{
 };
 use core_infrastructure::{
     SurrealAuditRepository, SurrealCompanyRepository, SurrealMetadataRepository,
-    SurrealObjectRepository, SurrealRoleRepository, SurrealUserRepository,
+    SurrealObjectRepository, SurrealPermissionPolicyRepository, SurrealRoleRepository,
+    SurrealUserRepository,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -127,7 +130,7 @@ async fn register_company_commands(
     companies: Arc<SurrealCompanyRepository>,
 ) {
     registry
-        .register("company.create", {
+        .register_with_metadata("company.create", CommandMetadata::requires("create"), {
             let companies = companies.clone();
             move |params: Value| {
                 let companies = companies.clone();
@@ -163,7 +166,7 @@ async fn register_company_commands(
         .await;
 
     registry
-        .register("company.get", {
+        .register_with_metadata("company.get", CommandMetadata::requires("read"), {
             let companies = companies.clone();
             move |params: Value| {
                 let companies = companies.clone();
@@ -177,7 +180,7 @@ async fn register_company_commands(
         .await;
 
     registry
-        .register("company.list", {
+        .register_with_metadata("company.list", CommandMetadata::requires("read"), {
             let companies = companies.clone();
             move |_params: Value| {
                 let companies = companies.clone();
@@ -192,7 +195,7 @@ async fn register_company_commands(
         .await;
 
     registry
-        .register("company.update", {
+        .register_with_metadata("company.update", CommandMetadata::requires("update"), {
             let companies = companies.clone();
             move |params: Value| {
                 let companies = companies.clone();
@@ -228,7 +231,7 @@ async fn register_company_commands(
 
 async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUserRepository>) {
     registry
-        .register("user.create", {
+        .register_with_metadata("user.create", CommandMetadata::requires("create"), {
             let users = users.clone();
             move |params: Value| {
                 let users = users.clone();
@@ -310,7 +313,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
         .await;
 
     registry
-        .register("user.get", {
+        .register_with_metadata("user.get", CommandMetadata::requires("read"), {
             let users = users.clone();
             move |params: Value| {
                 let users = users.clone();
@@ -324,7 +327,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
         .await;
 
     registry
-        .register("user.list", {
+        .register_with_metadata("user.list", CommandMetadata::requires("read"), {
             let users = users.clone();
             move |_params: Value| {
                 let users = users.clone();
@@ -338,7 +341,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
         .await;
 
     registry
-        .register("user.update", {
+        .register_with_metadata("user.update", CommandMetadata::requires("update"), {
             let users = users.clone();
             move |params: Value| {
                 let users = users.clone();
@@ -385,7 +388,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
         .await;
 
     registry
-        .register("user.contact.add", {
+        .register_with_metadata("user.contact.add", CommandMetadata::requires("create"), {
             let users = users.clone();
             move |params: Value| {
                 let users = users.clone();
@@ -424,7 +427,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
         .await;
 
     registry
-        .register("user.profile.add", {
+        .register_with_metadata("user.profile.add", CommandMetadata::requires("create"), {
             let users = users.clone();
             move |params: Value| {
                 let users = users.clone();
@@ -463,7 +466,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
 
 async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRoleRepository>) {
     registry
-        .register("role.create", {
+        .register_with_metadata("role.create", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
             move |params: Value| {
                 let roles = roles.clone();
@@ -472,22 +475,25 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
                     let name = require(&params, "name")?;
                     let description = optional(&params, "description")?.unwrap_or_default();
                     let is_system = optional_bool(&params, "is_system")?.unwrap_or(false);
+                    let company_id = parse_uuid(&params, "company_id")?;
+                    let permission_policy_codes = parse_uuids(&params, "permission_policy_codes")?;
                     let now = Utc::now();
                     let role = Role {
                         id: Uuid::new_v4(),
+                        company_id,
                         code,
                         name,
                         description,
+                        permission_policy_codes,
                         is_system,
                         created_at: now,
                         updated_at: now,
                     };
-                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
                     let event = system_event(
                         StreamType::Role,
                         role.id.to_string(),
                         "role.created",
-                        &company_id,
+                        &role.company_id.to_string(),
                         encode(&role)?,
                     );
                     roles.create(&role, &[event]).await.map_err(|e| e.to_string())?;
@@ -498,7 +504,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
         .await;
 
     registry
-        .register("role.get", {
+        .register_with_metadata("role.get", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
             move |params: Value| {
                 let roles = roles.clone();
@@ -512,7 +518,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
         .await;
 
     registry
-        .register("role.list", {
+        .register_with_metadata("role.list", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
             move |_params: Value| {
                 let roles = roles.clone();
@@ -531,7 +537,7 @@ async fn register_metadata_commands(
     metadata: Arc<SurrealMetadataRepository>,
 ) {
     registry
-        .register("metadata.entity_type.create", {
+        .register_with_metadata("metadata.entity_type.create", CommandMetadata::requires("metadata.manage"), {
             let metadata = metadata.clone();
             move |params: Value| {
                 let metadata = metadata.clone();
@@ -549,7 +555,7 @@ async fn register_metadata_commands(
         .await;
 
     registry
-        .register("metadata.entity_type.get", {
+        .register_with_metadata("metadata.entity_type.get", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
             move |params: Value| {
                 let metadata = metadata.clone();
@@ -566,7 +572,7 @@ async fn register_metadata_commands(
         .await;
 
     registry
-        .register("metadata.entity_type.get_by_code", {
+        .register_with_metadata("metadata.entity_type.get_by_code", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
             move |params: Value| {
                 let metadata = metadata.clone();
@@ -584,7 +590,7 @@ async fn register_metadata_commands(
         .await;
 
     registry
-        .register("metadata.entity_type.list", {
+        .register_with_metadata("metadata.entity_type.list", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
             move |_params: Value| {
                 let metadata = metadata.clone();
@@ -598,7 +604,7 @@ async fn register_metadata_commands(
         .await;
 
     registry
-        .register("metadata.entity_type.update", {
+        .register_with_metadata("metadata.entity_type.update", CommandMetadata::requires("metadata.manage"), {
             let metadata = metadata.clone();
             move |params: Value| {
                 let metadata = metadata.clone();
@@ -624,7 +630,7 @@ async fn register_metadata_commands(
         .await;
 
     registry
-        .register("metadata.schema.get", {
+        .register_with_metadata("metadata.schema.get", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
             move |params: Value| {
                 let metadata = metadata.clone();
@@ -652,7 +658,7 @@ async fn register_object_commands(
     metadata: Arc<SurrealMetadataRepository>,
 ) {
     registry
-        .register("object.create", {
+        .register_with_metadata("object.create", CommandMetadata::requires("create"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
             move |params: Value| {
@@ -714,7 +720,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.get", {
+        .register_with_metadata("object.get", CommandMetadata::requires("read"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -728,7 +734,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.list", {
+        .register_with_metadata("object.list", CommandMetadata::requires("read"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -748,7 +754,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.update", {
+        .register_with_metadata("object.update", CommandMetadata::requires("update"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
             move |params: Value| {
@@ -811,7 +817,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.delete", {
+        .register_with_metadata("object.delete", CommandMetadata::requires("delete"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -836,7 +842,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.snapshot.list", {
+        .register_with_metadata("object.snapshot.list", CommandMetadata::requires("read"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -854,7 +860,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("object.snapshot.restore", {
+        .register_with_metadata("object.snapshot.restore", CommandMetadata::requires("update"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -880,7 +886,7 @@ async fn register_object_commands(
         .await;
 
     registry
-        .register("document.number.next", {
+        .register_with_metadata("document.number.next", CommandMetadata::requires("create"), {
             let objects = objects.clone();
             move |params: Value| {
                 let objects = objects.clone();
@@ -1108,6 +1114,108 @@ pub async fn register_phase4_commands(
     register_object_commands(registry, objects, metadata).await;
 }
 
+/// Регистрирует набор команд Фазы 5 по ТЗ v3.1: сидинг системных ролей и
+/// политик (`role.seed`) и лечение компаний, созданных до Фазы 5
+/// (`system.migrate_permissions`). Обе команды требуют права `role.manage`,
+/// что соответствует Рекомендации 2: администратор (политика `platform.full`)
+/// и системный исполнитель могут инициализировать RBAC-набор.
+pub async fn register_phase5_commands(
+    registry: &CommandRegistry,
+    roles: Arc<SurrealRoleRepository>,
+    policies: Arc<SurrealPermissionPolicyRepository>,
+    audit: Arc<SurrealAuditRepository>,
+    companies: Arc<SurrealCompanyRepository>,
+) {
+    registry
+        .register_with_metadata("role.seed", CommandMetadata::requires("role.manage"), {
+            let roles = roles.clone();
+            let policies = policies.clone();
+            let audit = audit.clone();
+            move |params: Value| {
+                let roles = roles.clone();
+                let policies = policies.clone();
+                let audit = audit.clone();
+                async move {
+                    let company_id = parse_uuid(&params, "company_id")?;
+                    seed_system_roles_and_policies(
+                        &company_id,
+                        roles.as_ref(),
+                        policies.as_ref(),
+                        audit.as_ref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    Ok(json!({ "seeded": true, "company_id": company_id.to_string() }))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata(
+            "system.migrate_permissions",
+            CommandMetadata::requires("role.manage"),
+            {
+                let roles = roles.clone();
+                let policies = policies.clone();
+                let audit = audit.clone();
+                let companies = companies.clone();
+                move |_params: Value| {
+                    let roles = roles.clone();
+                    let policies = policies.clone();
+                    let audit = audit.clone();
+                    let companies = companies.clone();
+                    async move {
+                        let companies_list = companies
+                            .list()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let mut seeded = 0usize;
+                        for company in &companies_list {
+                            if roles
+                                .get_by_code(&company.id, "admin")
+                                .await
+                                .map(|_| false)
+                                .unwrap_or(true)
+                            {
+                                seed_system_roles_and_policies(
+                                    &company.id,
+                                    roles.as_ref(),
+                                    policies.as_ref(),
+                                    audit.as_ref(),
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?;
+                                seeded += 1;
+                            }
+                        }
+                        let entry = AuditEntry {
+                            id: Uuid::new_v4(),
+                            action: "system.migrate_permissions".to_string(),
+                            actor: ActorSnapshot::system(),
+                            target: None,
+                            result: AuditResult::Success,
+                            details: Some(json!({
+                                "companies_total": companies_list.len(),
+                                "seeded": seeded,
+                            })),
+                            ip_address: None,
+                            user_agent: None,
+                            company_id: None,
+                            timestamp: Utc::now(),
+                        };
+                        audit.log(entry).await.map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "companies_total": companies_list.len(),
+                            "seeded": seeded,
+                        }))
+                    }
+                }
+            },
+        )
+        .await;
+}
+
 /// Регистрирует набор команд Фазы 2 в общем реестре.
 pub async fn register_phase2_commands(
     registry: &CommandRegistry,
@@ -1129,7 +1237,7 @@ pub async fn register_phase4_audit_commands(
     audit: Arc<SurrealAuditRepository>,
 ) {
     registry
-        .register("audit.log", {
+        .register_with_metadata("audit.log", CommandMetadata::requires("role.manage"), {
             let audit = audit.clone();
             move |params: Value| {
                 let audit = audit.clone();
@@ -1156,7 +1264,7 @@ pub async fn register_phase4_audit_commands(
         .await;
 
     registry
-        .register("audit.query", {
+        .register_with_metadata("audit.query", CommandMetadata::requires("audit.read"), {
             let audit = audit.clone();
             move |params: Value| {
                 let audit = audit.clone();

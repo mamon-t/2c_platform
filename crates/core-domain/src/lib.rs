@@ -6,6 +6,7 @@ pub mod error;
 pub mod event;
 pub mod metadata;
 pub mod object;
+pub mod permission;
 pub mod role;
 pub mod types;
 pub mod user;
@@ -21,6 +22,7 @@ pub use metadata::{
     EntityType, FieldType, OnDelete, RelationKind,
 };
 pub use object::{Object, ObjectKind, ObjectSnapshot};
+pub use permission::{PermissionPolicy, PermissionScopeType, RecordAccessLevel};
 pub use role::Role;
 pub use types::{AggregateId, Version};
 pub use user::{

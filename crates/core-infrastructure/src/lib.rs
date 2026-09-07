@@ -5,6 +5,7 @@ pub mod surreal_company_repository;
 pub mod surreal_event_store;
 pub mod surreal_metadata_repository;
 pub mod surreal_object_repository;
+pub mod surreal_permission_policy_repository;
 pub mod surreal_role_repository;
 pub mod surreal_user_repository;
 
@@ -14,5 +15,6 @@ pub use surreal_company_repository::SurrealCompanyRepository;
 pub use surreal_event_store::SurrealEventStore;
 pub use surreal_metadata_repository::SurrealMetadataRepository;
 pub use surreal_object_repository::SurrealObjectRepository;
+pub use surreal_permission_policy_repository::SurrealPermissionPolicyRepository;
 pub use surreal_role_repository::SurrealRoleRepository;
 pub use surreal_user_repository::SurrealUserRepository;

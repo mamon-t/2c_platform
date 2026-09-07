@@ -5,6 +5,7 @@ use core_domain::event::{Event, StreamType};
 use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityRelation, EntityState, EntityTransition, EntityType,
 };
+use core_domain::permission::PermissionPolicy;
 use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
 use core_domain::types::{AggregateId, Version};
@@ -12,7 +13,11 @@ use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserC
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
+
+/// Пинованный boxed-футур для dyn-совместимых методов портов.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Хранилище событий с журналом только с добавлением — Труба в концепции «Трубы и Доски».
 /// Реализовано в `core-infrastructure` поверх коллекции `events`.
@@ -249,24 +254,48 @@ pub trait UserRepository: Send + Sync {
     ) -> impl Future<Output = Result<Vec<UserCertificate>, DomainError>> + Send;
 }
 
-/// Хранилище материализованных ролей.
+/// Хранилище материализованных ролей. Методы используют `BoxFuture` для
+/// dyn-совместимости (трейт используется как `Arc<dyn RoleRepository>` в
+/// [`PermissionManager`](crate::PermissionManager)).
 pub trait RoleRepository: Send + Sync {
     /// Создаёт роль и добавляет её событие в одной транзакции.
     ///
     /// # Ошибки
     ///
-    /// Возвращает `DomainError::ValidationError`, если `code` уже занят.
-    fn create(
-        &self,
-        role: &Role,
-        events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    /// Возвращает `DomainError::ValidationError`, если `code` занят в компании.
+    fn create(&self, role: &Role, events: &[Event]) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Получает роль по id.
-    fn get(&self, id: &Uuid) -> impl Future<Output = Result<Role, DomainError>> + Send;
+    fn get(&self, id: &Uuid) -> BoxFuture<'_, Result<Role, DomainError>>;
+
+    /// Получает роль по коду в рамках компании; используется при ensure-сидинге.
+    fn get_by_code(&self, company_id: &Uuid, code: &str) -> BoxFuture<'_, Result<Role, DomainError>>;
 
     /// Перечисляет все роли, упорядоченные по `code`.
-    fn list(&self) -> impl Future<Output = Result<Vec<Role>, DomainError>> + Send;
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Role>, DomainError>>;
+
+    /// Собирает коды политик доступа всех ролей пользователя в компании:
+    /// загружает роли через `user.role_ids`, фильтрует по `company_id`,
+    /// объединяет и дедуплицирует `permission_policy_codes`.
+    fn get_policies_for_user(
+        &self,
+        user_id: &Uuid,
+        company_id: &Uuid,
+    ) -> BoxFuture<'_, Result<Vec<String>, DomainError>>;
+}
+
+/// Хранилище политик доступа (`permission_policies`, Приложение №7 ТЗ v3.1).
+/// Использует `BoxFuture` для dyn-совместимости (см. [`RoleRepository`]).
+pub trait PermissionPolicyRepository: Send + Sync {
+    /// Вносит политику с ensure-семантикой по коду: вставка идемпотентна,
+    /// существующая политика не перезаписывается.
+    fn upsert(&self, policy: &PermissionPolicy) -> BoxFuture<'_, Result<(), DomainError>>;
+
+    /// Получает политику по коду.
+    fn get_by_code(&self, code: &str) -> BoxFuture<'_, Result<PermissionPolicy, DomainError>>;
+
+    /// Получает политики по списку кодов, пропуская отсутствующие.
+    fn get_by_codes(&self, codes: &[String]) -> BoxFuture<'_, Result<Vec<PermissionPolicy>, DomainError>>;
 }
 
 /// Полный декларативный снимок типа сущности: сам тип, а также его
@@ -344,16 +373,14 @@ pub trait MetadataRepository: Send + Sync {
 /// Хранилище операционного аудита (`audit_log`) — отдельная подсистема,
 /// отличная от Event Store (раздел 8.5 ТЗ v3.1). Записи только добавляются
 /// (append-only); физическое удаление и архивация — вне области действия
-/// этого порта.
+/// этого порта. Использует `BoxFuture` для dyn-совместимости (хранится как
+/// `Arc<dyn AuditRepository>` в `CommandExecutionPipeline`).
 pub trait AuditRepository: Send + Sync {
     /// Добавляет новую запись аудита. Идентификатор формируется вызывающей
     /// стороной; повторная передача той же записи идемпотентна.
-    fn log(&self, entry: AuditEntry) -> impl Future<Output = Result<(), DomainError>> + Send;
+    fn log(&self, entry: AuditEntry) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Возвращает записи, удовлетворяющие фильтру, в порядке убывания
     /// `timestamp` (самые новые первыми).
-    fn query(
-        &self,
-        filter: AuditFilter,
-    ) -> impl Future<Output = Result<Vec<AuditEntry>, DomainError>> + Send;
+    fn query(&self, filter: AuditFilter) -> BoxFuture<'_, Result<Vec<AuditEntry>, DomainError>>;
 }

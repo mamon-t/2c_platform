@@ -4,7 +4,7 @@
 //! `events`): здесь хранятся действия пользователей и системы для
 //! безопасности, compliance и отладки (раздел 8.5 и Приложение №6 ТЗ v3.1).
 
-use core_application::ports::AuditRepository;
+use core_application::ports::{AuditRepository, BoxFuture};
 use core_domain::audit::{AuditEntry, AuditFilter};
 use core_domain::error::DomainError;
 use serde_json::Value;
@@ -73,40 +73,49 @@ fn decode_rows(rows: Vec<Value>) -> Result<Vec<AuditEntry>, DomainError> {
 }
 
 impl AuditRepository for SurrealAuditRepository {
-    async fn log(&self, entry: AuditEntry) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let value = audit_record(&entry)?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("audit_log", entry.id.to_string()))
-                    .content(value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("audit write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+    fn log(&self, entry: AuditEntry) -> BoxFuture<'_, Result<(), DomainError>> {
+        let db = self.db.clone();
+        Box::pin(async move {
+            with_transaction(&db, |txn| {
+                let entry = entry.clone();
+                async move {
+                    let outcome: Result<(), DomainError> = async {
+                        let value = audit_record(&entry)?;
+                        let _: Option<surrealdb::types::Value> = txn
+                            .upsert(("audit_log", entry.id.to_string()))
+                            .content(value)
+                            .await
+                            .map_err(|e| DomainError::Storage(format!("audit write: {e}")))?;
+                        Ok(())
+                    }
+                    .await;
+                    (txn, outcome)
+                }
+            })
+            .await
         })
-        .await
     }
 
-    async fn query(&self, filter: AuditFilter) -> Result<Vec<AuditEntry>, DomainError> {
-        let (where_clause, limit_clause, binds) = build_query(&filter);
-        let sql = format!(
-            "SELECT {AUDIT_FIELDS} FROM audit_log \
-             {where_clause} ORDER BY timestamp DESC {limit_clause}"
-        );
-        let mut query = self.db.query(sql);
-        for (name, value) in binds {
-            query = query.bind((name, value));
-        }
-        let mut response = query
-            .await
-            .map_err(|e| DomainError::Storage(format!("audit query: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("audit query take: {e}")))?;
-        decode_rows(rows)
+    fn query(&self, filter: AuditFilter) -> BoxFuture<'_, Result<Vec<AuditEntry>, DomainError>> {
+        let db = self.db.clone();
+        Box::pin(async move {
+            let (where_clause, limit_clause, binds) = build_query(&filter);
+            let sql = format!(
+                "SELECT {AUDIT_FIELDS} FROM audit_log \
+                 {where_clause} ORDER BY timestamp DESC {limit_clause}"
+            );
+            let mut query = db.query(sql);
+            for (name, value) in binds {
+                query = query.bind((name, value));
+            }
+            let mut response = query
+                .await
+                .map_err(|e| DomainError::Storage(format!("audit query: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("audit query take: {e}")))?;
+            decode_rows(rows)
+        })
     }
 }
 

@@ -9,13 +9,15 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use core_application::command_registry::CommandExecutionCtx;
+use core_application::permission_manager::PermissionManager;
 use core_application::ports::EventStore;
 use core_application::CommandRegistry;
-use core_domain::event::{Event, StreamType};
+use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_infrastructure::{
     connect_db, SurrealAuditRepository, SurrealCompanyRepository, SurrealEventStore,
-    SurrealMetadataRepository, SurrealObjectRepository, SurrealRoleRepository,
-    SurrealUserRepository,
+    SurrealMetadataRepository, SurrealObjectRepository, SurrealPermissionPolicyRepository,
+    SurrealRoleRepository, SurrealUserRepository,
 };
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -63,17 +65,33 @@ async fn main() -> Result<()> {
         .ensure_schema()
         .await
         .context("не удалось создать схему audit_log")?;
-    let objects = Arc::new(SurrealObjectRepository::new(db));
+    let objects = Arc::new(SurrealObjectRepository::new(db.clone()));
     objects
         .ensure_schema()
         .await
         .context("не удалось создать схему объектов")?;
+    let policies = Arc::new(SurrealPermissionPolicyRepository::new(db.clone()));
+    policies
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему permission_policies")?;
 
     let registry = Arc::new(CommandRegistry::new());
-    commands::register_phase2_commands(&registry, companies, users, roles).await;
+    commands::register_phase2_commands(&registry, companies.clone(), users, roles.clone()).await;
     commands::register_phase3_commands(&registry, metadata.clone()).await;
     commands::register_phase4_commands(&registry, objects, metadata).await;
-    commands::register_phase4_audit_commands(&registry, audit).await;
+    commands::register_phase4_audit_commands(&registry, audit.clone()).await;
+    commands::register_phase5_commands(
+        &registry,
+        roles.clone(),
+        policies.clone(),
+        audit.clone(),
+        companies,
+    )
+    .await;
+
+    let permissions = Arc::new(PermissionManager::new(roles, policies));
+    registry.attach_pipeline(audit, permissions).await;
     info!("Зарегистрировано команд ({}):", registry.list().await.len());
 
     let state = AppState {
@@ -158,9 +176,28 @@ async fn debug_command(
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let actor = payload
+        .get("actor")
+        .cloned()
+        .map(serde_json::from_value::<ActorSnapshot>)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("некорректный 'actor': {e}")))?;
+    let module_code = payload
+        .get("module_code")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let entity_type = payload
+        .get("entity_type")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let ctx = CommandExecutionCtx {
+        actor,
+        module_code,
+        entity_type,
+    };
     let result = state
         .registry
-        .execute(name, params)
+        .execute_ctx(name, params, ctx)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true, "command": name, "result": result })))
