@@ -128,7 +128,7 @@
 
 **Домен:** Бухгалтерия, Управленческий учёт, CRM
 
-**Ссылки:** [Техническое задание v3.0](TZ_v3.0.md)
+**Ссылки:** [Техническое задание v3.1](TZ_v3.1.md) (v3.0 — [архив](TZ_v3.0.md))
 
 ## 9. Стек технологий
 
@@ -150,7 +150,8 @@
  ├── rust-toolchain.toml     # channel = "1.96.0"
  ├── .gitignore
  ├── doc/
- │   ├── TZ_v3.0.md          # техническое задание v3.0 (архитектурная спецификация)
+ │   ├── TZ_v3.1.md          # техническое задание v3.1 (архитектурная спецификация)
+ │   ├── TZ_v3.0.md          # техническое задание v3.0 (архив)
  │   └── surreal-docker.md   # развертывание SurrealDB в Docker
  ├── crates/                 # библиотеки ядра (слои, направление зависимостей вниз)
  │   ├── core-domain/        # чистый домен: AggregateId, Event, Command, Object, DomainError
@@ -180,12 +181,12 @@
 | `crates/core-infrastructure/src/surreal_company_repository.rs` | CompanyRepository: CRUD, транзакционная запись «Доска+Труба», ensure_schema (UNIQUE-код) |
 | `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
 | `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: CRUD, транзакции, ensure_schema (UNIQUE-код) |
-| `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 4): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
+| `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 6 по ТЗ v3.1): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
 | `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction (обобщённая по типу результата) |
 | `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
-| `apps/platform-server/src/commands.rs` | Команды Фаз 2-4: company.*, user.* (+contact/profile), role.*, metadata.*, object.* (+snapshot), document.number.*; системный актор |
+| `apps/platform-server/src/commands.rs` | Команды: company.*, user.* (+contact/profile), role.*, metadata.*, object.* (+snapshot), document.number.*; системный актор |
 | `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
-| `doc/TZ_v3.0.md` | Техническое задание, архитектурные принципы |
+| `doc/TZ_v3.1.md` | Техническое задание v3.1, архитектурные принципы (аудит, RBAC, CommandExecutionPipeline) |
 | `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
 | `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, metadata, object, aggregate, error, …) |
 | `crates/core-domain/src/event.rs` | StreamType (10 видов: object…module, metadata), Event, ActorSnapshot + `system()` |
@@ -193,7 +194,7 @@
 | `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
 | `crates/core-domain/src/role.rs` | Модель Role (Фаза 2) |
 | `crates/core-domain/src/metadata.rs` | Метаданные (Фаза 3): EntityType, EntityField, EntityState, EntityTransition, EntityForm, EntityAction, EntityRelation, FieldType, RelationKind, OnDelete; EntityKind = ObjectKind |
-| `crates/core-domain/src/object.rs` | Объекты (Фаза 4): Object, ObjectSnapshot, ObjectKind, `validate(fields, states)`, `is_document()` |
+| `crates/core-domain/src/object.rs` | Объекты (Фаза 6 по ТЗ v3.1): Object, ObjectSnapshot, ObjectKind, `validate(fields, states)`, `is_document()` |
 | `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
 | `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
 | `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, MetadataRepository + EntitySchema |
@@ -251,26 +252,29 @@ curl -u root:root -H "Content-Type: application/json" \
 - [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
 - [x] Фаза 2: Компании, расширенная модель пользователей, роли
 - [x] Фаза 3: Метаданные (entity_types, fields, states, transitions, forms, relations, actions)
-- [x] Фаза 4: Объекты, CRUD, оптимистичная блокировка
-- [x] Фаза 5 (частично): События, версии, аудит, снимки исполнителя — Event Store готов
-- [ ] Фаза 6: Права доступа (permission_policies)
-- [x] Фаза 7: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
-- [ ] Фаза 8: WASM-модули через Extism, манифест, декларативная регистрация
-- [ ] Фаза 9: Транспортный слой (RpcMessage), REST + WebSocket
-- [ ] Фаза 10: Flutter-клиент, SDUI, тёмная тема
-- [ ] Фаза 11: Оффлайн-синхронизация, Optimistic Concurrency Control
-- [ ] Фаза 12: Rhai-скрипты, редактор, Core API
-- [ ] Фаза 13: Модуль управленческого учёта, проводки, ОСВ, баланс
-- [ ] Фаза 14: CSV-экспорт, HTML-печатные формы
-- [ ] Фаза 15: Уведомления inapp + e-mail
-- [ ] Фаза 16: Криптоподпись через cpcsp-rs (Linux)
-- [ ] Фаза 17: Пакет диагностики, логирование, маскирование ПД
-- [ ] Фаза 18: Тесты и документация
+- [ ] Фаза 4: Аудит действий (audit_log), AuditRepository (Приложение №6 ТЗ v3.1)
+- [ ] Фаза 5: Права доступа (permission_policies), PermissionManager, CommandExecutionPipeline, системные роли (Приложение №7 ТЗ v3.1)
+- [x] Фаза 6: Объекты, CRUD, оптимистичная блокировка
+- [x] Фаза 7: События, версии, аудит, снимки исполнителя — Event Store готов
+- [x] Фаза 8: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
+- [ ] Фаза 9: WASM-модули через Extism, манифест, декларативная регистрация
+- [ ] Фаза 10: Транспортный слой (RpcMessage), REST + WebSocket
+- [ ] Фаза 11: Flutter-клиент, SDUI, тёмная тема
+- [ ] Фаза 12: Оффлайн-синхронизация, Optimistic Concurrency Control
+- [ ] Фаза 13: Rhai-скрипты, редактор, Core API
+- [ ] Фаза 14: Модуль управленческого учёта, проводки, ОСВ, баланс
+- [ ] Фаза 15: CSV-экспорт, HTML-печатные формы
+- [ ] Фаза 16: Уведомления inapp + e-mail
+- [ ] Фаза 17: Криптоподпись через cpcsp-rs (Linux)
+- [ ] Фаза 18: Пакет диагностики, логирование, маскирование ПД
+- [ ] Фаза 19: Тесты и документация
 
 **Примечание о порядке выполнения:**
 Фазы могут выполняться не строго по порядку, если есть архитектурные зависимости.
-Например, Фаза 7 (CommandRegistry, AppRegistry) была выполнена до Фаз 2-6,
-поскольку это инфраструктурный фундамент для всех последующих фаз.
+По ТЗ v3.1 Аудит (Фаза 4) и Права доступа (Фаза 5) должны быть реализованы ДО бизнес-логики,
+чтобы объекты сразу создавались с проверкой прав и записью в аудит; фактически объекты (Фаза 6)
+выполнены раньше, поэтому при реализации Фаз 4-5 нужно будет пройтись по существующим командам
+`CommandRegistry` конвейером `CommandExecutionPipeline`.
 Фактический порядок выполнения фиксируется в technical_report.md.
 
 ## 16. Ограничения и риски
@@ -327,6 +331,15 @@ curl -u root:root -H "Content-Type: application/json" \
 | EventBatch | Пакет событий, отправляемый клиентом на сервер при восстановлении сети после оффлайн-работы | EventBatch |
 | ServerPush | Сообщение, инициированное сервером и отправленное клиенту через WebSocket/SSE | ServerPush |
 | Труба и Доска | Концепция: Труба (Event Store) — истина, Доска (Projections) — материализованные представления | PipeAndBoard |
+| Двухуровневое журналирование | Event Store хранит бизнес-события (восстановление состояния), `audit_log` — операционные действия (безопасность/compliance) | TwoTierLogging |
+| AuditEntry | Запись операционного аудита: действие, актор, цель, результат, детали, timestamp | AuditEntry |
+| AuditRepository | Порт ядра (`audit_log`) для записи и чтения записей аудита, фильтрация через AuditFilter | AuditRepository |
+| PermissionManager | Сервис в `core-application`: детерминированная проверка прав по политикам и ролям | PermissionManager |
+| CommandExecutionPipeline | Middleware-обёртка вокруг `CommandRegistry::execute`: аудит + проверка прав + выполнение | CommandExecutionPipeline |
+| PermissionPolicy | Политика доступа: scope_type, entity_type, actions, record_access, deny, priority | PermissionPolicy |
+| PermissionScopeType | Область политики: Platform, Module(code), Metadata, None | PermissionScopeType |
+| RecordAccessLevel | Уровень доступа к записям: Owned, ByRole, ByCompany, All | RecordAccessLevel |
+| Deny-by-default | Безопасность по умолчанию: не разрешённое явно действие запрещено; deny overrides allow | DenyByDefault |
 
 ## 20. Архитектурные решения (ADR)
 
@@ -345,3 +358,6 @@ curl -u root:root -H "Content-Type: application/json" \
 | ADR-008 | UI-паттерн | Server-Driven UI (SDUI) | Метаданные первичны. UI генерируется из object_schemas и forms. Кастомные виджеты регистрируются локально и вызываются по коду из метаданных. | ✅ Принято |
 | ADR-009 | Оффлайн-синхронизация | Optimistic Concurrency Control (OCC) через version | Автоматический мердж опасен для финансово-учётных систем. Строгий OCC: несовпадение версий → CONFLICT_ERROR, ручное разрешение конфликта пользователем. | ✅ Принято |
 | ADR-010 | Модульность | WASM-плагины через Extism | Изоляция, безопасность, ресурсные лимиты. Capability-модель для host-функций. Декларативная регистрация с ensure-семантикой. | ✅ Принято |
+| ADR-011 | Двухуровневое журналирование | Event Store (бизнес-события) и `audit_log` (операционные действия) — отдельные подсистемы | Разные цели: восстановление состояния vs безопасность/compliance. У `audit_log` retention policy, Event Store append-only. | ✅ Принято |
+| ADR-012 | Строгий RBAC | Deny-by-default: `PermissionManager` с приоритетами политик, deny overrides allow; проверка встроена в `CommandExecutionPipeline` | Ни одна команда не выполнится без проверки прав; команда не может «забыть» аудит. | ✅ Принято |
+| ADR-013 | Порядок фаз | Аудит (Фаза 4) и права (Фаза 5) реализуются ДО бизнес-логики объектов (ТЗ v3.1) | Объекты сразу создаются с проверкой прав и записью в аудит. Объекты (Фаза 6) фактически сделаны раньше — потребуется прогон через конвейер. | ✅ Принято |
