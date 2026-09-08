@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Область действия политики.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionScopeType {
     /// Политика платформы — действует для любой сферы.
@@ -18,11 +18,12 @@ pub enum PermissionScopeType {
     /// Метаданные (типы сущностей).
     Metadata,
     /// Сфера не указана.
+    #[default]
     None,
 }
 
 /// Уровень доступа к записям данных (записи, на которые распространяется политика).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordAccessLevel {
     /// Только записи, созданные самим пользователем.
@@ -30,6 +31,7 @@ pub enum RecordAccessLevel {
     /// Записи, назначенные на роль или пользователя.
     ByRole,
     /// Все записи в рамках компании.
+    #[default]
     ByCompany,
     /// Полный доступ без ограничений записей.
     All,

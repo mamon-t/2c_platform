@@ -9,9 +9,9 @@ use core_domain::permission::PermissionPolicy;
 use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
 use core_domain::types::{AggregateId, Version};
+use core_domain::wasm_manifest::ModuleManifest;
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use uuid::Uuid;
@@ -126,16 +126,44 @@ pub trait ObjectRepository: Send + Sync {
     ) -> impl Future<Output = Result<String, DomainError>> + Send;
 }
 
-/// Хост, способный выполнить действие WASM-модуля и вернуть результат.
+/// Хост для WASM-модулей (Extism): загрузка, исполнение и выгрузка модуля.
+/// Host-функции (`whoami`, KV, объекты и т.д.) выполняются в namespace
+/// `ExtismHost` и подчиняются capabilities манифеста (Приложения №4-№6 ТЗ v3.0).
 pub trait WasmHost: Send + Sync {
-    /// Выполняет `action` модуля. Хост обеспечивает соблюдение capability и
-    /// лимитов ресурсов, объявленных в манифесте модуля.
-    fn execute_module(
+    /// Загружает WASM-модуль: компилирует байты, вызывает `get_info()`,
+    /// валидирует манифест v2 и подготавливает host-функции. Повторная
+    /// загрузка того же кода заменяет ранее загруженную версию.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::ValidationError`, если манифест не проходит
+    /// проверку, либо `DomainError::Storage` при ошибке компиляции плагина.
+    async fn load_module(
         &self,
-        module_code: &str,
-        action: &str,
-        payload: Value,
-    ) -> impl Future<Output = Result<Value, DomainError>> + Send;
+        code: &str,
+        wasm_bytes: &[u8],
+    ) -> Result<ModuleManifest, DomainError>;
+
+    /// Вызывает экспортированную функцию `function` модуля с входными
+    /// байтами `input` и возвращает байты вывода. Хост соблюдает ресурсные
+    /// лимиты (топливо, память, таймаут) и capabilities модуля.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::NotFound`, если модуль не загружен, или
+    /// `DomainError::ValidationError` при ошибке исполнения.
+    async fn call_function(
+        &self,
+        code: &str,
+        function: &str,
+        input: &[u8],
+    ) -> Result<Vec<u8>, DomainError>;
+
+    /// Выгружает модуль из памяти; не влияет на установку в БД.
+    async fn unload_module(&self, code: &str) -> Result<(), DomainError>;
+
+    /// Возвращает `true`, если модуль с заданным кодом загружен в память.
+    async fn is_loaded(&self, code: &str) -> bool;
 }
 
 /// Хранилище материализованных компаний.

@@ -1,5 +1,7 @@
 pub mod connector;
 pub mod events;
+pub mod extism_wasm_host;
+pub mod module_kv;
 pub mod surreal_audit_repository;
 pub mod surreal_company_repository;
 pub mod surreal_event_store;
@@ -10,6 +12,8 @@ pub mod surreal_role_repository;
 pub mod surreal_user_repository;
 
 pub use connector::connect_db;
+pub use extism_wasm_host::ExtismWasmHost;
+pub use module_kv::ModuleKv;
 pub use surreal_audit_repository::SurrealAuditRepository;
 pub use surreal_company_repository::SurrealCompanyRepository;
 pub use surreal_event_store::SurrealEventStore;

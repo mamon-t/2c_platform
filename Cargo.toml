@@ -7,6 +7,9 @@ members = [
     "crates/core-api",
     "apps/platform-server",
 ]
+exclude = [
+    "examples/hello_plugin",
+]
 
 [workspace.package]
 version = "0.1.0"

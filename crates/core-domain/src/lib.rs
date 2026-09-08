@@ -10,6 +10,7 @@ pub mod permission;
 pub mod role;
 pub mod types;
 pub mod user;
+pub mod wasm_manifest;
 
 pub use aggregate::AggregateRoot;
 pub use audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
@@ -28,4 +29,8 @@ pub use types::{AggregateId, Version};
 pub use user::{
     ContactChannelType, ContactPurpose, Person, User, UserCertificate, UserCompanyProfile,
     UserContact, UserStatus,
+};
+pub use wasm_manifest::{
+    DependencySpec, ManifestCommand, ManifestField, ManifestNavItem, ManifestObjectSchema,
+    ManifestPermission, ManifestResource, ModuleManifest, ALLOWED_CAPABILITIES,
 };

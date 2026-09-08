@@ -14,6 +14,9 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+extism = { workspace = true }
+extism-manifest = "1.30"
+sha2 = "0.10"
 
 [dev-dependencies]
 # kv-mem активируется только при компиляции тестов (feature unification),
