@@ -207,6 +207,10 @@
 | `crates/core-application/src/seed.rs` | seed_system_roles_and_policies (Фаза 5): идемпотентный сид 4 ролей + 4 политик, аудит `role.seed.company` |
 | `crates/core-application/src/registry.rs` | CodeRegistry — идемпотентный ensure по кодам (4 регистра) |
 | `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module/preload_metadata_to_registry |
+| `crates/core-domain/src/wasm_manifest.rs` | Манифест модулей v2 (Фаза 9, подфаза 8a): ModuleManifest (18 полей), вложенные типы, validate(), ALLOWED_CAPABILITIES, SUPPORTED_API_VERSION |
+| `crates/core-infrastructure/src/extism_wasm_host.rs` | ExtismWasmHost (Фаза 9, подфаза 8a): load/call/unload через Extism 1.30, лимиты (fuel/память/таймауты), host-fn 8a (whoami/now_ms/module_settings/log_message + KV) в namespace ExtismHost, конверт по Прил. №6, модульный кэш |
+| `crates/core-infrastructure/src/module_kv.rs` | ModuleKv (Фаза 9, подфаза 8a): таблица module_kv + 2 индекса, put/put_if_absent (атомарно через with_transaction)/get/list/delete |
+| `examples/hello_plugin/` | Пример WASM-модуля (вне workspace, wasm32-unknown-unknown): get_info/greet/kv_probe + Cargo.toml + .cargo/config.toml |
 
 ## 13. Учётные данные и окружение
 
@@ -251,6 +255,13 @@ curl -u root:root -H "Content-Type: application/json" \
 
 # Демо / сидинг
 # Нет конкретных инструкций
+
+# Сборка примера WASM-модуля (вне workspace, требует таргет wasm32)
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown -p hello_plugin \
+    --manifest-path examples/hello_plugin/Cargo.toml
+# Полученный .wasm копируется в crates/core-infrastructure/tests/fixtures/hello.wasm
+# как фикстура для интеграционных тестов hello_wasm.rs
 ```
 
 ## 15. История разработки (фазы / этапы)
@@ -263,7 +274,7 @@ curl -u root:root -H "Content-Type: application/json" \
 - [x] Фаза 6: Объекты, CRUD, оптимистичная блокировка
 - [x] Фаза 7: События, версии, аудит, снимки исполнителя — Event Store готов
 - [x] Фаза 8: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
-- [ ] Фаза 9: WASM-модули через Extism, манифест, декларативная регистрация
+- [~] Фаза 9: WASM-модули через Extism, манифест, декларативная регистрация — подфаза 8a (порт WasmHost, манифест v2, ExtismWasmHost, host-fn 8a, ModuleKv, hello_plugin) готова, коммит `11721c6`; остались 8b–8d, декларативная регистрация, ModuleStore, live-проверка
 - [ ] Фаза 10: Транспортный слой (RpcMessage), REST + WebSocket
 - [ ] Фаза 11: Flutter-клиент, SDUI, тёмная тема
 - [ ] Фаза 12: Оффлайн-синхронизация, Optimistic Concurrency Control
