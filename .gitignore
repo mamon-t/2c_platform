@@ -17,4 +17,7 @@ doc/technical_report.md
 
 # Environment
 .env
-.env.local/.module_cache/
+.env.local
+
+# WASM-модули: локальный кэш бинарников (debug REST)
+/.module_cache/
