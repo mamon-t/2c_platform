@@ -26,6 +26,7 @@ const ENTITY_RELATION_TABLE: &str = "entity_relations";
 /// Фиксирует проекцию «Доска» метатиповой модели. Типы сущностей
 /// уникальны по `(code, company_id)`; все дочерние ресурсы ключуются по
 /// `(entity_type, code)` для идемпотентной ensure-семантики.
+#[derive(Clone)]
 pub struct SurrealMetadataRepository {
     db: Surreal<Any>,
 }

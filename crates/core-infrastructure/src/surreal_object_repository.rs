@@ -29,6 +29,7 @@ const SNAPSHOT_FIELDS: &str = "record::id(id) AS id, object_id, version, data, s
     changed_by, changed_at";
 
 /// Фиксирует проекцию «Доска» универсальных объектов.
+#[derive(Clone)]
 pub struct SurrealObjectRepository {
     db: Surreal<Any>,
 }

@@ -1,16 +1,19 @@
 //! Хост WASM-модулей на базе Extism 1.30 (раздел 9 ТЗ): загрузка и валидация
 //! манифеста через `get_info()`, исполнение экспортируемых функций с
-//! ресурсными лимитами (топливо, память, таймауты) и host-функции подфазы 8a
-//! (контекст/сервис и KV-хранилище) в namespace `ExtismHost`.
+//! ресурсными лимитами (топливо, память, таймауты) и host-функции подфаз 8a–8b
+//! (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные)
+//! в namespace `ExtismHost`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use core_application::ports::WasmHost;
+use chrono::Utc;
+use core_application::ports::{MetadataRepository, ObjectRepository, WasmHost};
 use core_domain::error::DomainError;
-use core_domain::event::ActorSnapshot;
+use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_domain::object::Object;
 use core_domain::wasm_manifest::ModuleManifest;
 use extism::{CurrentPlugin, Function, Plugin, PluginBuilder, UserData, Val, ValType, PTR};
 use serde_json::{json, Value};
@@ -19,8 +22,11 @@ use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::module_kv::ModuleKv;
+use crate::surreal_metadata_repository::SurrealMetadataRepository;
+use crate::surreal_object_repository::SurrealObjectRepository;
 
 /// Namespace импортов host-функций, заявленный в ТЗ (Приложение №4).
 const NS_HOST: &str = "ExtismHost";
@@ -51,12 +57,14 @@ pub struct HostCallCtx {
     pub settings: Value,
 }
 
-/// Общие для всех плагинов данные: актуальный контекст вызова, KV-хранилище
-/// и handle текущего tokio-runtime для выполнения асинхронных операций
-/// SurrealDB из синхронных host-функций.
+/// Общие для всех плагинов данные: актуальный контекст вызова, KV-хранилище,
+/// репозитории объектов и метаданных и handle текущего tokio-runtime для
+/// выполнения асинхронных операций SurrealDB из синхронных host-функций.
 struct HostShared {
     ctx: RwLock<HostCallCtx>,
     kv: ModuleKv,
+    objects: SurrealObjectRepository,
+    metadata: SurrealMetadataRepository,
     runtime: Handle,
 }
 
@@ -64,6 +72,16 @@ impl HostShared {
     /// Клон обеспечивает тот же клиент SurrealDB, что и исходный.
     fn kv_module(&self) -> ModuleKv {
         self.kv.clone()
+    }
+
+    /// Клон репозитория объектов для асинхронной операции в `block_on_db`.
+    fn objects_module(&self) -> SurrealObjectRepository {
+        self.objects.clone()
+    }
+
+    /// Клон репозитория метаданных для асинхронной операции в `block_on_db`.
+    fn metadata_module(&self) -> SurrealMetadataRepository {
+        self.metadata.clone()
     }
 }
 
@@ -75,7 +93,7 @@ struct LoadedModule {
     plugin: Option<Plugin>,
 }
 
-/// Хост WASM-модулей с host-функциями подфазы 8a.
+/// Хост WASM-модулей с host-функциями подфаз 8a–8b.
 pub struct ExtismWasmHost {
     modules: RwLock<HashMap<String, LoadedModule>>,
     shared: Arc<HostShared>,
@@ -95,19 +113,28 @@ impl ExtismWasmHost {
             .get(code)
             .map(|m| m.manifest.clone())
     }
-    /// Создаёт хост. `db` используется для KV-хранилища (`module_kv`).
+
+    /// Создаёт хост. `db`, `objects` и `metadata` используются host-функциями
+    /// 8b (объекты «Доски» и метаданные), `cache_dir` — кэш бинарников.
     /// Должен вызываться внутри tokio-runtime (берётся `Handle::current()`).
     ///
     /// # Errors
     ///
     /// Возвращает `DomainError::Storage`, если хост создан вне tokio-runtime.
-    pub fn new(db: Surreal<Any>, cache_dir: PathBuf) -> Result<Self, DomainError> {
+    pub fn new(
+        db: Surreal<Any>,
+        objects: SurrealObjectRepository,
+        metadata: SurrealMetadataRepository,
+        cache_dir: PathBuf,
+    ) -> Result<Self, DomainError> {
         let runtime = Handle::try_current()
             .map_err(|_| DomainError::Storage("WasmHost требует tokio-runtime".to_string()))?;
         Ok(Self {
             shared: Arc::new(HostShared {
                 ctx: RwLock::new(HostCallCtx::default()),
                 kv: ModuleKv::new(db),
+                objects,
+                metadata,
                 runtime,
             }),
             modules: RwLock::new(HashMap::new()),
@@ -130,8 +157,10 @@ impl ExtismWasmHost {
         self.shared.ctx.read().await.clone()
     }
 
-    /// Набор host-функций подфазы 8a. Каждая функция проверяет capability
-    /// модуля из контекста перед выполнением.
+    /// Набор host-функций подфаз 8a–8b. Подфаза 8a — контекст/сервис и
+    /// KV-хранилище; подфаза 8b — объекты «Доски» (`objects.*`) и метаданные
+    /// (`metadata.*`). Каждая функция проверяет capability модуля из контекста
+    /// перед выполнением.
     fn host_functions(&self) -> Vec<Function> {
         let mut funcs = Vec::new();
 
@@ -227,7 +256,7 @@ impl ExtismWasmHost {
                     let kv = shared.kv_module();
                     let company = ctx.company_id.clone();
                     let module = ctx.module_code.clone();
-                    block_on_kv(
+                    block_on_db(
                         &shared,
                         ctx,
                         format!("kv_put:{key}"),
@@ -258,7 +287,7 @@ impl ExtismWasmHost {
                     let kv = shared.kv_module();
                     let company = ctx.company_id.clone();
                     let module = ctx.module_code.clone();
-                    block_on_kv(
+                    block_on_db(
                         &shared,
                         ctx,
                         format!("kv_put_if_absent:{key}"),
@@ -287,7 +316,7 @@ impl ExtismWasmHost {
                     let kv = shared.kv_module();
                     let company = ctx.company_id.clone();
                     let module = ctx.module_code.clone();
-                    block_on_kv(
+                    block_on_db(
                         &shared,
                         ctx,
                         format!("kv_get:{key}"),
@@ -314,7 +343,7 @@ impl ExtismWasmHost {
                     let kv = shared.kv_module();
                     let company = ctx.company_id.clone();
                     let module = ctx.module_code.clone();
-                    block_on_kv(
+                    block_on_db(
                         &shared,
                         ctx,
                         format!("kv_list:{prefix}"),
@@ -345,7 +374,7 @@ impl ExtismWasmHost {
                     let kv = shared.kv_module();
                     let company = ctx.company_id.clone();
                     let module = ctx.module_code.clone();
-                    block_on_kv(
+                    block_on_db(
                         &shared,
                         ctx,
                         format!("kv_delete:{key}"),
@@ -355,6 +384,303 @@ impl ExtismWasmHost {
                         },
                     )
                 });
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "create_object",
+            vec![PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "create_object",
+                    Some("objects.create"),
+                    |ctx, args| {
+                        let entity_type_id = args.first().cloned().unwrap_or_default();
+                        let data_raw = parse_arg(&args.get(1).cloned().unwrap_or_default())?;
+                        let metadata = shared.metadata_module();
+                        let objects = shared.objects_module();
+                        let company = ctx.company_id.clone();
+                        let actor = ctx.actor.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "create_object".to_string(),
+                            async move {
+                                let entity_type = resolve_entity_type(&metadata, &entity_type_id).await?;
+                                let schema = metadata
+                                    .get_schema(&company, &entity_type.code)
+                                    .await?;
+                                let mut obj = Object {
+                                    id: Uuid::new_v4(),
+                                    entity_type: entity_type.code.clone(),
+                                    kind: entity_type.kind,
+                                    company_id: company.clone(),
+                                    state: String::new(),
+                                    data: data_raw,
+                                    computed: json!({}),
+                                    number: None,
+                                    date: None,
+                                    parent_id: None,
+                                    version: 1,
+                                    created_by: actor_login(&actor),
+                                    updated_by: actor_login(&actor),
+                                    created_at: Utc::now(),
+                                    updated_at: Utc::now(),
+                                };
+                                obj.state = schema
+                                    .states
+                                    .iter()
+                                    .find(|s| s.is_initial)
+                                    .map(|s| s.code.clone())
+                                    .unwrap_or_else(|| "draft".to_string());
+                                obj.validate(&schema.fields, &schema.states)?;
+                                let event = module_object_event(
+                                    &obj,
+                                    "object.created",
+                                    &company,
+                                    actor.as_ref(),
+                                );
+                                let stored = objects.create(&obj, &[event]).await?;
+                                Ok(envelope_ok(json!({ "id": stored.id })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "list_objects",
+            vec![PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "list_objects",
+                    Some("objects.read"),
+                    |ctx, args| {
+                        let entity_type_id = args.first().cloned().unwrap_or_default();
+                        let limit = args
+                            .get(1)
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .unwrap_or(100)
+                            .clamp(1, 500);
+                        let metadata = shared.metadata_module();
+                        let objects = shared.objects_module();
+                        let company = ctx.company_id.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "list_objects".to_string(),
+                            async move {
+                                let entity_type = resolve_entity_type(&metadata, &entity_type_id).await?;
+                                let rows = objects
+                                    .list(&entity_type.code, &company, limit)
+                                    .await?;
+                                let total = objects.count(&entity_type.code, &company).await?;
+                                Ok(envelope_ok(json!({
+                                    "objects": rows,
+                                    "total_count": total,
+                                })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "get_object",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "get_object",
+                    Some("objects.read"),
+                    |ctx, args| {
+                        let id = args.first().cloned().unwrap_or_default();
+                        let objects = shared.objects_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "get_object".to_string(),
+                            async move {
+                                let id = parse_aggregate_id(&id, "get_object")?;
+                                let obj = objects.get(&id).await?;
+                                Ok(envelope_ok(json!(obj)))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "update_object",
+            vec![PTR, PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "update_object",
+                    Some("objects.update"),
+                    |ctx, args| {
+                        let id = args.first().cloned().unwrap_or_default();
+                        let data_raw = parse_arg(&args.get(1).cloned().unwrap_or_default())?;
+                        let expected_version = args
+                            .get(2)
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .ok_or_else(|| {
+                                envelope_err("INVALID_VERSION", "update_object: ожидается номер версии")
+                            })?;
+                        let metadata = shared.metadata_module();
+                        let objects = shared.objects_module();
+                        let actor = ctx.actor.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "update_object".to_string(),
+                            async move {
+                                let id = parse_aggregate_id(&id, "update_object")?;
+                                let existing = objects.get(&id).await?;
+                                let schema = metadata
+                                    .get_schema(&existing.company_id, &existing.entity_type)
+                                    .await?;
+                                let data = merge_data(&existing.data, &data_raw)?;
+                                let updated = Object {
+                                    id,
+                                    entity_type: existing.entity_type.clone(),
+                                    kind: existing.kind,
+                                    company_id: existing.company_id.clone(),
+                                    state: existing.state.clone(),
+                                    data,
+                                    computed: existing.computed.clone(),
+                                    number: existing.number.clone(),
+                                    date: existing.date,
+                                    parent_id: existing.parent_id,
+                                    version: expected_version,
+                                    created_by: existing.created_by.clone(),
+                                    updated_by: actor_login(&actor),
+                                    created_at: existing.created_at,
+                                    updated_at: Utc::now(),
+                                };
+                                updated.validate(&schema.fields, &schema.states)?;
+                                let event = module_object_event(
+                                    &updated,
+                                    "object.updated",
+                                    &existing.company_id,
+                                    actor.as_ref(),
+                                );
+                                let stored = objects.update(&updated, &[event]).await?;
+                                Ok(envelope_ok(json!({
+                                    "id": stored.id,
+                                    "version": stored.version,
+                                })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "get_entity_type",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "get_entity_type",
+                    Some("metadata.read"),
+                    |ctx, args| {
+                        let id = args.first().cloned().unwrap_or_default();
+                        let metadata = shared.metadata_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "get_entity_type".to_string(),
+                            async move {
+                                let id = parse_aggregate_id(&id, "get_entity_type")?;
+                                let entity_type = metadata.get_entity_type(&id).await?;
+                                Ok(envelope_ok(json!({
+                                    "id": entity_type.id,
+                                    "code": entity_type.code,
+                                    "name": entity_type.name,
+                                    "kind": entity_type.kind,
+                                })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "list_entity_fields",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "list_entity_fields",
+                    Some("metadata.read"),
+                    |ctx, args| {
+                        let id = args.first().cloned().unwrap_or_default();
+                        let metadata = shared.metadata_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "list_entity_fields".to_string(),
+                            async move {
+                                let id = parse_aggregate_id(&id, "list_entity_fields")?;
+                                let entity_type = metadata.get_entity_type(&id).await?;
+                                let schema = metadata
+                                    .get_schema(&entity_type.company_id, &entity_type.code)
+                                    .await?;
+                                Ok(envelope_ok(json!({ "fields": schema.fields })))
+                            },
+                        )
+                    },
+                );
                 Ok(())
             },
         )
@@ -600,11 +926,12 @@ pub fn unwrap_host(raw: &str) -> Result<Value, DomainError> {
     }
 }
 
-/// Исполняет асинхронную KV-операцию SurrealDB из синхронного контекста
+/// Исполняет асинхронную операцию SurrealDB из синхронного контекста
 /// host-функции: задача ставится в текущий tokio-runtime, результат
 /// ожидается блокирующе через канал. Итоговое значение — строка-конверт
-/// (успех или ошибка), которую host-функция вернёт плагину.
-fn block_on_kv(
+/// (успех или ошибка), которую host-функция вернёт плагину. Коды ошибок
+/// конверта берутся из `DomainError::code()` (например, `CONFLICT_ERROR`).
+fn block_on_db(
     shared: &Arc<HostShared>,
     ctx: &HostCallCtx,
     op: String,
@@ -615,13 +942,76 @@ fn block_on_kv(
         let _ = tx.send(fut.await);
     }));
     rx.recv()
-        .map_err(|_| envelope_err("DB_ERROR", &format!("KV-операция {op} не выполнена")))?
+        .map_err(|_| envelope_err("DB_ERROR", &format!("операция {op} не выполнена")))?
         .map_err(|e| {
             tracing::warn!(
                 module = %ctx.module_code,
                 company = %ctx.company_id,
                 "{op}: {e}"
             );
-            envelope_err("DB_ERROR", &format!("{op}: {e}"))
+            envelope_err(e.code(), &format!("{op}: {e}"))
         })
+}
+
+/// Разрешает id типа сущности в его дескриптор через репозиторий метаданных.
+async fn resolve_entity_type(
+    metadata: &SurrealMetadataRepository,
+    entity_type_id: &str,
+) -> Result<core_domain::metadata::EntityType, DomainError> {
+    let id = parse_aggregate_id(entity_type_id, "resolve_entity_type")?;
+    metadata.get_entity_type(&id).await
+}
+
+/// Разбирает строковый аргумент host-функции в UUID.
+fn parse_aggregate_id(raw: &str, context: &str) -> Result<Uuid, DomainError> {
+    Uuid::parse_str(raw).map_err(|e| {
+        DomainError::ValidationError(format!("{context}: некорректный id '{raw}': {e}"))
+    })
+}
+
+/// Строит событие объекта для «Трубы» от исполнителя вызова (или системы).
+fn module_object_event(
+    obj: &Object,
+    event_type: &str,
+    company_id: &str,
+    actor: Option<&ActorSnapshot>,
+) -> Event {
+    let metadata = actor.cloned().unwrap_or_else(ActorSnapshot::system);
+    Event {
+        id: Uuid::new_v4(),
+        stream_type: StreamType::Object,
+        stream_id: obj.id.to_string(),
+        event_type: event_type.to_string(),
+        version: 0,
+        payload: json!(obj),
+        metadata,
+        company_id: company_id.to_string(),
+        correlation_id: Uuid::new_v4().to_string(),
+        causation_id: None,
+        occurred_at: Utc::now(),
+    }
+}
+
+/// Логин исполнителя для записи `updated_by`/`created_by` объекта.
+fn actor_login(actor: &Option<ActorSnapshot>) -> String {
+    actor
+        .as_ref()
+        .map(|a| a.login.clone())
+        .unwrap_or_else(|| "system".to_string())
+}
+
+/// Накладывает patch-объект поверх базового `data` (частичное обновление).
+fn merge_data(base: &Value, patch: &Value) -> Result<Value, DomainError> {
+    match (base, patch) {
+        (Value::Object(base), Value::Object(patch)) => {
+            let mut merged = base.clone();
+            for (key, value) in patch {
+                merged.insert(key.clone(), value.clone());
+            }
+            Ok(Value::Object(merged))
+        }
+        _ => Err(DomainError::ValidationError(
+            "update_object: data должен быть объектом JSON".to_string(),
+        )),
+    }
 }
