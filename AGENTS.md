@@ -104,7 +104,8 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 Реализовано: Фазы 1–8 (каркас, компании/пользователи/роли, метаданные, аудит, RBAC,
 объекты с OCC, Event Store, CommandRegistry/AppRegistry с ensure-семантикой). Фаза 9 (WASM/Extism):
 готова подфаза 8b (манифест v2, ExtismWasmHost, ModuleKv, host-fn 8a–8b
-объекты и метаданные, hello_plugin с objects_probe) — коммит `3d9e614`.
+объекты и метаданные, hello_plugin с objects_probe, debug-REST `/debug/modules`, `/debug/module/load`,
+`/debug/module/invoke` + live-проверка на живом SurrealDB: KV, объекты, OCC `CONFLICT_ERROR`) — коммит `9d79db7`.
 Не начинать Фазы 10+ (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления, криптоподпись, диагностика, тесты).
 Детали фазирования и приёмки — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
