@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     init_tracing();
 
-    info!("2C Platform Core v0.1.0 запускается...");
+    info!("2C Platform Core v3.0.1 запускается...");
 
     let db = connect_database().await?;
     let store = Arc::new(SurrealEventStore::new(db.clone()));

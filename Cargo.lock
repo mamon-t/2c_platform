@@ -744,7 +744,7 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "core-api"
-version = "0.1.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "core-application"
-version = "0.1.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "core-domain"
-version = "0.1.0"
+version = "3.0.1"
 dependencies = [
  "chrono",
  "semver",
@@ -802,7 +802,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core-infrastructure"
-version = "0.1.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3318,7 +3318,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platform-server"
-version = "0.1.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "axum",
