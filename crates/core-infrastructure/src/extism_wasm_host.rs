@@ -403,7 +403,8 @@ impl ExtismWasmHost {
                     "create_object",
                     Some("objects.create"),
                     |ctx, args| {
-                        let entity_type_id = args.first().cloned().unwrap_or_default();
+                        let entity_type_id =
+                            parse_arg_uuid(args.first().cloned().unwrap_or_default(), "create_object")?;
                         let data_raw = parse_arg(&args.get(1).cloned().unwrap_or_default())?;
                         let metadata = shared.metadata_module();
                         let objects = shared.objects_module();
@@ -414,7 +415,7 @@ impl ExtismWasmHost {
                             ctx,
                             "create_object".to_string(),
                             async move {
-                                let entity_type = resolve_entity_type(&metadata, &entity_type_id).await?;
+                                let entity_type = metadata.get_entity_type(&entity_type_id).await?;
                                 let schema = metadata
                                     .get_schema(&company, &entity_type.code)
                                     .await?;
@@ -473,7 +474,8 @@ impl ExtismWasmHost {
                     "list_objects",
                     Some("objects.read"),
                     |ctx, args| {
-                        let entity_type_id = args.first().cloned().unwrap_or_default();
+                        let entity_type_id =
+                            parse_arg_uuid(args.first().cloned().unwrap_or_default(), "list_objects")?;
                         let limit = args
                             .get(1)
                             .and_then(|s| s.parse::<usize>().ok())
@@ -487,7 +489,7 @@ impl ExtismWasmHost {
                             ctx,
                             "list_objects".to_string(),
                             async move {
-                                let entity_type = resolve_entity_type(&metadata, &entity_type_id).await?;
+                                let entity_type = metadata.get_entity_type(&entity_type_id).await?;
                                 let rows = objects
                                     .list(&entity_type.code, &company, limit)
                                     .await?;
@@ -519,14 +521,14 @@ impl ExtismWasmHost {
                     "get_object",
                     Some("objects.read"),
                     |ctx, args| {
-                        let id = args.first().cloned().unwrap_or_default();
+                        let id =
+                            parse_arg_uuid(args.first().cloned().unwrap_or_default(), "get_object")?;
                         let objects = shared.objects_module();
                         block_on_db(
                             &shared,
                             ctx,
                             "get_object".to_string(),
                             async move {
-                                let id = parse_aggregate_id(&id, "get_object")?;
                                 let obj = objects.get(&id).await?;
                                 Ok(envelope_ok(json!(obj)))
                             },
@@ -552,7 +554,10 @@ impl ExtismWasmHost {
                     "update_object",
                     Some("objects.update"),
                     |ctx, args| {
-                        let id = args.first().cloned().unwrap_or_default();
+                        let id = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "update_object",
+                        )?;
                         let data_raw = parse_arg(&args.get(1).cloned().unwrap_or_default())?;
                         let expected_version = args
                             .get(2)
@@ -568,7 +573,6 @@ impl ExtismWasmHost {
                             ctx,
                             "update_object".to_string(),
                             async move {
-                                let id = parse_aggregate_id(&id, "update_object")?;
                                 let existing = objects.get(&id).await?;
                                 let schema = metadata
                                     .get_schema(&existing.company_id, &existing.entity_type)
@@ -626,14 +630,16 @@ impl ExtismWasmHost {
                     "get_entity_type",
                     Some("metadata.read"),
                     |ctx, args| {
-                        let id = args.first().cloned().unwrap_or_default();
+                        let id = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "get_entity_type",
+                        )?;
                         let metadata = shared.metadata_module();
                         block_on_db(
                             &shared,
                             ctx,
                             "get_entity_type".to_string(),
                             async move {
-                                let id = parse_aggregate_id(&id, "get_entity_type")?;
                                 let entity_type = metadata.get_entity_type(&id).await?;
                                 Ok(envelope_ok(json!({
                                     "id": entity_type.id,
@@ -664,14 +670,16 @@ impl ExtismWasmHost {
                     "list_entity_fields",
                     Some("metadata.read"),
                     |ctx, args| {
-                        let id = args.first().cloned().unwrap_or_default();
+                        let id = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "list_entity_fields",
+                        )?;
                         let metadata = shared.metadata_module();
                         block_on_db(
                             &shared,
                             ctx,
                             "list_entity_fields".to_string(),
                             async move {
-                                let id = parse_aggregate_id(&id, "list_entity_fields")?;
                                 let entity_type = metadata.get_entity_type(&id).await?;
                                 let schema = metadata
                                     .get_schema(&entity_type.company_id, &entity_type.code)
@@ -949,23 +957,33 @@ fn block_on_db(
                 company = %ctx.company_id,
                 "{op}: {e}"
             );
-            envelope_err(e.code(), &format!("{op}: {e}"))
+            envelope_err(host_err_code(&e), &format!("{op}: {e}"))
         })
 }
 
-/// Разрешает id типа сущности в его дескриптор через репозиторий метаданных.
-async fn resolve_entity_type(
-    metadata: &SurrealMetadataRepository,
-    entity_type_id: &str,
-) -> Result<core_domain::metadata::EntityType, DomainError> {
-    let id = parse_aggregate_id(entity_type_id, "resolve_entity_type")?;
-    metadata.get_entity_type(&id).await
+/// Маппит доменную ошибку в коды конверта хоста (Приложение №6 ТЗ v3.0).
+/// Список эталонных кодов: `NOT_FOUND`, `CONFLICT_ERROR`, `DB_ERROR`,
+/// `INVALID_ACTION`, `CAPABILITY_DENIED`. Отдельного кода валидации данных
+/// в ТЗ нет, поэтому `ValidationError` отдаётся как `INVALID_ACTION` —
+/// ближайший код «отклонённого» ввода из разрешённого набора.
+fn host_err_code(e: &DomainError) -> &'static str {
+    match e {
+        DomainError::NotFound(_) => "NOT_FOUND",
+        DomainError::VersionConflict { .. } => "CONFLICT_ERROR",
+        DomainError::ValidationError(_) => "INVALID_ACTION",
+        DomainError::PermissionDenied(_) => "CAPABILITY_DENIED",
+        DomainError::Storage(_) => "DB_ERROR",
+    }
 }
 
-/// Разбирает строковый аргумент host-функции в UUID.
-fn parse_aggregate_id(raw: &str, context: &str) -> Result<Uuid, DomainError> {
-    Uuid::parse_str(raw).map_err(|e| {
-        DomainError::ValidationError(format!("{context}: некорректный id '{raw}': {e}"))
+/// Разбирает обязательный UUID-аргумент host-функции. Код ошибки —
+/// `INVALID_UUID` из эталонного набора (Приложение №6 ТЗ).
+fn parse_arg_uuid(raw: String, fn_name: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(&raw).map_err(|e| {
+        envelope_err(
+            "INVALID_UUID",
+            &format!("{fn_name}: некорректный id '{raw}': {e}"),
+        )
     })
 }
 

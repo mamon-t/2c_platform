@@ -19,6 +19,7 @@ extern "ExtismHost" {
     fn create_object(entity_type_id: String, data_json: String) -> String;
     fn get_object(id: String) -> String;
     fn list_objects(entity_type_id: String, limit: String) -> String;
+    fn update_object(id: String, data_json: String, version: String) -> String;
 }
 
 /// Манифест модуля v2 (раздел 9 ТЗ).
@@ -31,7 +32,7 @@ pub fn get_info() -> FnResult<String> {
         "description": "Демонстрирует host-функции подфаз 8a–8b",
         "author": "2C Platform",
         "api_version": "2.0",
-        "capabilities": ["logging", "storage", "objects.create", "objects.read"],
+        "capabilities": ["logging", "storage", "objects.create", "objects.read", "objects.update"],
         "commands": [{ "code": "greet", "name": "Поздороваться" }],
         "object_schemas": [{
             "code": "greeting",
@@ -79,6 +80,32 @@ pub fn objects_probe(entity_type_id: String) -> FnResult<String> {
     let get_conv = unsafe { get_object(id.clone())? };
     let list_conv = unsafe { list_objects(entity_type_id, "10".to_string())? };
     Ok(format!("create={create_conv}; get={get_conv}; list={list_conv}"))
+}
+
+/// Проверка OCC в `update_object`: вход — JSON-запрос
+/// `{"id": ..., "data": {...}, "version": N}`; возвращает конверт хоста.
+#[extism_pdk::plugin_fn]
+pub fn update_probe(request: String) -> FnResult<String> {
+    let req: serde_json::Value = serde_json::from_str(&request)?;
+    let id = req["id"].as_str().unwrap_or_default().to_string();
+    let data = req["data"].clone().to_string();
+    let version = req["version"].as_u64().unwrap_or(0).to_string();
+    let conv = unsafe { update_object(id, data, version)? };
+    Ok(conv)
+}
+
+/// Прозрачная проба `get_object`: возвращает конверт хоста как есть.
+#[extism_pdk::plugin_fn]
+pub fn get_probe(id: String) -> FnResult<String> {
+    let conv = unsafe { get_object(id)? };
+    Ok(conv)
+}
+
+/// Прозрачная проба `list_objects`: возвращает конверт хоста как есть.
+#[extism_pdk::plugin_fn]
+pub fn list_probe(entity_type_id: String) -> FnResult<String> {
+    let conv = unsafe { list_objects(entity_type_id, "10".to_string())? };
+    Ok(conv)
 }
 
 // Фиктивный помощник, чтобы `Error` был задействован (never-type fallback не

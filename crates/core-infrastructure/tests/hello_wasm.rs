@@ -259,3 +259,96 @@ fn extract_conv<'a>(text: &'a str, marker: &str) -> &'a str {
         .next()
         .unwrap_or_default()
 }
+
+#[tokio::test]
+async fn host_8b_envelope_codes_follow_spec() {
+    let (h, _db, _cache) = host().await;
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["objects.read".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    // Не-UUID аргумент → INVALID_UUID (Приложение №6 ТЗ).
+    let out = h
+        .call_function("hello", "get_probe", b"not-a-uuid")
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"INVALID_UUID\""),
+        "некорректный id должен дать INVALID_UUID, получено: {text}"
+    );
+
+    // Несуществующий тип сущности → NOT_FOUND.
+    let ghost = Uuid::new_v4();
+    let out = h
+        .call_function("hello", "list_probe", ghost.to_string().as_bytes())
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"NOT_FOUND\""),
+        "несуществующий тип должен дать NOT_FOUND, получено: {text}"
+    );
+}
+
+#[tokio::test]
+async fn host_8b_update_object_applies_occ_and_reports_conflict() {
+    let (h, db, _cache) = host().await;
+    let entity_type_id = seed_greeting_schema(&db).await;
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from([
+            "objects.create".to_string(),
+            "objects.read".to_string(),
+            "objects.update".to_string(),
+        ]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "objects_probe", entity_type_id.to_string().as_bytes())
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let created_id = extract_conv(&text, "create=")
+        .split("\"id\":")
+        .nth(1)
+        .and_then(|s| s.trim_start_matches('"').split('"').next())
+        .unwrap()
+        .to_string();
+
+    // Первое обновление с version=1 успешно: объект переходит на версию 2.
+    let req = serde_json::json!({ "id": created_id, "data": { "text": "обновлено" }, "version": 1 });
+    let out = h
+        .call_function("hello", "update_probe", req.to_string().as_bytes())
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"ok\":true") && text.contains("\"version\":2"),
+        "первое обновление должно пройти и поднять версию до 2, получено: {text}"
+    );
+
+    // Второе обновление с той же устаревшей версией 1 → CONFLICT_ERROR.
+    let out = h
+        .call_function("hello", "update_probe", req.to_string().as_bytes())
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"CONFLICT_ERROR\""),
+        "повторное обновление со старой версией должно дать CONFLICT_ERROR, получено: {text}"
+    );
+}
