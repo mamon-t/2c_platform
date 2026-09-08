@@ -17,4 +17,4 @@ doc/technical_report.md
 
 # Environment
 .env
-.env.local
+.env.local/.module_cache/
