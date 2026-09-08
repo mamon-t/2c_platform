@@ -1,5 +1,6 @@
 mod commands;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -11,9 +12,11 @@ use axum::{
 };
 use core_application::command_registry::CommandExecutionCtx;
 use core_application::permission_manager::PermissionManager;
-use core_application::ports::EventStore;
+use core_application::ports::{EventStore, WasmHost};
 use core_application::CommandRegistry;
+use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_infrastructure::extism_wasm_host::{ExtismWasmHost, HostCallCtx};
 use core_infrastructure::{
     connect_db, SurrealAuditRepository, SurrealCompanyRepository, SurrealEventStore,
     SurrealMetadataRepository, SurrealObjectRepository, SurrealPermissionPolicyRepository,
@@ -27,6 +30,7 @@ use tracing_subscriber::EnvFilter;
 struct AppState {
     store: Arc<SurrealEventStore>,
     registry: Arc<CommandRegistry>,
+    host: Arc<ExtismWasmHost>,
 }
 
 #[tokio::main]
@@ -76,6 +80,17 @@ async fn main() -> Result<()> {
         .await
         .context("не удалось создать схему permission_policies")?;
 
+    let cache_dir: PathBuf = std::env::var("MODULE_CACHE_DIR")
+        .unwrap_or_else(|_| "./.module_cache".into())
+        .into();
+    let host = Arc::new(
+        ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), cache_dir.clone()).context("не удалось создать WASM-хост")?,
+    );
+    host.ensure_schema()
+        .await
+        .context("не удалось создать схему ModuleKv")?;
+    info!("WASM-хост Extism готов (module_cache_dir={})", cache_dir.display());
+
     let registry = Arc::new(CommandRegistry::new());
     commands::register_phase2_commands(&registry, companies.clone(), users, roles.clone()).await;
     commands::register_phase3_commands(&registry, metadata.clone()).await;
@@ -97,12 +112,16 @@ async fn main() -> Result<()> {
     let state = AppState {
         store,
         registry,
+        host,
     };
     let app = Router::new()
         .route("/health", get(health))
         .route("/debug/events", post(debug_append_events))
         .route("/debug/streams/{kind}/{sid}", get(debug_read_stream))
         .route("/debug/command", post(debug_command))
+        .route("/debug/modules", get(debug_modules))
+        .route("/debug/module/load", post(debug_module_load))
+        .route("/debug/module/invoke", post(debug_module_invoke))
         .with_state(state);
 
     let addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
@@ -210,6 +229,125 @@ fn parse_stream_type(kind: &str) -> Result<StreamType, (StatusCode, String)> {
             format!("неизвестный тип потока: {kind}"),
         )
     })
+}
+
+/// Загруженные WASM-модули с их манифестами (debug-проверка Фазы 9).
+async fn debug_modules(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let modules = state
+        .host
+        .list_modules()
+        .await
+        .into_iter()
+        .map(|(code, manifest)| serde_json::json!({ "code": code, "manifest": manifest }))
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({ "ok": true, "modules": modules }))
+}
+
+/// Загрузка модуля из base64-байтов: `{"code": "...", "wasm_base64": "..."}`.
+async fn debug_module_load(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use base64::Engine as _;
+
+    let code = payload
+        .get("code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'code'".to_string()))?;
+    let wasm_base64 = payload
+        .get("wasm_base64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'wasm_base64'".to_string()))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(wasm_base64)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("некорректный wasm_base64: {e}")))?;
+    let manifest = state
+        .host
+        .load_module(code, &bytes)
+        .await
+        .map_err(debug_status)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "code": code,
+        "size_bytes": bytes.len(),
+        "manifest": manifest
+    })))
+}
+
+/// Вызов экспортируемой функции модуля:
+/// `{"module": "...", "function": "...", "input": "...", "company_id": "...",
+///   "capabilities": ["..."], "actor": {...}?, "settings": {...}?}`.
+async fn debug_module_invoke(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let module = payload
+        .get("module")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'module'".to_string()))?
+        .to_string();
+    let function = payload
+        .get("function")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'function'".to_string()))?
+        .to_string();
+    let input = payload.get("input").and_then(|v| v.as_str()).unwrap_or_default();
+    let company_id = payload
+        .get("company_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'company_id'".to_string()))?
+        .to_string();
+    let capabilities = payload
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let actor = payload
+        .get("actor")
+        .cloned()
+        .map(serde_json::from_value::<ActorSnapshot>)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("некорректный 'actor': {e}")))?;
+    let settings = payload
+        .get("settings")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let ctx = HostCallCtx {
+        module_code: module.clone(),
+        company_id,
+        actor,
+        capabilities,
+        settings,
+    };
+    state.host.set_call_context(ctx).await;
+    let out = state
+        .host
+        .call_function(&module, &function, input.as_bytes())
+        .await
+        .map_err(debug_status)?;
+    let output = String::from_utf8_lossy(&out).to_string();
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "module": module,
+        "function": function,
+        "output": output
+    })))
+}
+
+/// Маппинг доменных ошибок на HTTP-коды для debug-REST.
+fn debug_status(e: DomainError) -> (StatusCode, String) {
+    let status = if matches!(e, DomainError::NotFound(_)) {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, e.to_string())
 }
 
 async fn shutdown_signal() {

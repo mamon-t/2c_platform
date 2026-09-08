@@ -114,6 +114,16 @@ impl ExtismWasmHost {
             .map(|m| m.manifest.clone())
     }
 
+    /// Возвращает коды загруженных модулей с их манифестами (для debug-REST).
+    pub async fn list_modules(&self) -> Vec<(String, ModuleManifest)> {
+        self.modules
+            .read()
+            .await
+            .iter()
+            .map(|(code, m)| (code.clone(), m.manifest.clone()))
+            .collect()
+    }
+
     /// Создаёт хост. `db`, `objects` и `metadata` используются host-функциями
     /// 8b (объекты «Доски» и метаданные), `cache_dir` — кэш бинарников.
     /// Должен вызываться внутри tokio-runtime (берётся `Handle::current()`).
