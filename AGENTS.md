@@ -1,380 +1,118 @@
-# AGENTS.md — Global Agent Instructions
+# AGENTS.md — 2C Platform
 
-Этот файл задаёт базовые правила работы AI-агента в любом проекте.
-Проектно-специфичная информация заполняется в секции «Контекст проекта» ниже
-или выносится в `docs/agents/<project>.md`.
+Глобальные правила агента (роль, LSP-валидация, запреты на заглушки/`unwrap`, формат вывода)
+заданы в `~/.config/opencode/AGENTS.md` и загружаются автоматически. Ниже — только то,
+что репозиторий не отвечает сам: слои, команды, тесты, live-отладка, конвенции.
 
-## 1. Роль и режим работы
+## Проект и архитектура
 
-Ты — Senior Software Engineer и технический партнёр ведущего разработчика (Михаил, 30+ лет в IT).
+Конфигурируемая документо-событийная платформа (бухгалтерия, управленческий учёт, CRM).
+Спецификация: `doc/TZ_v3.1.md` (`doc/TZ_v3.0.md` — архив).
 
-Ты работаешь в режиме best-effort с явными допущениями: не задаёшь уточняющих вопросов,
-если данных достаточно для разумного решения; если данных не хватает — перечисляешь допущения
-в начале ответа и двигаешься дальше.
+Сквозная модель **Труба + Доска**: каждая изменяющая команда атомарно пишет и событие
+в Event Store (Труба — истина), и материализованную запись (Доска — проекции), и снимок
+в `audit_log` (двухуровневое журналирование: бизнес-события ≠ операционный аудит).
+Сейчас всё выполняется от системного исполнителя `ActorSnapshot::system()` — аутентификации ещё нет.
 
-**Язык общения:** русский.
+## Workspace и слои
 
-**Язык кода, имён переменных/типов, коммитов:** английский (если проект не требует иного).
+Workspace: `crates/core-domain` → `crates/core-application` → `crates/core-infrastructure`
++ `crates/core-api` (транспорт, пока каркас — 1 строка в `lib.rs`) + бинарник `apps/platform-server`.
+Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, компоненты rustfmt + clippy).
 
-**Язык комментариев в коде и пользовательских сообщений:** согласно конвенции проекта (см. раздел 6).
+- Зависимости направлены вниз. `core-domain` — чистый домен, в нём НЕ должно быть
+  `surrealdb`/`axum`/`extism`/`tokio`. Проверка: `cargo tree -p core-domain -e normal`.
+  `core-infrastructure` — единственный слой с SurrealDB и Extism.
+- `examples/hello_plugin` — **вне workspace** (exclude в корневом Cargo.toml); собирается
+  отдельно под `wasm32-unknown-unknown` (см. «Сборка WASM-фикстуры»).
+- Никаих CI-workflow'ов и конфигов rustfmt/clippy в репозитории нет.
 
-## 2. Базовые принципы
+## Ключевые файлы
 
-### 2.1. Сначала анализ, потом код
+| Файл | Зачем нужен |
+|---|---|
+| `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,aggregate,error}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError` |
+| `crates/core-application/src/ports.rs` | Порты: EventStore, все `*Repository`, WasmHost, EntitySchema |
+| `crates/core-application/src/command_registry.rs` | CommandRegistry (префиксные команды) + `CommandExecutionPipeline` (аудит + RBAC перед каждой командой) |
+| `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик, ensure-регистры |
+| `crates/core-infrastructure/src/connector.rs`, `events.rs` | `connect_db` (единая WS-сессия), транзакционные хелперы append/assign_versions/with_transaction |
+| `crates/core-infrastructure/src/surreal_{event_store,company,user,role,permission_policy,object,audit,metadata}_repository.rs` | SQL-доступ по коллекциям; у каждого `ensure_schema()` с UNIQUE-индексами; схема создаётся при старте, а не SQL-миграциями |
+| `crates/core-infrastructure/src/extism_wasm_host.rs`, `module_kv.rs` | WASM-хост (Extism 1.30), host-функции, KV-хранилище модулей |
+| `apps/platform-server/src/main.rs` | Старт: ensure_schema всех репо, регистрация команд по фазам, attach RBAC-pipeline, /health + debug REST |
+| `apps/platform-server/src/commands.rs` | Все команды: `company.*`, `user.*` (+contact/profile), `role.*` (+`role.seed`), `metadata.*`, `object.*` (+snapshot), `document.number.*`, `audit.*`, `system.migrate_permissions` |
 
-Прежде чем писать код:
-1. Прочитай релевантные файлы проекта (структуру, зависимости, смежные модули).
-2. Сформулируй план в 3-5 пунктах.
-3. Если план затрагивает архитектуру — озвучь его ведущему и дождись подтверждения.
-4. Только потом пиши код.
-
-### 2.2. Минимальные изменения
-
-- Меняй только то, что требуется задачей.
-- Не «улучшай» работающий код без запроса (no drive-by refactoring).
-- Если видишь критическую проблему рядом — упомяни её отдельным блоком «⚠️ Замечание», но не чини молча.
-
-### 2.3. Компиляция и тесты — обязательны
-
-После изменения кода запускай `cargo check` / `cargo test` / `flutter analyze` / `dart analyze` (согласно стеку).
-
-Если проект использует LSP (opencode, Cursor) — дожидайся прохождения LSP-валидации.
-
-Никогда не оставляй код в состоянии, которое не проходит статический анализ.
-
-### 2.4. Атомарность коммитов
-
-- Один коммит = одна логическая задача.
-- Сообщение коммита: `<scope>: <краткое описание>` (conventional commits).
-- Если задача большая — разбивай на подзадачи и коммить по мере готовности.
-
-### 2.5. Снимок состояния после коммита
-
-После каждого коммита обновляй `doc/technical_report.md`:
-- снимок вносится строго после создания коммита: сначала код → коммит, затем запись в отчёт
-  с реальным хешем коммита (хеш из `git rev-parse --short HEAD`);
-- добавь запись в таблицу §2 (фаза/статус + колонка «Коммит» с хешем);
-- занеси коммит в «Журнал снимков» (хеш, дата, затронутые разделы);
-- если изменилась архитектура — актуализируй §4-§6;
-- обнови дату в шапке документа.
-
-## 3. Запреты (жесткие)
-
-❌ Не использовать заглушки: `TODO`, `FIXME`, `unimplemented!()`, `pass`, `// ... implement later`.
-
-❌ Не использовать `.unwrap()` / `.expect()` в продакшн-коде (кроме тестов и `main`).
-
-Не хардкодить секреты, токены, пароли. Выносить в `.env` / конфиг.
-
-❌ Не коммитить `.env`, приватные ключи, дампы БД с реальными данными.
-
-❌ Не менять публичные API (эндпоинты, типы, сигнатуры экспортов) без явного согласования.
-
-❌ Не писать код «на будущее» (YAGNI). Реализуй только то, что описано в задаче.
-
-❌ Не использовать `any` (TypeScript), неявные `Any` (Python), `unsafe` (Rust) без обоснования в комментарии.
-
-## 4. Работа с LSP и skills
-
-Если агент запущен в среде с поддержкой LSP (opencode, Cursor):
-
-**LSP Validation Loop** — после каждой правки файла дожидайся диагностики.
-- `severity: 1` (Error) — исправить немедленно.
-- `severity: 2` (Warning) — исправить, если не ломает логику.
-- `severity: 3-4` (Hint/Info) — игнорировать, если не критично.
-
-**Правило «Первых трёх»** — при большом количестве ошибок исправляй 3-5 корневых,
-затем запрашивай новую диагностику. Не пытайся закрыть все 50 сразу.
-
-**Skills** — используй подключённые скиллы (BPMN, LSP-coding и др.) согласно их описанию.
-Если скилл не подключён, но задача подходит под его профиль — упомяни это ведущему.
-
-## 5. Формат вывода
-
-- Код — в блоках ```language ... ``` с указанием языка.
-- Перед блоком кода — краткое описание (1-2 предложения) и список допущений (если есть).
-- После блока кода — только если есть вопросы к ведущему или предупреждения.
-- Для больших изменений — предлагай diff-формат или разбивку по файлам.
-- Никогда не выводи «полный файл», если просят только изменение (экономия токенов).
-
-## 6. Чек-лист самопроверки (перед выдачей результата)
-
-- [ ] Код проходит статический анализ (LSP / компилятор / линтер)?
-- [ ] Все импорты/зависимости добавлены? Нет ли неиспользуемых?
-- [ ] Обработаны ошибки (Result/Option, try/catch, исключения)?
-- [ ] Нет ли хардкода секретов и путей?
-- [ ] Соответствует ли стиль кода конвенциям проекта (раздел 11)?
-- [ ] Обновлена ли документация / AGENTS.md, если изменилась архитектура?
-- [ ] Написаны ли тесты (если проект требует)?
-
-## 7. Эскалация к ведущему
-
-Обратись к Михаилу явно, если:
-- Задача затрагивает архитектуру или публичное API.
-- Требуется выбор между несколькими подходами с разными трейдоффами.
-- Обнаружена критическая проблема в существующем коде (не по задаче).
-- Нужны учётные данные, токены, доступы.
-- Оценка задачи превышает 2-3 часа работы агента.
-
----
-
-# Контекст проекта (заполняется при инициализации)
-
-## 8. О проекте
-
-**Название:** 2C Platform / 2С
-
-**Краткое описание:** Конфигурируемая документо-событийная платформа для малого и среднего бизнеса
-
-**Домен:** Бухгалтерия, Управленческий учёт, CRM
-
-**Ссылки:** [Техническое задание v3.1](TZ_v3.1.md) (v3.0 — [архив](TZ_v3.0.md))
-
-## 9. Стек технологий
-
-**Backend:** Rust, Tokio, Axum, SurrealDB, Extism + wasmtime, Rhai
-
-**Frontend:** Flutter, Dart
-
-**База данных:** SurrealDB
-
-**Инфраструктура:** Linux-first (в будущем поддержка Windows, macOS)
-
-**Ключевые библиотеки:** cpcsp-rs (для криптоподписи), Extism (для WASM-модулей)
-
-## 10. Структура проекта
-
-```
-2C/
- ├── Cargo.toml              # workspace: crates/* + apps/platform-server (логи)
- ├── rust-toolchain.toml     # channel = "1.96.0"
- ├── .gitignore
- ├── doc/
- │   ├── TZ_v3.1.md          # техническое задание v3.1 (архитектурная спецификация)
- │   ├── TZ_v3.0.md          # техническое задание v3.0 (архив)
- │   └── surreal-docker.md   # развертывание SurrealDB в Docker
- ├── crates/                 # библиотеки ядра (слои, направление зависимостей вниз)
- │   ├── core-domain/        # чистый домен: AggregateId, Event, Command, Object, DomainError
- │   ├── core-application/   # оркестрация: ports (EventStore/ObjectRepository/WasmHost),
- │   │                       #   CommandRegistry, AppRegistry, CodeRegistry
- │   ├── core-infrastructure/# SurrealDB (Event Store), Extism, CryptoPro
- │   └── core-api/           # транспорт: Axum, WebSocket, RpcMessage (каркас)
- ├── apps/
- │   └── platform-server/    # бинарник сервера: /health, debug REST, graceful shutdown
- └── surreal-tui/            # автономная TUI-утилита для SurrealDB, НЕ член workspace
-```
-
-## 11. Конвенции проекта
-
-- **Язык кода:** английский
-- **Язык комментариев:** русский
-- **Язык логов и сообщений пользователю:** русский
-- **Стиль коммитов:** conventional commits
-- **Именование:** snake_case
-- **Обработка ошибок:** Result-тип, идиоматичные Rust-паттерны
-
-## 12. Ключевые файлы и модули
-
-| Файл / модуль | Назначение |
-|---------------|------------|
-| `crates/core-infrastructure/src/surreal_event_store.rs` | SurrealEventStore: connect, ensure_schema (4 индекса), идемпотентный append, read_stream |
-| `crates/core-infrastructure/src/surreal_company_repository.rs` | CompanyRepository: CRUD, транзакционная запись «Доска+Труба», ensure_schema (UNIQUE-код) |
-| `crates/core-infrastructure/src/surreal_user_repository.rs` | UserRepository: users/persons/contacts/profiles/certificates, транзакции, ensure_schema (UNIQUE-логин) |
-| `crates/core-infrastructure/src/surreal_role_repository.rs` | RoleRepository: create/get/get_by_code/list/get_policies_for_user, транзакции, ensure_schema (UNIQUE `(company_id, code)`, миграция индекса в Фазе 5) |
-| `crates/core-infrastructure/src/surreal_permission_policy_repository.rs` | PermissionPolicyRepository (Фаза 5): upsert = ensure по `code`, get_by_code/get_by_codes; UNIQUE `code` |
-| `crates/core-infrastructure/src/surreal_object_repository.rs` | ObjectRepository (Фаза 6 по ТЗ v3.1): objects/object_snapshots/document_numbers, атомарная нумерация документов `{et}-{YYYY}-{NNNN}`, OCC через version, delete только у черновиков, restore_snapshot; 8 интеграционных тестов |
-| `crates/core-infrastructure/src/surreal_audit_repository.rs` | AuditRepository (Фаза 4 по ТЗ v3.1): audit_log + 5 индексов, append-only log через with_transaction, query с билдером биндов (ORDER BY timestamp DESC, LIMIT); 8 интеграционных тестов |
-| `crates/core-infrastructure/src/events.rs` | Транзакционные хелперы: append_events, assign_versions, write_events, with_transaction (обобщённая по типу результата) |
-| `crates/core-infrastructure/src/connector.rs` | connect_db: единая WS-сессия (Surreal<Any>) |
-| `apps/platform-server/src/commands.rs` | Команды: company.*, user.* (+contact/profile), role.* (в т.ч. role.seed), metadata.*, object.* (+snapshot), document.number.*, audit.*, system.migrate_permissions; системный актор |
-| `apps/platform-server/src/main.rs` | Бинарник: подключение к SurrealDB, AppState, /health, debug REST (POST /debug/events, POST /debug/command, GET /debug/streams/{kind}/{sid}) |
-| `doc/TZ_v3.1.md` | Техническое задание v3.1, архитектурные принципы (аудит, RBAC, CommandExecutionPipeline) |
-| `doc/technical_report.md` | Рабочий отчёт о состоянии системы (локальный, в .gitignore) |
-| `crates/core-domain/src/lib.rs` | Чистый домен: переэкспорт модулей (types, event, metadata, object, aggregate, error, …) |
-| `crates/core-domain/src/event.rs` | StreamType (10 видов: object…module, metadata), Event, ActorSnapshot + `system()` |
-| `crates/core-domain/src/company.rs` | Модель Company (Фаза 2) |
-| `crates/core-domain/src/user.rs` | Модели User, Person, UserContact, UserCompanyProfile, UserCertificate + enums (Фаза 2) |
-| `crates/core-domain/src/role.rs` | Модель Role (Фазы 2/5, поля `permission_policy_codes`, `is_system`) |
-| `crates/core-domain/src/permission.rs` | Модель PermissionPolicy (Фаза 5): scope_type, entity_type, actions, record_access, deny, priority; PermissionScopeType, RecordAccessLevel (Прил. №7 ТЗ v3.1) |
-| `crates/core-domain/src/audit.rs` | Модель аудита (Фаза 4 по ТЗ v3.1): AuditEntry, AuditTarget, AuditResult, AuditFilter |
-| `crates/core-domain/src/metadata.rs` | Метаданные (Фаза 3): EntityType, EntityField, EntityState, EntityTransition, EntityForm, EntityAction, EntityRelation, FieldType, RelationKind, OnDelete; EntityKind = ObjectKind |
-| `crates/core-domain/src/object.rs` | Объекты (Фаза 6 по ТЗ v3.1): Object, ObjectSnapshot, ObjectKind, `validate(fields, states)`, `is_document()` |
-| `crates/core-domain/src/aggregate.rs` | AggregateRoot + OCC-проверка последовательности событий |
-| `crates/core-domain/src/error.rs` | DomainError (5 вариантов) + `code()` для RpcMessage::Error |
-| `crates/core-application/src/ports.rs` | Порты: EventStore, ObjectRepository, WasmHost, CompanyRepository, UserRepository, RoleRepository, PermissionPolicyRepository, AuditRepository, MetadataRepository + EntitySchema |
-| `crates/core-application/src/command_registry.rs` | CommandRegistry (Приложение №1) + multicast `remove_by_prefix` + `CommandExecutionPipeline` (аудит + проверка прав) |
-| `crates/core-application/src/permission_manager.rs` | PermissionManager (Фаза 5): детерминированная проверка прав по политикам и ролям, deny-by-default, deny overrides allow |
-| `crates/core-application/src/seed.rs` | seed_system_roles_and_policies (Фаза 5): идемпотентный сид 4 ролей + 4 политик, аудит `role.seed.company` |
-| `crates/core-application/src/registry.rs` | CodeRegistry — идемпотентный ensure по кодам (4 регистра) |
-| `crates/core-application/src/app_registry.rs` | AppRegistry (Приложение №2): 5 регистров + register_module/unregister_module/preload_metadata_to_registry |
-| `crates/core-domain/src/wasm_manifest.rs` | Манифест модулей v2 (Фаза 9, подфаза 8a): ModuleManifest (18 полей), вложенные типы, validate(), ALLOWED_CAPABILITIES, SUPPORTED_API_VERSION |
-| `crates/core-infrastructure/src/extism_wasm_host.rs` | ExtismWasmHost (Фаза 9, подфаза 8a): load/call/unload через Extism 1.30, лимиты (fuel/память/таймауты), host-fn 8a (whoami/now_ms/module_settings/log_message + KV) в namespace ExtismHost, конверт по Прил. №6, модульный кэш |
-| `crates/core-infrastructure/src/module_kv.rs` | ModuleKv (Фаза 9, подфаза 8a): таблица module_kv + 2 индекса, put/put_if_absent (атомарно через with_transaction)/get/list/delete |
-| `examples/hello_plugin/` | Пример WASM-модуля (вне workspace, wasm32-unknown-unknown): get_info/greet/kv_probe + Cargo.toml + .cargo/config.toml |
-
-## 13. Учётные данные и окружение
-
-- **Dev-учётки:** Нет специфических данных
-- **Demo-учётки:** Нет специфических данных
-- **Переменные окружения:** Нет специфических переменных
-- **Порты:** Нет специфических портов
-
-## 14. Скрипты и команды
+## Команды
 
 ```bash
-# Разработка
 cargo build
-cargo run
-cargo test
+cargo test                 # ср. ниже: интеграционные тесты НЕ требуют живого SurrealDB
+cargo test -p core-infrastructure   # только интеграционные приёмочные (mem://)
+cargo clippy --workspace --all-targets   # ⚠️ surrealdb-core делает медленным — ставь таймаут >= 600s
+cargo +1.96.0 fmt --all    # toolchain уже закреплён, + не нужен
 
-# Тесты
-cargo test --workspace
-
-# Статический анализ (внимание: surrealdb-core делает медленным, таймаут >= 600s)
-cargo clippy --workspace --all-targets
-
-# Контроль зависимостей слонов (в доменных слоях не должно быть surrealdb/axum/extism)
-cargo tree -p core-domain -e normal
-
-# Сборка
-cargo build --release
-
-# Живой сервер + debug REST
-cargo run -p platform-server   # читает .env (SURREAL_*, SERVER_ADDR)
+# Сервер (читает .env через dotenvy)
+cargo run -p platform-server
 curl :8080/health
+curl -X POST :8080/debug/command -H 'Content-Type: application/json' \
+     -d '{"name":"company.create","params":{"code":"x","name":"X"}}'
 curl -X POST :8080/debug/events -H 'Content-Type: application/json' -d '[{...Event...}]'
-curl :8080/debug/streams/{kind}/{sid}   # kind: object | user | module
+curl :8080/debug/streams/object/{sid}
 
-# Прямой SQL к SurrealDB (NS/DB через заголовки Surreal-NS/Surreal-DB)
-curl -u root:root -H "Content-Type: application/json" \
-     -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" \
-     :8000/sql --data "SELECT ... FROM events;"
+# Прямой SQL к SurrealDB (NS/DB — заголовки)
+curl -u root:root -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" :8000/sql \
+     --data "SELECT * FROM events LIMIT 5;"
+```
 
-# Деплой
-# Нет конкретных инструкций
+## Тесты — как это реально работает
 
-# Демо / сидинг
-# Нет конкретных инструкций
+- Интеграционные тесты `core-infrastructure` (`tests/phase5_rbac.rs`, `tests/hello_wasm.rs`)
+  гоняются на `mem://`-базе: репозитории подключаются к SurrealDB через feature `kv-mem`
+  (активируется только для тестов в `[dev-dependencies]`). Живой сервер не нужен.
+- `hello_wasm.rs` требует фикстуру `crates/core-infrastructure/tests/fixtures/hello.wasm`.
+  Она компилируется из `examples/hello_plugin` и закоммичена; после изменения модуля —
+  пересобрать и заменить (см. ниже).
+- Модульные тесты внутри репозиториев (напр., `ObjectRepository`) — тоже `mem://`, без внешних сервисов.
 
-# Сборка примера WASM-модуля (вне workspace, требует таргет wasm32)
+## Сборка WASM-фикстуры (вне workspace)
+
+```bash
 rustup target add wasm32-unknown-unknown
 cargo build --release --target wasm32-unknown-unknown -p hello_plugin \
     --manifest-path examples/hello_plugin/Cargo.toml
-# Полученный .wasm копируется в crates/core-infrastructure/tests/fixtures/hello.wasm
-# как фикстура для интеграционных тестов hello_wasm.rs
+cp examples/hello_plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm \
+   crates/core-infrastructure/tests/fixtures/hello.wasm
 ```
 
-## 15. История разработки (фазы / этапы)
+## Окружение
 
-- [x] Фаза 1: Каркас проекта, подключение к SurrealDB, диагностика
-- [x] Фаза 2: Компании, расширенная модель пользователей, роли
-- [x] Фаза 3: Метаданные (entity_types, fields, states, transitions, forms, relations, actions)
-- [x] Фаза 4: Аудит действий (audit_log), AuditRepository (Приложение №6 ТЗ v3.1) — коммит `5ed7dbb`
-- [x] Фаза 5: Права доступа (permission_policies), PermissionManager, CommandExecutionPipeline, системные роли (Приложение №7 ТЗ v3.1) — коммит `65ee830`
-- [x] Фаза 6: Объекты, CRUD, оптимистичная блокировка
-- [x] Фаза 7: События, версии, аудит, снимки исполнителя — Event Store готов
-- [x] Фаза 8: CommandRegistry, AppRegistry, 5 регистров с ensure-семантикой
-- [~] Фаза 9: WASM-модули через Extism, манифест, декларативная регистрация — подфаза 8a (порт WasmHost, манифест v2, ExtismWasmHost, host-fn 8a, ModuleKv, hello_plugin) готова, коммит `11721c6`; остались 8b–8d, декларативная регистрация, ModuleStore, live-проверка
-- [ ] Фаза 10: Транспортный слой (RpcMessage), REST + WebSocket
-- [ ] Фаза 11: Flutter-клиент, SDUI, тёмная тема
-- [ ] Фаза 12: Оффлайн-синхронизация, Optimistic Concurrency Control
-- [ ] Фаза 13: Rhai-скрипты, редактор, Core API
-- [ ] Фаза 14: Модуль управленческого учёта, проводки, ОСВ, баланс
-- [ ] Фаза 15: CSV-экспорт, HTML-печатные формы
-- [ ] Фаза 16: Уведомления inapp + e-mail
-- [ ] Фаза 17: Криптоподпись через cpcsp-rs (Linux)
-- [ ] Фаза 18: Пакет диагностики, логирование, маскирование ПД
-- [ ] Фаза 19: Тесты и документация
+`.env` (gitignored, образец — в репо отсутствует; обязателен для запуска сервера):
+`SURREAL_HOST=host:8000`, `SURREAL_USER/PASS/NS/DB`, `SERVER_ADDR=0.0.0.0:8080`.
+SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), порт 8000.
+`doc/technical_report.md` — локальный рабочий отчёт, также gitignored.
 
-**Примечание о порядке выполнения:**
-Фазы могут выполняться не строго по порядку, если есть архитектурные зависимости.
-По ТЗ v3.1 Аудит (Фаза 4) и Права доступа (Фаза 5) должны быть реализованы ДО бизнес-логики,
-чтобы объекты сразу создавались с проверкой прав и записью в аудит; фактически объекты (Фаза 6)
-выполнены раньше, поэтому при реализации Фаз 4-5 нужно будет пройтись по существующим командам
-`CommandRegistry` конвейером `CommandExecutionPipeline`.
-Фактический порядок выполнения фиксируется в technical_report.md.
+## Конвенции проекта
 
-## 16. Ограничения и риски
+- Код, идентификаторы, типы — английские; **комментарии в коде и логи/сообщения — русские**.
+- Коммиты: conventional commits `<scope>: <описание>`, scope часто `feat(phaseN)`/`docs(agents)`/`chore`.
+- Именование snake_case, ошибки — через `Result`, без `unwrap`/`expect` в проде.
+- **Снимок после каждого коммита** (обязательно): сначала код → коммит, затем запись
+  в `doc/technical_report.md` — таблица фаз §2 с хешем из `git rev-parse --short HEAD`
+  и «Журнал снимков» (хеш, дата, затронутые разделы).
 
-- **Производительность:** Нет целевых метрик
-- **Безопасность:** Криптографическая безопасность через cpcsp-rs
-- **Известные проблемы:** Нет специфических проблем
-- **Техдолг:** Нет явных проблем с техдолгом
+## Статус фаз (что уже работает)
 
-## 17. Интеграции
+Реализовано: Фазы 1–8 (каркас, компании/пользователи/роли, метаданные, аудит, RBAC,
+объекты с OCC, Event Store, CommandRegistry/AppRegistry с ensure-семантикой). Фаза 9 (WASM/Extism):
+готова подфаза 8a (манифест v2, ExtismWasmHost, host-fn, ModuleKv, hello_plugin) — коммит `11721c6`.
+Не начинать Фазы 10+ (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления, криптоподпись, диагностика, тесты).
+Детали фазирования и приёмки — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
-- **Внешние API:** SurrealDB, cpcsp-rs
-- **Протоколы:** REST/HTTP, WebSocket/SSE
-- **Эмуляторы / стенды:** Нет специфических эмуляторов
+## Решения, которые не предлагать заново
 
-## 18. Специфичные skills проекта
-
-Перечисли кастомные скиллы (skills), которые агент должен применять в этом проекте.
-Укажи триггеры (когда применять) и путь к файлу `SKILL.md`.
-
-| Название скилла | Триггер (когда применять) | Путь к файлу |
-|-----------------|---------------------------|--------------|
-| lsp-code-generation | Написание или исправление кода на Rust | `.config/opencode/skills/lsp-code-generation/SKILL.md` |
-| bpmn-2.0 | Генерация BPMN по текстовому описанию | `.config/opencode/skills/bpmn/SKILL.md` |
-
-## 19. Глоссарий домена
-
-Термины, аббревиатуры и сущности предметной области. Помогает агенту не путать понятия
-и не предлагать некорректные названия для переменных/таблиц.
-
-| Термин / Аббревиатура | Расшифровка и смысл | Английский эквивалент (для кода) |
-|-----------------------|---------------------|----------------------------------|
-| 2C Platform / 2С | Конфигурируемая документо-событийная платформа для малого и среднего бизнеса | Platform |
-| WASM | WebAssembly — бинарный формат инструкций для стековой виртуальной машины | WASM |
-| Extism | Фреймворк для хостинга WASM-модулей с capability-моделью и ресурсными лимитами | Extism |
-| wasmtime | Runtime для выполнения WASM-модулей, используется под капотом Extism | wasmtime |
-| SurrealDB | Мульти-модельная база данных с поддержкой документов, графов, ключ-значение и встроенными ACID-транзакциями | SurrealDB |
-| Flutter | UI-фреймворк от Google для создания кроссплатформенных приложений | Flutter |
-| Dart | Язык программирования, используемый во Flutter для клиентской логики | Dart |
-| SDUI | Server-Driven UI — паттерн, при котором сервер отдаёт метаданные для генерации UI на клиенте | SDUI |
-| Event Sourcing | Паттерн хранения состояния как последовательности неизменяемых событий | EventSourcing |
-| CQRS | Command Query Responsibility Segregation — разделение операций на команды (изменение) и запросы (чтение) | CQRS |
-| OCC | Optimistic Concurrency Control — оптимистичная блокировка через версионирование документов | OCC |
-| RPC | Remote Procedure Call — механизм вызова удалённых процедур | RPC |
-| REST | Representational State Transfer — архитектурный стиль для HTTP API | REST |
-| WebSocket | Протокол полнодуплексной связи поверх TCP для push-уведомлений от сервера к клиенту | WebSocket |
-| SSE | Server-Sent Events — однонаправленный поток событий от сервера к клиенту | SSE |
-| AppRegistry | Группирующая структура, содержащая 5 регистров: CommandRegistry, PermissionRegistry, ObjectSchemaRegistry, PrintTemplateRegistry, ScriptRegistry | AppRegistry |
-| CommandRegistry | Динамический реестр команд с `tokio::sync::RwLock`, поддерживающий регистрацию/удаление в рантайме | CommandRegistry |
-| Ensure-семантика | Идемпотентная регистрация ресурсов: повторный вызов не создаёт дублей, обновление только при изменении версии | EnsureSemantics |
-| DependencySpec | Спецификация зависимости модуля: код, версия (semver), обязательность | DependencySpec |
-| Capability | Технический грант, разрешающий WASM-модулю вызывать определённые host-функции | Capability |
-| RBAC | Role-Based Access Control — управление доступом на основе ролей | RBAC |
-| EventBatch | Пакет событий, отправляемый клиентом на сервер при восстановлении сети после оффлайн-работы | EventBatch |
-| ServerPush | Сообщение, инициированное сервером и отправленное клиенту через WebSocket/SSE | ServerPush |
-| Труба и Доска | Концепция: Труба (Event Store) — истина, Доска (Projections) — материализованные представления | PipeAndBoard |
-| Двухуровневое журналирование | Event Store хранит бизнес-события (восстановление состояния), `audit_log` — операционные действия (безопасность/compliance) | TwoTierLogging |
-| AuditEntry | Запись операционного аудита: действие, актор, цель, результат, детали, timestamp | AuditEntry |
-| AuditRepository | Порт ядра (`audit_log`) для записи и чтения записей аудита, фильтрация через AuditFilter | AuditRepository |
-| PermissionManager | Сервис в `core-application`: детерминированная проверка прав по политикам и ролям | PermissionManager |
-| CommandExecutionPipeline | Middleware-обёртка вокруг `CommandRegistry::execute`: аудит + проверка прав + выполнение | CommandExecutionPipeline |
-| PermissionPolicy | Политика доступа: scope_type, entity_type, actions, record_access, deny, priority | PermissionPolicy |
-| PermissionScopeType | Область политики: Platform, Module(code), Metadata, None | PermissionScopeType |
-| RecordAccessLevel | Уровень доступа к записям: Owned, ByRole, ByCompany, All | RecordAccessLevel |
-| Deny-by-default | Безопасность по умолчанию: не разрешённое явно действие запрещено; deny overrides allow | DenyByDefault |
-
-## 20. Архитектурные решения (ADR)
-
-Краткие записи «почему мы сделали именно так». Предотвращает ситуации,
-когда агент предлагает отменённые или заведомо неподходящие подходы.
-
-| ID | Тема решения | Принятое решение | Обоснование (почему не иначе) | Статус |
-|----|--------------|------------------|-------------------------------|--------|
-| ADR-001 | Обработка обрывов соединения | Reconnect + очистка памяти в async-цикле Tokio | WebSocket/SSE не гарантируют доставку, сессии должны умирать чисто. Используется tokio::select! и Drop-трейты для очистки ресурсов. | ✅ Принято |
-| ADR-002 | Хранение паролей | Argon2id, без самописных хешей | Требования безопасности, устойчивость к брутфорсу | ✅ Принято |
-| ADR-003 | Транспортный протокол | REST/HTTP для Command/Query, WebSocket/SSE для ServerPush и EventBatch | Удобство отладки (REST), поддержка push-уведомлений (WebSocket), единый конверт RpcMessage для всех типов сообщений | ✅ Принято |
-| ADR-004 | Криптоподпись ГОСТ | cpcsp-rs (собственная библиотека), Linux-first, в рамках v0.1 | КриптоПро требует лицензии и специфичного окружения, но cpcsp-rs предоставляет безопасный Rust API для подписи хэша. Интеграция в первой очереди. | ✅ Принято |
-| ADR-005 | База данных | SurrealDB (мульти-модельная, ACID-транзакции) | MongoDB не поддерживает полноценные ACID-транзакции для финансового ядра. SurrealDB даёт документы, графы, ключ-значение и встроенные транзакции. | ✅ Принято |
-| ADR-006 | Frontend | Flutter + Dart (кроссплатформенный) | Tauri + Svelte ограничены desktop/web. Flutter даёт Linux, Windows, macOS, iOS, Android, Web из одной кодовой базы. Platform Channels + FFI для работы с периферией. | ✅ Принято |
-| ADR-007 | Архитектура событий | Event Sourcing + CQRS | Event Store (Труба) — истина, Projections (Доска) — материализованные представления. Полный аудит, возможность отмотки состояния, основа для интеграций. | ✅ Принято |
-| ADR-008 | UI-паттерн | Server-Driven UI (SDUI) | Метаданные первичны. UI генерируется из object_schemas и forms. Кастомные виджеты регистрируются локально и вызываются по коду из метаданных. | ✅ Принято |
-| ADR-009 | Оффлайн-синхронизация | Optimistic Concurrency Control (OCC) через version | Автоматический мердж опасен для финансово-учётных систем. Строгий OCC: несовпадение версий → CONFLICT_ERROR, ручное разрешение конфликта пользователем. | ✅ Принято |
-| ADR-010 | Модульность | WASM-плагины через Extism | Изоляция, безопасность, ресурсные лимиты. Capability-модель для host-функций. Декларативная регистрация с ensure-семантикой. | ✅ Принято |
-| ADR-011 | Двухуровневое журналирование | Event Store (бизнес-события) и `audit_log` (операционные действия) — отдельные подсистемы | Разные цели: восстановление состояния vs безопасность/compliance. У `audit_log` retention policy, Event Store append-only. | ✅ Принято |
-| ADR-012 | Строгий RBAC | Deny-by-default: `PermissionManager` с приоритетами политик, deny overrides allow; проверка встроена в `CommandExecutionPipeline` | Ни одна команда не выполнится без проверки прав; команда не может «забыть» аудит. | ✅ Принято |
-| ADR-013 | Порядок фаз | Аудит (Фаза 4) и права (Фаза 5) реализуются ДО бизнес-логики объектов (ТЗ v3.1) | Объекты сразу создаются с проверкой прав и записью в аудит. Объекты (Фаза 6) фактически сделаны раньше — потребуется прогон через конвейер. | ✅ Принято |
+- **RBAC**: deny-by-default, `PermissionManager` + pipeline встроен в каждую команду (ADR-012).
+- **БД**: SurrealDB, а не MongoDB (нужны ACID-транзакции) (ADR-005).
+- **Синхронизация**: строгий OCC через `version`, конфликт → ручное разрешение (ADR-009).
+- **Модульность**: WASM-плагины через Extism с capability-моделью (ADR-010).
+- **Криптоподпись**: cpcsp-rs, Linux-first (ADR-004).
+- **UI будущего клиента**: Flutter + SDUI из метаданных (ADR-006, ADR-008).
+- **JMJ-слой**: Event Store — true source, `audit_log` — операционный, с retention (ADR-011).
