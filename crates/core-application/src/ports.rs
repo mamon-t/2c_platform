@@ -101,6 +101,14 @@ pub trait ObjectRepository: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = Result<Vec<Object>, DomainError>> + Send;
 
+    /// Возвращает общее количество объектов типа сущности в компании
+    /// (без применения `limit`); используется для пагинации и `total_count`.
+    fn count(
+        &self,
+        entity_type: &str,
+        company_id: &str,
+    ) -> impl Future<Output = Result<u64, DomainError>> + Send;
+
     /// Перечисляет историю версий объекта, сначала самые старые.
     fn get_snapshots(
         &self,

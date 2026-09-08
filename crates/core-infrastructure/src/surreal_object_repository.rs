@@ -318,6 +318,31 @@ impl ObjectRepository for SurrealObjectRepository {
         decode_rows("objects", rows)
     }
 
+    async fn count(
+        &self,
+        entity_type: &str,
+        company_id: &str,
+    ) -> Result<u64, DomainError> {
+        let mut response = self
+            .db
+            .query(format!(
+                "SELECT count() AS total FROM {OBJECT_TABLE} \
+                 WHERE entity_type = $et AND company_id = $cid GROUP ALL"
+            ))
+            .bind(("et", entity_type.to_string()))
+            .bind(("cid", company_id.to_string()))
+            .await
+            .map_err(|e| DomainError::Storage(format!("objects count: {e}")))?;
+        let rows: Vec<Value> = response
+            .take(0)
+            .map_err(|e| DomainError::Storage(format!("objects count take: {e}")))?;
+        Ok(rows
+            .first()
+            .and_then(|row| row.get("total"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0))
+    }
+
     async fn get_snapshots(
         &self,
         object_id: &AggregateId,
@@ -712,6 +737,27 @@ mod tests {
         assert_eq!(repo.list("invoice", "c1", 10).await.unwrap().len(), 1);
         assert_eq!(repo.list("invoice", "c2", 10).await.unwrap().len(), 1);
         assert_eq!(repo.list("absent", "c1", 10).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn count_is_scoped_by_type_and_company() {
+        let (repo, _store) = fixtures().await;
+        repo.create(
+            &sample_object("c1", json!({})),
+            &[system_event("a", "object.created")],
+        )
+        .await
+        .unwrap();
+        repo.create(
+            &sample_object("c2", json!({})),
+            &[system_event("b", "object.created")],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repo.count("invoice", "c1").await.unwrap(), 1);
+        assert_eq!(repo.count("invoice", "c2").await.unwrap(), 1);
+        assert_eq!(repo.count("absent", "c1").await.unwrap(), 0);
     }
 
     #[tokio::test]
