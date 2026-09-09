@@ -110,7 +110,13 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 готовы подфазы 9b (ModuleStore: каталог `modules` + проекция `company_modules`, ModuleManager
 с декларативной регистрацией политик/схем/команд по манифесту, команды `module.install/uninstall/
 enable/disable/list/info` с правом `module.manage`, кэш `~/.cache/2c-platform/modules`,
-интеграционные тесты `phase9b_modules` на `mem://` + live-проверка полного цикла жизни hello).
+интеграционные тесты `phase9b_modules` на `mem://` + live-проверка полного цикла жизни hello);
+готова подфаза 9c (первая реальная host-fn `emit_event` — запись в Event Store c cap `events.emit`,
+коды `INVALID_UUID`/`INVALID_JSON`/`DB_ERROR`; заглушки `run_script`/`notify_user`/`users_by_role`/
+`signature_required`/`cms_verify` со строгими конвертами Прил. №6; **reinstall — первоклассная
+операция**: `module.installed/reinstalled/uninstalled` в потоке Module + аудит «кто ставил/удалял/переустанавливал»
+(актор в events-metadata и audit-актор; до аутентификации — `ActorSnapshot::system()`);
+тесты 127, live-цикл 9c на живом SurrealDB).
 Не начинать Фазы 10+ (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления, криптоподпись, диагностика, тесты).
 Детали фазирования и приёмки — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 

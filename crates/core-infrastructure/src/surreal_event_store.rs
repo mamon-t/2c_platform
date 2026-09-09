@@ -16,6 +16,7 @@ use crate::events::append_events;
 /// Идентификатор записи сохранённого события равен самому идентификатору
 /// события, что делает повторный append идемпотентным: `upsert` перезаписывает
 /// ту же запись вместо создания дубля.
+#[derive(Clone)]
 pub struct SurrealEventStore {
     db: Surreal<Any>,
 }

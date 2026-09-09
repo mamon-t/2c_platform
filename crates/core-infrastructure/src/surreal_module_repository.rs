@@ -2,6 +2,8 @@
 //! каталог `modules` и проекция включения `company_modules` («Доска»).
 //!
 //! Установка — глобальная операция (запись в `modules` с UNIQUE по коду).
+//! Повторная установка удалённого модуля (reinstall) перезаписывает запись
+//! новым манифестом и байтами; установка активного модуля отклоняется.
 //! Включение для компании управляется отдельной таблицей `company_modules`
 //! с UNIQUE по `(company_id, code)`. Каждый изменяющий метод транзакционно
 //! продвигает Трубу (события `module.*`) и Доску вместе.
@@ -71,18 +73,35 @@ impl ModuleRepository for SurrealModuleRepository {
                 async move {
                     let outcome: Result<(), DomainError> = async {
                         let mut response = txn
-                            .query("SELECT code FROM modules WHERE code = $code LIMIT 1")
+                            .query("SELECT state FROM modules WHERE code = $code LIMIT 1")
                             .bind(("code", record.code.clone()))
                             .await
                             .map_err(|e| DomainError::Storage(format!("module check code: {e}")))?;
                         let existing: Option<Value> = response
                             .take(0)
                             .map_err(|e| DomainError::Storage(format!("module check take: {e}")))?;
-                        if existing.is_some() {
-                            return Err(DomainError::ValidationError(format!(
-                                "Модуль с кодом {} уже установлен",
-                                record.code
-                            )));
+                        if let Some(row) = existing {
+                            let state: ModuleState = serde_json::from_value(
+                                row.get("state").cloned().unwrap_or(Value::Null),
+                            )
+                            .map_err(|e| DomainError::Storage(format!("module state decode: {e}")))?;
+                            if state == ModuleState::Installed {
+                                return Err(DomainError::ValidationError(format!(
+                                    "Модуль с кодом {} уже установлен",
+                                    record.code
+                                )));
+                            }
+                            // Переустановка удалённого модуля (reinstall): снимаем
+                            // остатки включений для всех компаний, запись в каталоге
+                            // перезаписывается новым манифестом и байтами.
+                            txn.query("DELETE FROM company_modules WHERE module_code = $code")
+                                .bind(("code", record.code.clone()))
+                                .await
+                                .map_err(|e| {
+                                    DomainError::Storage(format!(
+                                        "company modules reinstall cleanup: {e}"
+                                    ))
+                                })?;
                         }
 
                         let mut events = events.clone();

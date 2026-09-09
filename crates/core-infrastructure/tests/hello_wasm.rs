@@ -10,7 +10,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use core_application::ports::{EntitySchema, MetadataRepository, WasmHost};
+use core_application::ports::{EntitySchema, EventStore, MetadataRepository, WasmHost};
+use core_domain::event::StreamType;
 use core_domain::metadata::{EntityField, EntityKind, EntityState, EntityType, FieldType};
 use core_infrastructure::extism_wasm_host::{ExtismWasmHost, HostCallCtx};
 use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
@@ -42,14 +43,19 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     let db = mem_db().await;
     let objects = SurrealObjectRepository::new(db.clone());
     let metadata = SurrealMetadataRepository::new(db.clone());
-    let h = ExtismWasmHost::new(db.clone(), objects.clone(), metadata.clone(), cache.clone()).unwrap();
+    let events = core_infrastructure::SurrealEventStore::new(db.clone());
+    let h = ExtismWasmHost::new(
+        db.clone(),
+        objects.clone(),
+        metadata.clone(),
+        events.clone(),
+        cache.clone(),
+    )
+    .unwrap();
     h.ensure_schema().await.unwrap();
     objects.ensure_schema().await.unwrap();
     metadata.ensure_schema().await.unwrap();
-    core_infrastructure::SurrealEventStore::new(db.clone())
-        .ensure_schema()
-        .await
-        .unwrap();
+    events.ensure_schema().await.unwrap();
     (h, db, cache)
 }
 
@@ -350,5 +356,120 @@ async fn host_8b_update_object_applies_occ_and_reports_conflict() {
     assert!(
         text.contains("\"code\":\"CONFLICT_ERROR\""),
         "повторное обновление со старой версией должно дать CONFLICT_ERROR, получено: {text}"
+    );
+}
+
+#[tokio::test]
+async fn emit_event_writes_to_event_store() {
+    let (h, db, _cache) = host().await;
+    let events = core_infrastructure::SurrealEventStore::new(db.clone());
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["events.emit".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "events_probe", b"")
+        .await
+        .expect("events_probe должен отработать");
+    let conv = String::from_utf8(out).unwrap();
+    assert!(
+        conv.contains("\"ok\":true") && conv.contains("\"event_id\""),
+        "emit_event должен вернуть ok и event_id, получено: {conv}"
+    );
+
+    let stream = events
+        .read_stream(StreamType::Object, "11111111-2222-3333-4444-555555555555")
+        .await
+        .unwrap();
+    assert_eq!(stream.len(), 1, "в потоке объекта должно быть ровно одно событие");
+    assert_eq!(stream[0].stream_type, StreamType::Object);
+    assert_eq!(stream[0].event_type, "hello.event.emitted");
+    assert_eq!(stream[0].company_id, "comp1");
+    assert_eq!(stream[0].metadata.login, "system");
+    assert_eq!(stream[0].payload["source"], "events_probe");
+}
+
+#[tokio::test]
+async fn emit_event_requires_capability() {
+    let (h, _db, _cache) = host().await;
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["logging".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "events_probe", b"")
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"CAPABILITY_DENIED\""),
+        "без capability events.emit должен быть CAPABILITY_DENIED, получено: {text}"
+    );
+}
+
+#[tokio::test]
+async fn stub_workflow_and_signature_host_fns_return_spec_envelopes() {
+    let (h, _db, _cache) = host().await;
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from([
+            "scripts".to_string(),
+            "notifications".to_string(),
+            "signature".to_string(),
+        ]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "stubs_probe", b"")
+        .await
+        .expect("stubs_probe должен отработать");
+    let text = String::from_utf8(out).unwrap();
+
+    let script_conv = extract_conv(&text, "script=");
+    let notify_conv = extract_conv(&text, "notify=");
+    let users_conv = extract_conv(&text, "users=");
+    let sigreq_conv = extract_conv(&text, "sigreq=");
+    let cms_conv = extract_conv(&text, "cms=");
+
+    assert!(
+        script_conv.contains("\"code\":\"SCRIPT_FAILED\"")
+            && script_conv.contains("\"ok\":false"),
+        "run_script должен вернуть SCRIPT_FAILED, получено: {script_conv}"
+    );
+    assert!(
+        notify_conv.contains("\"ok\":true") && notify_conv.contains("\"queued\":true"),
+        "notify_user должен вернуть queued=true, получено: {notify_conv}"
+    );
+    assert!(
+        users_conv.contains("\"ok\":true") && users_conv.contains("\"users\":[]"),
+        "users_by_role должен вернуть пустой список, получено: {users_conv}"
+    );
+    assert!(
+        sigreq_conv.contains("\"ok\":true") && sigreq_conv.contains("\"required\":false"),
+        "signature_required должен вернуть required=false, получено: {sigreq_conv}"
+    );
+    assert!(
+        cms_conv.contains("\"ok\":true") && cms_conv.contains("\"valid\":true"),
+        "cms_verify должен вернуть valid=true, получено: {cms_conv}"
     );
 }

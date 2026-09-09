@@ -1,8 +1,8 @@
 //! Хост WASM-модулей на базе Extism 1.30 (раздел 9 ТЗ): загрузка и валидация
 //! манифеста через `get_info()`, исполнение экспортируемых функций с
-//! ресурсными лимитами (топливо, память, таймауты) и host-функции подфаз 8a–8b
-//! (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные)
-//! в namespace `ExtismHost`.
+//! ресурсными лимитами (топливо, память, таймауты) и host-функции подфаз
+//! 8a–8b (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные)
+//! и 9c (`emit_event` и заглушки workflow/подписи) в namespace `ExtismHost`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use core_application::ports::{BoxFuture, MetadataRepository, ObjectRepository, WasmHost};
+use core_application::ports::{BoxFuture, EventStore, MetadataRepository, ObjectRepository, WasmHost};
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::module::PluginCallContext;
@@ -26,6 +26,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::module_kv::ModuleKv;
+use crate::surreal_event_store::SurrealEventStore;
 use crate::surreal_metadata_repository::SurrealMetadataRepository;
 use crate::surreal_object_repository::SurrealObjectRepository;
 
@@ -59,13 +60,15 @@ pub struct HostCallCtx {
 }
 
 /// Общие для всех плагинов данные: актуальный контекст вызова, KV-хранилище,
-/// репозитории объектов и метаданных и handle текущего tokio-runtime для
-/// выполнения асинхронных операций SurrealDB из синхронных host-функций.
+/// репозитории объектов, метаданных и событий (Event Store) и handle текущего
+/// tokio-runtime для выполнения асинхронных операций SurrealDB из синхронных
+/// host-функций.
 struct HostShared {
     ctx: RwLock<HostCallCtx>,
     kv: ModuleKv,
     objects: SurrealObjectRepository,
     metadata: SurrealMetadataRepository,
+    events: SurrealEventStore,
     runtime: Handle,
 }
 
@@ -83,6 +86,11 @@ impl HostShared {
     /// Клон репозитория метаданных для асинхронной операции в `block_on_db`.
     fn metadata_module(&self) -> SurrealMetadataRepository {
         self.metadata.clone()
+    }
+
+    /// Клон хранилища событий для асинхронной операции в `block_on_db`.
+    fn events_module(&self) -> SurrealEventStore {
+        self.events.clone()
     }
 }
 
@@ -125,8 +133,9 @@ impl ExtismWasmHost {
             .collect()
     }
 
-    /// Создаёт хост. `db`, `objects` и `metadata` используются host-функциями
-    /// 8b (объекты «Доски» и метаданные), `cache_dir` — кэш бинарников.
+    /// Создаёт хост. `db`, `objects`, `metadata` и `events` используются
+    /// host-функциями 8b/9c (объекты «Доски», метаданные, Event Store),
+    /// `cache_dir` — кэш бинарников.
     /// Должен вызываться внутри tokio-runtime (берётся `Handle::current()`).
     ///
     /// # Errors
@@ -136,6 +145,7 @@ impl ExtismWasmHost {
         db: Surreal<Any>,
         objects: SurrealObjectRepository,
         metadata: SurrealMetadataRepository,
+        events: SurrealEventStore,
         cache_dir: PathBuf,
     ) -> Result<Self, DomainError> {
         let runtime = Handle::try_current()
@@ -146,6 +156,7 @@ impl ExtismWasmHost {
                 kv: ModuleKv::new(db),
                 objects,
                 metadata,
+                events,
                 runtime,
             }),
             modules: RwLock::new(HashMap::new()),
@@ -168,10 +179,11 @@ impl ExtismWasmHost {
         self.shared.ctx.read().await.clone()
     }
 
-    /// Набор host-функций подфаз 8a–8b. Подфаза 8a — контекст/сервис и
+    /// Набор host-функций подфаз 8a–8b и 9c. Подфаза 8a — контекст/сервис и
     /// KV-хранилище; подфаза 8b — объекты «Доски» (`objects.*`) и метаданные
-    /// (`metadata.*`). Каждая функция проверяет capability модуля из контекста
-    /// перед выполнением.
+    /// (`metadata.*`); подфаза 9c — `emit_event` (события в Event Store) и
+    /// заглушки workflow- и подписных функций. Каждая функция проверяет
+    /// capability модуля из контекста перед выполнением.
     fn host_functions(&self) -> Vec<Function> {
         let mut funcs = Vec::new();
 
@@ -699,6 +711,164 @@ impl ExtismWasmHost {
                             },
                         )
                     },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "emit_event",
+            vec![PTR, PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "emit_event",
+                    Some("events.emit"),
+                    |ctx, args| {
+                        let stream_id =
+                            parse_arg_uuid(args.first().cloned().unwrap_or_default(), "emit_event")?;
+                        let event_type = args.get(1).cloned().unwrap_or_default();
+                        if event_type.is_empty() {
+                            return Err(envelope_err(
+                                "INVALID_ACTION",
+                                "emit_event: пустой event_type",
+                            ));
+                        }
+                        let payload = parse_arg(&args.get(2).cloned().unwrap_or_default())?;
+                        let events = shared.events_module();
+                        let company = ctx.company_id.clone();
+                        let actor = ctx.actor.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "emit_event".to_string(),
+                            async move {
+                                let event = Event {
+                                    id: Uuid::new_v4(),
+                                    stream_type: StreamType::Object,
+                                    stream_id: stream_id.to_string(),
+                                    event_type,
+                                    version: 0,
+                                    payload,
+                                    metadata: actor.unwrap_or_else(ActorSnapshot::system),
+                                    company_id: company.clone(),
+                                    correlation_id: Uuid::new_v4().to_string(),
+                                    causation_id: None,
+                                    occurred_at: Utc::now(),
+                                };
+                                events
+                                    .append(std::slice::from_ref(&event))
+                                    .await?;
+                                Ok(envelope_ok(json!({ "event_id": event.id })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        funcs.push(Function::new(
+            "run_script",
+            vec![PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "run_script",
+                    Some("scripts"),
+                    |_ctx, _args| {
+                        Err(envelope_err(
+                            "SCRIPT_FAILED",
+                            "Rhai engine will be available in Phase 15",
+                        ))
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        funcs.push(Function::new(
+            "notify_user",
+            vec![PTR, PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "notify_user",
+                    Some("notifications"),
+                    |_ctx, _args| Ok(envelope_ok(json!({ "queued": true }))),
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        funcs.push(Function::new(
+            "users_by_role",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "users_by_role",
+                    Some("notifications"),
+                    |_ctx, _args| Ok(envelope_ok(json!({ "users": [] }))),
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        funcs.push(Function::new(
+            "signature_required",
+            vec![PTR, PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "signature_required",
+                    Some("signature"),
+                    |_ctx, _args| Ok(envelope_ok(json!({ "required": false }))),
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        funcs.push(Function::new(
+            "cms_verify",
+            vec![PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "cms_verify",
+                    Some("signature"),
+                    |_ctx, _args| Ok(envelope_ok(json!({ "valid": true }))),
                 );
                 Ok(())
             },

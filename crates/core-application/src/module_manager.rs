@@ -214,13 +214,36 @@ impl ModuleManager {
 
     /// Устанавливает WASM-модуль: загружает в хост для чтения манифеста,
     /// пишет запись в каталог (Труба + Доска), декларативно регистрирует
-    /// ресурсы и включает модуль для компании `company_id`.
+    /// ресурсы и включает модуль для компании `company_id`. Повторная
+    /// установка удалённого модуля (reinstall) разрешена и фиксируется
+    /// отдельным событием/аудитом `module.reinstalled`; установка активного
+    /// модуля отклоняется как дубликат.
     pub async fn install(
         &self,
         code: &str,
         wasm_bytes: &[u8],
         company_id: &str,
     ) -> Result<ModuleRecord, DomainError> {
+        // Активный модуль нельзя установить повторно; удалённый — можно (reinstall).
+        let reinstalling = match self.modules.get(code).await {
+            Ok(record) => {
+                if record.state == ModuleState::Installed {
+                    return Err(DomainError::ValidationError(format!(
+                        "Модуль {code} уже установлен"
+                    )));
+                }
+                true
+            }
+            Err(DomainError::NotFound(_)) => false,
+            Err(e) => return Err(e),
+        };
+        let event_type = if reinstalling {
+            "module.reinstalled"
+        } else {
+            "module.installed"
+        };
+        let reason = if reinstalling { "reinstall" } else { "install" };
+
         let manifest = self.host.load_module(code, wasm_bytes).await?;
 
         let wasm_sha256 = short_sha256(wasm_bytes);
@@ -238,7 +261,7 @@ impl ModuleManager {
             installed_at: chrono::Utc::now(),
         };
 
-        let events = self.lifecycle_events(&record.code, "module.installed", "install");
+        let events = self.lifecycle_events(&record.code, event_type, reason);
         if let Err(e) = self.modules.install(&record, &events).await {
             self.host.unload_module(&record.code).await?;
             return Err(e);
@@ -257,13 +280,14 @@ impl ModuleManager {
 
         self.audit
             .log(self.audit_entry(
-                "module.installed",
+                event_type,
                 &record.code,
                 company_id,
                 json!({
                     "name": record.name,
                     "version": record.version,
                     "display_name": manifest.display_name,
+                    "reinstall": reinstalling,
                 }),
             ))
             .await?;

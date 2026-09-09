@@ -6,18 +6,20 @@
 //! компании), дубликат установки, включение/отключение для другой компании,
 //! исполнение команды модуля и удаление. Фикстура — `examples/hello_plugin`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use core_application::AppRegistry;
 use core_application::ModuleManager;
+use core_domain::event::StreamType;
 use core_domain::module::ModuleState;
 use serde_json::json;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use uuid::Uuid;
 
-use core_application::ports::ModuleRepository;
+use core_application::ports::{EventStore, ModuleRepository};
 use core_infrastructure::extism_wasm_host::ExtismWasmHost;
 use core_infrastructure::surreal_audit_repository::SurrealAuditRepository;
 use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
@@ -71,6 +73,7 @@ async fn setup() -> Env {
             db.clone(),
             objects.as_ref().clone(),
             metadata.as_ref().clone(),
+            store.as_ref().clone(),
             temp_cache(),
         )
         .unwrap(),
@@ -184,4 +187,54 @@ async fn enable_for_second_company_then_uninstall() {
     assert_eq!(record.state, ModuleState::Uninstalled);
     assert!(!env.app.commands.list().await.contains(&"plugin.hello.greet".to_string()));
     assert!(!env.modules.is_enabled_for_company("comp2", "hello").await.unwrap());
+}
+
+#[tokio::test]
+async fn reinstall_after_uninstall_restores_module_and_tracks_events() {
+    let env = setup().await;
+
+    env.manager.install("hello", HELLO_WASM, "comp1").await.unwrap();
+    let record = env.manager.uninstall("hello").await.unwrap();
+    assert_eq!(record.state, ModuleState::Uninstalled);
+
+    // Переустановка удалённого модуля — первоклассная операция.
+    let record = env.manager.install("hello", HELLO_WASM, "comp1").await.unwrap();
+    assert_eq!(record.state, ModuleState::Installed);
+    assert!(env.modules.is_enabled_for_company("comp1", "hello").await.unwrap());
+    assert!(env.app.commands.list().await.contains(&"plugin.hello.greet".to_string()));
+
+    // Дубликат активного модуля всё ещё отклоняется.
+    let err = env
+        .manager
+        .install("hello", HELLO_WASM, "comp1")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, core_domain::error::DomainError::ValidationError(_)));
+
+    // После переустановки команда модуля снова исполнима.
+    let out = env
+        .app
+        .commands
+        .execute(
+            "plugin.hello.greet",
+            json!({ "company_id": "comp1", "input": "мир" }),
+        )
+        .await
+        .unwrap();
+    assert!(out["output"].as_str().unwrap().contains("Привет"));
+
+    // Труба фиксирует полный цикл жизни: установка → удаление → переустановка.
+    let store = core_infrastructure::SurrealEventStore::new(env._db.clone());
+    let stream = store
+        .read_stream(StreamType::Module, "hello")
+        .await
+        .unwrap();
+    let types: HashSet<String> = stream.iter().map(|e| e.event_type.clone()).collect();
+    for expected in [
+        "module.installed",
+        "module.uninstalled",
+        "module.reinstalled",
+    ] {
+        assert!(types.contains(expected), "поток Module должен содержать {expected}");
+    }
 }
