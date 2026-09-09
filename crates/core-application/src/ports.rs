@@ -252,6 +252,17 @@ pub trait UserRepository: Send + Sync {
     /// Перечисляет всех пользователей, упорядоченных по `login`.
     fn list(&self) -> impl Future<Output = Result<Vec<User>, DomainError>> + Send;
 
+    /// Перечисляет активных (не `Archived`) пользователей с назначенной ролью.
+    ///
+    /// Роли ограничены компаниями, а `User` не хранит `company_id`, поэтому
+    /// принадлежность проверяется через роль: если роль с `role_id` не существует
+    /// или принадлежит другой компании — возвращается пустой список (не ошибка).
+    fn list_by_role(
+        &self,
+        role_id: Uuid,
+        company_id: Uuid,
+    ) -> impl Future<Output = Result<Vec<User>, DomainError>> + Send;
+
     /// Обновляет пользователя и добавляет события в одной транзакции.
     fn update(
         &self,

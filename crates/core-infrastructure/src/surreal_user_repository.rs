@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::events::{assign_versions, with_transaction, write_events};
 
 /// Материализованное хранилище расширенной модели пользователя.
+#[derive(Clone)]
 pub struct SurrealUserRepository {
     db: Surreal<Any>,
 }
@@ -162,6 +163,40 @@ impl UserRepository for SurrealUserRepository {
         let rows: Vec<Value> = response
             .take(0)
             .map_err(|e| DomainError::Storage(format!("user list take: {e}")))?;
+        decode_rows("Пользователь", rows)
+    }
+
+    async fn list_by_role(&self, role_id: Uuid, company_id: Uuid) -> Result<Vec<User>, DomainError> {
+        // Роль ограничена компанией, а `User` не хранит company_id: принадлежность
+        // проверяется через роль. Отсутствующая или чужая роль → пустой список.
+        let mut role_response = self
+            .db
+            .query("SELECT VALUE company_id FROM roles WHERE record::id(id) = $role_id LIMIT 1")
+            .bind(("role_id", role_id.to_string()))
+            .await
+            .map_err(|e| DomainError::Storage(format!("user list_by_role role: {e}")))?;
+        let role_company: Option<String> = role_response
+            .take(0)
+            .map_err(|e| DomainError::Storage(format!("user list_by_role role take: {e}")))?;
+        let Some(role_company) = role_company else {
+            return Ok(Vec::new());
+        };
+        if role_company != company_id.to_string() {
+            return Ok(Vec::new());
+        }
+
+        let mut response = self
+            .db
+            .query(format!(
+                "SELECT {USER_FIELDS} FROM users \
+                 WHERE role_ids CONTAINS $role_id AND status != 'archived' ORDER BY login"
+            ))
+            .bind(("role_id", role_id.to_string()))
+            .await
+            .map_err(|e| DomainError::Storage(format!("user list_by_role: {e}")))?;
+        let rows: Vec<Value> = response
+            .take(0)
+            .map_err(|e| DomainError::Storage(format!("user list_by_role take: {e}")))?;
         decode_rows("Пользователь", rows)
     }
 
@@ -350,9 +385,10 @@ impl UserRepository for SurrealUserRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_application::ports::EventStore;
+    use core_application::ports::{EventStore, RoleRepository, UserRepository};
     use core_domain::event::{ActorSnapshot, Event, StreamType};
-    use core_domain::user::{ContactChannelType, ContactPurpose};
+    use core_domain::role::Role;
+    use core_domain::user::{ContactChannelType, ContactPurpose, User, UserStatus};
     use uuid::Uuid;
 
     async fn mem_repo() -> (SurrealUserRepository, crate::SurrealEventStore) {
@@ -366,6 +402,19 @@ mod tests {
         let store = crate::SurrealEventStore::new(db);
         store.ensure_schema().await.unwrap();
         (repo, store)
+    }
+
+    async fn mem_env() -> (SurrealUserRepository, crate::SurrealEventStore, Surreal<Any>) {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test")
+            .use_db(Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        let repo = SurrealUserRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db.clone());
+        store.ensure_schema().await.unwrap();
+        (repo, store, db)
     }
 
     fn event(
@@ -633,5 +682,133 @@ mod tests {
         assert!(matches!(err, Err(DomainError::NotFound(_))));
         let err = repo.get_by_login("ghost").await;
         assert!(matches!(err, Err(DomainError::NotFound(_))));
+    }
+
+    fn sample_role(id: Uuid, company_id: Uuid, code: &str) -> Role {
+        Role {
+            id,
+            company_id,
+            code: code.to_string(),
+            name: code.to_string(),
+            description: String::new(),
+            permission_policy_codes: Vec::new(),
+            is_system: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_by_role_returns_users_of_role_in_company() {
+        let (repo, _store, db) = mem_env().await;
+        let roles = crate::SurrealRoleRepository::new(db.clone());
+        roles.ensure_schema().await.unwrap();
+
+        let company = Uuid::new_v4();
+        let role = sample_role(Uuid::new_v4(), company, "accountant");
+        roles
+            .create(
+                &role,
+                &[event(StreamType::Role, &role.id.to_string(), "role.created", &company.to_string())],
+            )
+            .await
+            .unwrap();
+
+        let mut team = Vec::new();
+        for i in 0..3 {
+            let user = User {
+                role_ids: vec![role.id.to_string()],
+                login: format!("user{i}"),
+                ..sample_user(Uuid::new_v4())
+            };
+            let person = sample_person(user.id);
+            repo.create(
+                &user,
+                &person,
+                &[event(StreamType::User, &user.id.to_string(), "user.created", &company.to_string())],
+            )
+            .await
+            .unwrap();
+            team.push(user.id);
+        }
+
+        let by_role = repo.list_by_role(role.id, company).await.unwrap();
+        assert_eq!(by_role.len(), 3);
+        let ids: Vec<Uuid> = by_role.iter().map(|u| u.id).collect();
+        for id in &team {
+            assert!(ids.contains(id));
+        }
+    }
+
+    #[tokio::test]
+    async fn list_by_role_excludes_archived_users() {
+        let (repo, _store, db) = mem_env().await;
+        let roles = crate::SurrealRoleRepository::new(db.clone());
+        roles.ensure_schema().await.unwrap();
+
+        let company = Uuid::new_v4();
+        let role = sample_role(Uuid::new_v4(), company, "accountant");
+        roles
+            .create(
+                &role,
+                &[event(StreamType::Role, &role.id.to_string(), "role.created", &company.to_string())],
+            )
+            .await
+            .unwrap();
+
+        let active = User {
+            role_ids: vec![role.id.to_string()],
+            login: "active".to_string(),
+            ..sample_user(Uuid::new_v4())
+        };
+        repo.create(
+            &active,
+            &sample_person(active.id),
+            &[event(StreamType::User, &active.id.to_string(), "user.created", &company.to_string())],
+        )
+        .await
+        .unwrap();
+
+        let archived = User {
+            role_ids: vec![role.id.to_string()],
+            login: "archived".to_string(),
+            status: UserStatus::Archived,
+            ..sample_user(Uuid::new_v4())
+        };
+        repo.create(
+            &archived,
+            &sample_person(archived.id),
+            &[event(StreamType::User, &archived.id.to_string(), "user.created", &company.to_string())],
+        )
+        .await
+        .unwrap();
+
+        let by_role = repo.list_by_role(role.id, company).await.unwrap();
+        assert_eq!(by_role.len(), 1);
+        assert_eq!(by_role[0].id, active.id);
+    }
+
+    #[tokio::test]
+    async fn list_by_role_empty_for_missing_or_foreign_role() {
+        let (repo, _store, db) = mem_env().await;
+        let roles = crate::SurrealRoleRepository::new(db.clone());
+        roles.ensure_schema().await.unwrap();
+
+        let missing = repo.list_by_role(Uuid::new_v4(), Uuid::new_v4()).await.unwrap();
+        assert!(missing.is_empty(), "несуществующая роль → пустой список");
+
+        let company_a = Uuid::new_v4();
+        let company_b = Uuid::new_v4();
+        let role_a = sample_role(Uuid::new_v4(), company_a, "accountant");
+        roles
+            .create(
+                &role_a,
+                &[event(StreamType::Role, &role_a.id.to_string(), "role.created", &company_a.to_string())],
+            )
+            .await
+            .unwrap();
+
+        let by_role = repo.list_by_role(role_a.id, company_b).await.unwrap();
+        assert!(by_role.is_empty(), "роль другой компании → пустой список");
     }
 }

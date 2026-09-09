@@ -8,15 +8,20 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use chrono::Utc;
-use core_application::ports::{EntitySchema, EventStore, MetadataRepository, WasmHost};
-use core_domain::event::StreamType;
+use core_application::ports::{
+    EntitySchema, EventStore, MetadataRepository, RoleRepository, UserRepository, WasmHost,
+};
+use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::metadata::{EntityField, EntityKind, EntityState, EntityType, FieldType};
+use core_domain::role::Role;
+use core_domain::user::{ContactChannelType, ContactPurpose, Person, User, UserContact};
 use core_infrastructure::extism_wasm_host::{ExtismWasmHost, HostCallCtx};
 use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
 use core_infrastructure::surreal_object_repository::SurrealObjectRepository;
-use serde_json::Value;
+use serde_json::{json, Value};
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use uuid::Uuid;
@@ -44,11 +49,13 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     let objects = SurrealObjectRepository::new(db.clone());
     let metadata = SurrealMetadataRepository::new(db.clone());
     let events = core_infrastructure::SurrealEventStore::new(db.clone());
+    let users = core_infrastructure::SurrealUserRepository::new(db.clone());
     let h = ExtismWasmHost::new(
         db.clone(),
         objects.clone(),
         metadata.clone(),
         events.clone(),
+        users.clone(),
         cache.clone(),
     )
     .unwrap();
@@ -56,6 +63,7 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     objects.ensure_schema().await.unwrap();
     metadata.ensure_schema().await.unwrap();
     events.ensure_schema().await.unwrap();
+    users.ensure_schema().await.unwrap();
     (h, db, cache)
 }
 
@@ -266,6 +274,126 @@ fn extract_conv<'a>(text: &'a str, marker: &str) -> &'a str {
         .unwrap_or_default()
 }
 
+/// Создаёт роль в компании `company_id` (UUID-строка) и возвращает её.
+async fn seed_role(db: &Surreal<Any>, company_id: &str) -> Role {
+    let roles = core_infrastructure::surreal_role_repository::SurrealRoleRepository::new(db.clone());
+    roles.ensure_schema().await.unwrap();
+    let role = Role {
+        id: Uuid::new_v4(),
+        company_id: Uuid::from_str(company_id).unwrap_or_default(),
+        code: "accountant".to_string(),
+        name: "Бухгалтер".to_string(),
+        description: String::new(),
+        permission_policy_codes: Vec::new(),
+        is_system: false,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    roles
+        .create(
+            &role,
+            &[Event {
+                id: Uuid::new_v4(),
+                stream_type: StreamType::Role,
+                stream_id: role.id.to_string(),
+                event_type: "role.created".to_string(),
+                version: 0,
+                payload: json!({}),
+                metadata: ActorSnapshot::system(),
+                company_id: company_id.to_string(),
+                correlation_id: "corr".to_string(),
+                causation_id: None,
+                occurred_at: Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+    role
+}
+
+/// Создаёт пользователя с ролью, персоной и primary-email контактом.
+async fn seed_user(
+    db: &Surreal<Any>,
+    role_id: Uuid,
+    company_id: &str,
+    login: &str,
+    display_name: &str,
+    email: &str,
+) -> User {
+    let users = core_infrastructure::SurrealUserRepository::new(db.clone());
+    let user = User {
+        id: Uuid::new_v4(),
+        login: login.to_string(),
+        password_hash: "x".to_string(),
+        status: core_domain::user::UserStatus::Active,
+        role_ids: vec![role_id.to_string()],
+        failed_login_count: 0,
+        locked_until: None,
+        must_change_password: false,
+        locale: "ru".to_string(),
+        timezone: "UTC".to_string(),
+        person_id: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let person = Person {
+        id: Uuid::new_v4(),
+        user_id: user.id,
+        last_name: String::new(),
+        first_name: String::new(),
+        middle_name: None,
+        display_name: display_name.to_string(),
+    };
+    users
+        .create(
+            &user,
+            &person,
+            &[Event {
+                id: Uuid::new_v4(),
+                stream_type: StreamType::User,
+                stream_id: user.id.to_string(),
+                event_type: "user.created".to_string(),
+                version: 0,
+                payload: json!({}),
+                metadata: ActorSnapshot::system(),
+                company_id: company_id.to_string(),
+                correlation_id: "corr".to_string(),
+                causation_id: None,
+                occurred_at: Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+    users
+        .add_contact(
+            &UserContact {
+                id: Uuid::new_v4(),
+                user_id: user.id,
+                channel_type: ContactChannelType::Email,
+                value: email.to_string(),
+                is_primary: true,
+                is_verified: true,
+                purposes: vec![ContactPurpose::Login],
+            },
+            &[Event {
+                id: Uuid::new_v4(),
+                stream_type: StreamType::User,
+                stream_id: user.id.to_string(),
+                event_type: "user.contact_added".to_string(),
+                version: 0,
+                payload: json!({}),
+                metadata: ActorSnapshot::system(),
+                company_id: company_id.to_string(),
+                correlation_id: "corr".to_string(),
+                causation_id: None,
+                occurred_at: Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+    user
+}
+
 #[tokio::test]
 async fn host_8b_envelope_codes_follow_spec() {
     let (h, _db, _cache) = host().await;
@@ -471,5 +599,131 @@ async fn stub_workflow_and_signature_host_fns_return_spec_envelopes() {
     assert!(
         cms_conv.contains("\"ok\":true") && cms_conv.contains("\"valid\":true"),
         "cms_verify должен вернуть valid=true, получено: {cms_conv}"
+    );
+}
+
+async fn seed_role_and_users(db: &Surreal<Any>) -> (String, Uuid, Vec<(String, String, String)>) {
+    let company = Uuid::new_v4().to_string();
+    let role = seed_role(db, &company).await;
+    seed_user(db, role.id, &company, "alice", "Петрова Алиса", "alice@example.test").await;
+    seed_user(db, role.id, &company, "bob", "Иванов Боб", "bob@example.test").await;
+    (
+        company,
+        role.id,
+        vec![
+            ("alice".to_string(), "Петрова Алиса".to_string(), "alice@example.test".to_string()),
+            ("bob".to_string(), "Иванов Боб".to_string(), "bob@example.test".to_string()),
+        ],
+    )
+}
+
+async fn users_payload(h: &ExtismWasmHost, role_id: Uuid) -> Value {
+    let out = h
+        .call_function("hello", "users_probe", role_id.to_string().as_bytes())
+        .await
+        .expect("users_probe должен отработать");
+    let text = String::from_utf8(out).unwrap();
+    let envelope: Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        envelope["ok"].as_bool().unwrap_or(false),
+        "users_by_role должен вернуть ok, получено: {text}"
+    );
+    envelope["data"]["users"].clone()
+}
+
+#[tokio::test]
+async fn users_by_role_9d_returns_users_with_person_and_email() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+
+    let (company_id, role_id, expected) = seed_role_and_users(&db).await;
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id,
+        actor: None,
+        capabilities: HashSet::from(["notifications".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let users = users_payload(&h, role_id).await;
+    assert_eq!(users.as_array().map(Vec::len), Some(2));
+    for (login, full_name, email) in expected {
+        let found = users.as_array().unwrap().iter().any(|u| {
+            u["login"] == login && u["full_name"] == full_name && u["email"] == email
+        });
+        assert!(found, "не найден пользователь {login} в {users}");
+    }
+}
+
+#[tokio::test]
+async fn users_by_role_9d_denies_without_notifications_capability() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+
+    let (company_id, role_id, _) = seed_role_and_users(&db).await;
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id,
+        actor: None,
+        capabilities: HashSet::from(["logging".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "users_probe", role_id.to_string().as_bytes())
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"CAPABILITY_DENIED\""),
+        "без capability notifications должен быть CAPABILITY_DENIED, получено: {text}"
+    );
+}
+
+#[tokio::test]
+async fn users_by_role_9d_missing_role_returns_empty_list() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    // Создаём таблицы roles/users (сид произвольной роли чинит схему).
+    seed_role(&db, &Uuid::new_v4().to_string()).await;
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: Uuid::new_v4().to_string(),
+        actor: None,
+        capabilities: HashSet::from(["notifications".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let users = users_payload(&h, Uuid::new_v4()).await;
+    assert!(
+        users.as_array().map(Vec::is_empty).unwrap_or(false),
+        "несуществующая роль → пустой список, получено: {users}"
+    );
+}
+
+#[tokio::test]
+async fn users_by_role_9d_foreign_company_role_returns_empty_list() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+
+    seed_role_and_users(&db).await;
+    // Ищем по реальной роли, но в чужой компании — роль не должна быть видна.
+    let role = seed_role(&db, &Uuid::new_v4().to_string()).await;
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: Uuid::new_v4().to_string(),
+        actor: None,
+        capabilities: HashSet::from(["notifications".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let users = users_payload(&h, role.id).await;
+    assert!(
+        users.as_array().map(Vec::is_empty).unwrap_or(false),
+        "роль чужой компании → пустой список, получено: {users}"
     );
 }

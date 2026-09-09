@@ -67,6 +67,8 @@ async fn setup() -> Env {
     policies.ensure_schema().await.unwrap();
     let modules = Arc::new(SurrealModuleRepository::new(db.clone()));
     modules.ensure_schema().await.unwrap();
+    let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
+    users.ensure_schema().await.unwrap();
 
     let host = Arc::new(
         ExtismWasmHost::new(
@@ -74,6 +76,7 @@ async fn setup() -> Env {
             objects.as_ref().clone(),
             metadata.as_ref().clone(),
             store.as_ref().clone(),
+            users.as_ref().clone(),
             temp_cache(),
         )
         .unwrap(),

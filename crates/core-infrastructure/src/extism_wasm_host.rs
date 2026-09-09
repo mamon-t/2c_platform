@@ -1,8 +1,9 @@
 //! Хост WASM-модулей на базе Extism 1.30 (раздел 9 ТЗ): загрузка и валидация
 //! манифеста через `get_info()`, исполнение экспортируемых функций с
 //! ресурсными лимитами (топливо, память, таймауты) и host-функции подфаз
-//! 8a–8b (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные)
-//! и 9c (`emit_event` и заглушки workflow/подписи) в namespace `ExtismHost`.
+//! 8a–8b (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные),
+//! 9c (`emit_event` и заглушки workflow/подписи) и 9d (`users_by_role`)
+//! в namespace `ExtismHost`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -10,11 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use core_application::ports::{BoxFuture, EventStore, MetadataRepository, ObjectRepository, WasmHost};
+use core_application::ports::{
+    BoxFuture, EventStore, MetadataRepository, ObjectRepository, UserRepository, WasmHost,
+};
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::module::PluginCallContext;
 use core_domain::object::Object;
+use core_domain::user::ContactChannelType;
 use core_domain::wasm_manifest::ModuleManifest;
 use extism::{CurrentPlugin, Function, Plugin, PluginBuilder, UserData, Val, ValType, PTR};
 use serde_json::{json, Value};
@@ -29,6 +33,7 @@ use crate::module_kv::ModuleKv;
 use crate::surreal_event_store::SurrealEventStore;
 use crate::surreal_metadata_repository::SurrealMetadataRepository;
 use crate::surreal_object_repository::SurrealObjectRepository;
+use crate::surreal_user_repository::SurrealUserRepository;
 
 /// Namespace импортов host-функций, заявленный в ТЗ (Приложение №4).
 const NS_HOST: &str = "ExtismHost";
@@ -69,6 +74,7 @@ struct HostShared {
     objects: SurrealObjectRepository,
     metadata: SurrealMetadataRepository,
     events: SurrealEventStore,
+    users: SurrealUserRepository,
     runtime: Handle,
 }
 
@@ -91,6 +97,11 @@ impl HostShared {
     /// Клон хранилища событий для асинхронной операции в `block_on_db`.
     fn events_module(&self) -> SurrealEventStore {
         self.events.clone()
+    }
+
+    /// Клон репозитория пользователей для асинхронной операции в `block_on_db`.
+    fn users_module(&self) -> SurrealUserRepository {
+        self.users.clone()
     }
 }
 
@@ -133,9 +144,10 @@ impl ExtismWasmHost {
             .collect()
     }
 
-    /// Создаёт хост. `db`, `objects`, `metadata` и `events` используются
-    /// host-функциями 8b/9c (объекты «Доски», метаданные, Event Store),
-    /// `cache_dir` — кэш бинарников.
+    /// Создаёт хост. `db`, `objects`, `metadata`, `events` и `users`
+    /// используются host-функциями 8b/9c/9d (объекты «Доски», метаданные,
+    /// Event Store, пользователи для `users_by_role`), `cache_dir` — кэш
+    /// бинарников.
     /// Должен вызываться внутри tokio-runtime (берётся `Handle::current()`).
     ///
     /// # Errors
@@ -146,6 +158,7 @@ impl ExtismWasmHost {
         objects: SurrealObjectRepository,
         metadata: SurrealMetadataRepository,
         events: SurrealEventStore,
+        users: SurrealUserRepository,
         cache_dir: PathBuf,
     ) -> Result<Self, DomainError> {
         let runtime = Handle::try_current()
@@ -157,6 +170,7 @@ impl ExtismWasmHost {
                 objects,
                 metadata,
                 events,
+                users,
                 runtime,
             }),
             modules: RwLock::new(HashMap::new()),
@@ -179,10 +193,11 @@ impl ExtismWasmHost {
         self.shared.ctx.read().await.clone()
     }
 
-    /// Набор host-функций подфаз 8a–8b и 9c. Подфаза 8a — контекст/сервис и
+    /// Набор host-функций подфаз 8a–8b, 9c и 9d. Подфаза 8a — контекст/сервис и
     /// KV-хранилище; подфаза 8b — объекты «Доски» (`objects.*`) и метаданные
     /// (`metadata.*`); подфаза 9c — `emit_event` (события в Event Store) и
-    /// заглушки workflow- и подписных функций. Каждая функция проверяет
+    /// заглушки workflow- и подписных функций; подфаза 9d — `users_by_role`
+    /// (пользователи по роли). Каждая функция проверяет
     /// capability модуля из контекста перед выполнением.
     fn host_functions(&self) -> Vec<Function> {
         let mut funcs = Vec::new();
@@ -818,6 +833,7 @@ impl ExtismWasmHost {
         )
         .with_namespace(NS_HOST));
 
+        let shared = self.shared.clone();
         funcs.push(Function::new(
             "users_by_role",
             vec![PTR],
@@ -830,7 +846,44 @@ impl ExtismWasmHost {
                     outputs,
                     "users_by_role",
                     Some("notifications"),
-                    |_ctx, _args| Ok(envelope_ok(json!({ "users": [] }))),
+                    |ctx, args| {
+                        let role_id = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "users_by_role",
+                        )?;
+                        let company = Uuid::parse_str(&ctx.company_id).ok();
+                        let users = shared.users_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "users_by_role".to_string(),
+                            async move {
+                                let roles_users = match company {
+                                    Some(company_id) => users.list_by_role(role_id, company_id).await?,
+                                    None => Vec::new(),
+                                };
+                                let mut payload = Vec::with_capacity(roles_users.len());
+                                for user in roles_users {
+                                    let person = users.get_person(&user.id).await.ok();
+                                    let contacts =
+                                        users.list_contacts(&user.id).await.unwrap_or_default();
+                                    let email = contacts
+                                        .into_iter()
+                                        .find(|c| c.channel_type == ContactChannelType::Email)
+                                        .map(|c| c.value);
+                                    payload.push(json!({
+                                        "id": user.id,
+                                        "login": user.login,
+                                        "full_name": person
+                                            .map(|p| p.display_name)
+                                            .unwrap_or_default(),
+                                        "email": email.unwrap_or_default(),
+                                    }));
+                                }
+                                Ok(envelope_ok(json!({ "users": payload })))
+                            },
+                        )
+                    },
                 );
                 Ok(())
             },
