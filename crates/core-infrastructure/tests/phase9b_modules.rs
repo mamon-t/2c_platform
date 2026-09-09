@@ -91,6 +91,7 @@ async fn setup() -> Env {
         policies,
         metadata,
         audit,
+        temp_cache(),
     ));
 
     Env {

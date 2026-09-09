@@ -16,6 +16,7 @@ use core_domain::wasm_manifest::{ManifestPermission, ModuleManifest};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -26,6 +27,20 @@ use crate::ports::{
     WasmHost,
 };
 
+/// Итог предзагрузки при старте сервера: сколько модулей обработано, для
+/// скольких компаний применены декларативные ресурсы и какие ошибки возникли
+/// по отдельным модулям (не фатальны — сервер продолжает старт).
+#[derive(Debug, Clone, Default)]
+pub struct PreloadReport {
+    /// Число установленных модулей, загруженных и зарегистрированных успешно.
+    pub modules_loaded: usize,
+    /// Суммарное число включений (пар «модуль—компания»), обработанных успешно.
+    pub companies_affected: usize,
+    /// Описания ошибок отдельных модулей/компаний; пусто при полностью
+    /// успешном старте.
+    pub errors: Vec<String>,
+}
+
 /// Применяет манифест на стороне платформы без выполнения кода плагина.
 pub struct ModuleManager {
     host: Arc<dyn WasmHost>,
@@ -34,6 +49,7 @@ pub struct ModuleManager {
     policies: Arc<dyn PermissionPolicyRepository>,
     metadata: Arc<dyn MetadataRepository>,
     audit: Arc<dyn AuditRepository>,
+    cache_dir: PathBuf,
 }
 
 impl ModuleManager {
@@ -44,6 +60,7 @@ impl ModuleManager {
         policies: Arc<dyn PermissionPolicyRepository>,
         metadata: Arc<dyn MetadataRepository>,
         audit: Arc<dyn AuditRepository>,
+        cache_dir: PathBuf,
     ) -> Self {
         Self {
             host,
@@ -52,6 +69,7 @@ impl ModuleManager {
             policies,
             metadata,
             audit,
+            cache_dir,
         }
     }
 
@@ -349,6 +367,88 @@ impl ModuleManager {
             ))
             .await?;
         Ok(())
+    }
+
+    /// Предзагружает установленные модули при старте сервера (ТЗ v3.1,
+    /// раздел 9, `preload_company_modules`): загружает из кэша
+    /// `{cache_dir}/{code}-{wasm_sha256}.wasm` модули в состоянии `Installed`
+    /// и декларативно регистрирует их ресурсы для всех включивших модуль
+    /// компаний. Повторные вызовы идемпотентны (загрузка и регистрация —
+    /// ensure-семантики). Ошибки отдельных модулей не фатальны: они
+    /// собираются в `PreloadReport.errors`, сервер продолжает старт.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::Storage` при отказе чтения каталога манифестов.
+    pub async fn preload_all(&self) -> Result<PreloadReport, DomainError> {
+        let mut report = PreloadReport::default();
+        let mut records: Vec<ModuleRecord> = self
+            .modules
+            .list()
+            .await?
+            .into_iter()
+            .filter(|r| r.state == ModuleState::Installed)
+            .collect();
+        records.sort_by_key(|r| r.installed_at);
+
+        for record in records {
+            let companies = match self.modules.list_enabled_companies(&record.code).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(module = %record.code, "preload: список компаний: {e}");
+                    report.errors.push(format!("{}: список компаний: {e}", record.code));
+                    continue;
+                }
+            };
+            if companies.is_empty() {
+                continue;
+            }
+
+            if !self.host.is_loaded(&record.code).await {
+                let path = self
+                    .cache_dir
+                    .join(format!("{}-{}.wasm", record.code, record.wasm_sha256));
+                let bytes = match tokio::fs::read(&path).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(module = %record.code, path = %path.display(), "preload: кэш недоступен: {e}");
+                        report
+                            .errors
+                            .push(format!("{}: кэш недоступен: {e}", record.code));
+                        continue;
+                    }
+                };
+                if let Err(e) = self.host.load_module(&record.code, &bytes).await {
+                    tracing::warn!(module = %record.code, "preload: загрузка модуля: {e}");
+                    report
+                        .errors
+                        .push(format!("{}: загрузка: {e}", record.code));
+                    continue;
+                }
+            }
+
+            let mut module_ok = true;
+            for company_id in &companies {
+                if let Err(e) = self.register(&record.manifest, company_id).await {
+                    tracing::warn!(
+                        module = %record.code,
+                        company = %company_id,
+                        "preload: регистрация: {e}"
+                    );
+                    report.errors.push(format!(
+                        "{}: регистрация для {company_id}: {e}",
+                        record.code
+                    ));
+                    module_ok = false;
+                }
+            }
+            if module_ok {
+                report.modules_loaded += 1;
+            }
+            report.companies_affected += companies.len();
+        }
+
+        Ok(report)
     }
 
     fn lifecycle_events(&self, code: &str, event_type: &str, reason: &str) -> Vec<Event> {

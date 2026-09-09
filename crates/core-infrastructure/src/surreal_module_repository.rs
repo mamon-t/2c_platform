@@ -344,6 +344,31 @@ impl ModuleRepository for SurrealModuleRepository {
         })
     }
 
+    fn list_enabled_companies(&self, code: &str) -> BoxFuture<'_, Result<Vec<String>, DomainError>> {
+        let db = self.db.clone();
+        let code = code.to_string();
+        Box::pin(async move {
+            let mut response = db
+                .query(
+                    "SELECT VALUE company_id FROM company_modules \
+                     WHERE module_code = $code AND enabled = true ORDER BY company_id",
+                )
+                .bind(("code", code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("module list_enabled_companies: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("module list_enabled_companies take: {e}")))?;
+            rows.into_iter()
+                .map(|row| {
+                    serde_json::from_value(row).map_err(|e| {
+                        DomainError::Storage(format!("module list_enabled_companies decode: {e}"))
+                    })
+                })
+                .collect()
+        })
+    }
+
     fn is_enabled_for_company(
         &self,
         company_id: &str,
@@ -508,6 +533,26 @@ mod tests {
         let rec = repo.uninstall("hello", &[event("hello", &company, "module.uninstalled", json!({}))]).await.unwrap();
         assert_eq!(rec.state, ModuleState::Uninstalled);
         assert_eq!(repo.list().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_enabled_companies_returns_only_enabled_pairs() {
+        let db = mem_db().await;
+        let (_store, repo) = repo(db).await;
+        let company_a = Uuid::new_v4().to_string();
+        let company_b = Uuid::new_v4().to_string();
+        let company_c = Uuid::new_v4().to_string();
+        repo.install(&sample("hello"), &[event("hello", &company_a, "module.installed", json!({}))]).await.unwrap();
+
+        repo.enable_for_company(&company_a, "hello", &[event("hello", &company_a, "module.enabled", json!({}))]).await.unwrap();
+        repo.enable_for_company(&company_b, "hello", &[event("hello", &company_b, "module.enabled", json!({}))]).await.unwrap();
+        repo.enable_for_company(&company_c, "hello", &[event("hello", &company_c, "module.enabled", json!({}))]).await.unwrap();
+        repo.disable_for_company(&company_c, "hello", &[event("hello", &company_c, "module.disabled", json!({}))]).await.unwrap();
+
+        let companies = repo.list_enabled_companies("hello").await.unwrap();
+        assert_eq!(companies, vec![company_a, company_b]);
+
+        assert!(repo.list_enabled_companies("missing").await.unwrap().is_empty());
     }
 
     #[tokio::test]

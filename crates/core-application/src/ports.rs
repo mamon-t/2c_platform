@@ -486,6 +486,10 @@ pub trait ModuleRepository: Send + Sync {
         company_id: &str,
     ) -> BoxFuture<'_, Result<Vec<ModuleRecord>, DomainError>>;
 
+    /// Перечисляет компании, для которых модуль включён. Пары упорядочены
+    /// по `company_id`.
+    fn list_enabled_companies(&self, code: &str) -> BoxFuture<'_, Result<Vec<String>, DomainError>>;
+
     /// Проверяет, включён ли модуль для компании.
     fn is_enabled_for_company(
         &self,

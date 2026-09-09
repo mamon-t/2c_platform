@@ -122,8 +122,26 @@ async fn main() -> Result<()> {
         policies.clone(),
         metadata.clone(),
         audit.clone(),
+        cache_dir.clone(),
     ));
-    commands::register_phase9_module_commands(&registry, module_manager, companies.clone()).await;
+    commands::register_phase9_module_commands(&registry, module_manager.clone(), companies.clone()).await;
+
+    // Предзагрузка установленных модулей из кэша (ТЗ v3.1, preload_company_modules):
+    // сбой по отдельным модулям не останавливает сервер.
+    match module_manager.preload_all().await {
+        Ok(report) => {
+            for err in &report.errors {
+                warn!("Предзагрузка модулей: {err}");
+            }
+            info!(
+                "Предзагрузка модулей: обработано {}, включений {}, ошибок {}",
+                report.modules_loaded,
+                report.companies_affected,
+                report.errors.len()
+            );
+        }
+        Err(e) => warn!("Предзагрузка модулей не выполнена: {e}"),
+    }
 
     let permissions = Arc::new(PermissionManager::new(roles, policies));
     registry.attach_pipeline(audit, permissions).await;
