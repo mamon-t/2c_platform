@@ -33,7 +33,22 @@ pub fn get_info() -> FnResult<String> {
         "author": "2C Platform",
         "api_version": "2.0",
         "capabilities": ["logging", "storage", "objects.create", "objects.read", "objects.update"],
-        "commands": [{ "code": "greet", "name": "Поздороваться" }],
+        "commands": [{
+            "code": "greet",
+            "name": "Поздороваться",
+            "required_permission": "hello.greet"
+        }],
+        "permissions": [{
+            "code": "hello.greet",
+            "description": "Право поздороваться через модуль hello",
+            "scope_type": { "module": "hello" },
+            "record_access": "owned",
+            "actions": [{
+                "entity_type": "greeting",
+                "actions": ["create", "read"],
+                "compose_action": false
+            }]
+        }],
         "object_schemas": [{
             "code": "greeting",
             "name": "Приветствие",

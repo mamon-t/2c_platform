@@ -5,6 +5,7 @@ pub mod company;
 pub mod error;
 pub mod event;
 pub mod metadata;
+pub mod module;
 pub mod object;
 pub mod permission;
 pub mod role;
@@ -21,6 +22,10 @@ pub use event::{ActorSnapshot, Event, StreamType};
 pub use metadata::{
     EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
     EntityType, FieldType, OnDelete, RelationKind,
+};
+pub use module::{
+    CompanyModule, CompanyModulePayload, ModuleLifecyclePayload, ModuleRecord, ModuleState,
+    PluginCallContext,
 };
 pub use object::{Object, ObjectKind, ObjectSnapshot};
 pub use permission::{PermissionPolicy, PermissionScopeType, RecordAccessLevel};

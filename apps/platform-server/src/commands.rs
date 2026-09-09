@@ -12,6 +12,7 @@ use core_application::ports::{
 };
 use core_application::seed::seed_system_roles_and_policies;
 use core_application::CommandRegistry;
+use core_application::ModuleManager;
 use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
 use core_domain::company::Company;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
@@ -1375,4 +1376,123 @@ fn parse_optional_date(value: &Value, key: &str) -> Result<Option<NaiveDate>, St
                 .map_err(|e| format!("некорректная дата '{key}': {e}"))
         }
     }
+}
+/// Регистрирует команды управления WASM-модулями (подфаза 9b):
+/// `module.install/uninstall/enable/disable/list/info`. Все команды требуют
+/// глобального права `module.manage` (deny-by-default RBAC, префиксные команды).
+pub async fn register_phase9_module_commands(
+    registry: &CommandRegistry,
+    manager: Arc<ModuleManager>,
+    companies: Arc<SurrealCompanyRepository>,
+) {
+    registry
+        .register_with_metadata("module.install", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            let companies = companies.clone();
+            move |params: Value| {
+                let manager = manager.clone();
+                let companies = companies.clone();
+                async move {
+                    let code = require(&params, "code")?;
+                    let wasm_base64 = require(&params, "wasm_base64")?;
+                    let company_id = require(&params, "company_id")?;
+                    let company_uuid = Uuid::parse_str(&company_id)
+                        .map_err(|e| format!("некорректный 'company_id': {e}"))?;
+                    companies
+                        .get(&company_uuid)
+                        .await
+                        .map_err(|e| format!("компания не найдена: {e}"))?;
+                    let wasm_bytes =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &wasm_base64)
+                            .map_err(|e| format!("некорректный wasm_base64: {e}"))?;
+                    let record = manager
+                        .install(&code, &wasm_bytes, &company_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&record)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.uninstall", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            move |params: Value| {
+                let manager = manager.clone();
+                async move {
+                    let code = require(&params, "code")?;
+                    let record = manager.uninstall(&code).await.map_err(|e| e.to_string())?;
+                    encode(&record)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.enable", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            move |params: Value| {
+                let manager = manager.clone();
+                async move {
+                    let code = require(&params, "code")?;
+                    let company_id = require(&params, "company_id")?;
+                    Uuid::parse_str(&company_id)
+                        .map_err(|e| format!("некорректный 'company_id': {e}"))?;
+                    let record = manager
+                        .enable(&code, &company_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    encode(&record)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.disable", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            move |params: Value| {
+                let manager = manager.clone();
+                async move {
+                    let code = require(&params, "code")?;
+                    let company_id = require(&params, "company_id")?;
+                    manager
+                        .disable(&code, &company_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(json!({ "disabled": code, "company_id": company_id }))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.list", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            move |_params: Value| {
+                let manager = manager.clone();
+                async move {
+                    let modules = manager.modules();
+                    let records = modules.list().await.map_err(|e| e.to_string())?;
+                    let rows: Result<Vec<Value>, String> = records.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.info", CommandMetadata::requires("module.manage"), {
+            let manager = manager.clone();
+            move |params: Value| {
+                let modules = manager.modules();
+                async move {
+                    let code = require(&params, "code")?;
+                    let record = modules.get(&code).await.map_err(|e| e.to_string())?;
+                    encode(&record)
+                }
+            }
+        })
+        .await;
 }

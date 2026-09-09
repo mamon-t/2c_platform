@@ -767,6 +767,7 @@ dependencies = [
  "core-domain",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "uuid",

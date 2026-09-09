@@ -107,6 +107,10 @@ pub struct ManifestCommand {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// Право, требуемое для вызова `plugin.{code}.{name}` (Приложение №1 ТЗ v3.0).
+    /// Если не указано — команда требует глобального права `module.execute`.
+    #[serde(default)]
+    pub required_permission: Option<String>,
 }
 
 /// Политика доступа модуля (становится `PermissionPolicy` по коду).
@@ -361,11 +365,13 @@ mod tests {
                 code: "greet".to_string(),
                 name: "A".to_string(),
                 description: None,
+                required_permission: None,
             },
             ManifestCommand {
                 code: "greet".to_string(),
                 name: "B".to_string(),
                 description: None,
+                required_permission: None,
             },
         ];
         assert!(m.validate().is_err());

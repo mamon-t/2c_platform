@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use core_application::ports::{MetadataRepository, ObjectRepository, WasmHost};
+use core_application::ports::{BoxFuture, MetadataRepository, ObjectRepository, WasmHost};
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_domain::module::PluginCallContext;
 use core_domain::object::Object;
 use core_domain::wasm_manifest::ModuleManifest;
 use extism::{CurrentPlugin, Function, Plugin, PluginBuilder, UserData, Val, ValType, PTR};
@@ -732,133 +733,170 @@ impl ExtismWasmHost {
 }
 
 impl WasmHost for ExtismWasmHost {
-    async fn load_module(
+    fn load_module(
         &self,
         code: &str,
         wasm_bytes: &[u8],
-    ) -> Result<ModuleManifest, DomainError> {
-        if code.is_empty() {
-            return Err(DomainError::ValidationError(
-                "load_module: пустой код модуля".to_string(),
-            ));
-        }
-        let fallback_ctx = HostCallCtx {
-            module_code: code.to_string(),
-            ..HostCallCtx::default()
-        };
+    ) -> BoxFuture<'_, Result<ModuleManifest, DomainError>> {
+        let code = code.to_string();
+        let wasm_bytes = wasm_bytes.to_vec();
+        Box::pin(async move {
+            if code.is_empty() {
+                return Err(DomainError::ValidationError(
+                    "load_module: пустой код модуля".to_string(),
+                ));
+            }
+            let fallback_ctx = HostCallCtx {
+                module_code: code.clone(),
+                ..HostCallCtx::default()
+            };
 
-        let extism_manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes.to_vec())])
-            .with_memory_max(MAX_PAGES)
-            .with_timeout(PLUGIN_TIMEOUT);
+            let extism_manifest = extism::Manifest::new([extism::Wasm::data(wasm_bytes.clone())])
+                .with_memory_max(MAX_PAGES)
+                .with_timeout(PLUGIN_TIMEOUT);
 
-        let mut plugin = PluginBuilder::new(extism_manifest)
-            .with_functions(self.host_functions())
-            .with_fuel_limit(FUEL_LIMIT)
-            .with_wasi(false)
-            .build()
-            .map_err(|e| DomainError::ValidationError(format!("компиляция плагина: {e}")))?;
+            let mut plugin = PluginBuilder::new(extism_manifest)
+                .with_functions(self.host_functions())
+                .with_fuel_limit(FUEL_LIMIT)
+                .with_wasi(false)
+                .build()
+                .map_err(|e| DomainError::ValidationError(format!("компиляция плагина: {e}")))?;
 
-        let raw = plugin
-            .call_with_host_context::<Vec<u8>, Vec<u8>, HostCallCtx>(
-                "get_info",
-                Vec::new(),
-                fallback_ctx,
-            )
-            .map_err(|e| DomainError::ValidationError(format!("get_info: {e}")))?;
-        let manifest: ModuleManifest = serde_json::from_slice(&raw).map_err(|e| {
-            DomainError::ValidationError(format!("get_info вернула невалидный манифест: {e}"))
-        })?;
-        manifest.validate()?;
-        if manifest.code != code {
-            return Err(DomainError::ValidationError(format!(
-                "код манифеста {} не совпадает с ожидаемым {code}",
-                manifest.code
-            )));
-        }
+            let raw = plugin
+                .call_with_host_context::<Vec<u8>, Vec<u8>, HostCallCtx>(
+                    "get_info",
+                    Vec::new(),
+                    fallback_ctx,
+                )
+                .map_err(|e| DomainError::ValidationError(format!("get_info: {e}")))?;
+            let manifest: ModuleManifest = serde_json::from_slice(&raw).map_err(|e| {
+                DomainError::ValidationError(format!("get_info вернула невалидный манифест: {e}"))
+            })?;
+            manifest.validate()?;
+            if manifest.code != code {
+                return Err(DomainError::ValidationError(format!(
+                    "код манифеста {} не совпадает с ожидаемым {code}",
+                    manifest.code
+                )));
+            }
 
-        self.write_cache(code, wasm_bytes);
-        self.modules.write().await.insert(
-            code.to_string(),
-            LoadedModule {
-                manifest: manifest.clone(),
-                plugin: Some(plugin),
-            },
-        );
-        Ok(manifest)
+            self.write_cache(&code, &wasm_bytes);
+            self.modules.write().await.insert(
+                code.clone(),
+                LoadedModule {
+                    manifest: manifest.clone(),
+                    plugin: Some(plugin),
+                },
+            );
+            Ok(manifest)
+        })
     }
 
-    async fn call_function(
+    fn call_function(
         &self,
         code: &str,
         function: &str,
         input: &[u8],
-    ) -> Result<Vec<u8>, DomainError> {
-        let ctx = self.shared.ctx.read().await.clone();
-        let mut guard = self.modules.write().await;
-        let loaded = guard
-            .get_mut(code)
-            .ok_or_else(|| DomainError::NotFound(format!("модуль не загружен: {code}")))?;
-        let mut plugin = loaded
-            .plugin
-            .take()
-            .ok_or_else(|| {
-                DomainError::ValidationError(format!("модуль занят другим вызовом: {code}"))
-            })?;
+    ) -> BoxFuture<'_, Result<Vec<u8>, DomainError>> {
+        let code = code.to_string();
+        let function = function.to_string();
+        let input = input.to_vec();
+        Box::pin(async move {
+            let ctx = self.shared.ctx.read().await.clone();
+            let mut guard = self.modules.write().await;
+            let loaded = guard
+                .get_mut(&code)
+                .ok_or_else(|| DomainError::NotFound(format!("модуль не загружен: {code}")))?;
+            let mut plugin = loaded
+                .plugin
+                .take()
+                .ok_or_else(|| {
+                    DomainError::ValidationError(format!("модуль занят другим вызовом: {code}"))
+                })?;
 
-        let input_bytes = input.to_vec();
-        let function_owned = function.to_string();
-        let handle = tokio::task::spawn_blocking(move || {
-            let out = plugin
-                .call_with_host_context::<Vec<u8>, Vec<u8>, HostCallCtx>(
-                    &function_owned,
-                    input_bytes,
-                    ctx,
-                )
-                .map_err(|e| e.to_string());
-            (plugin, out)
-        });
+            let fname = function.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                let fname = fname.clone();
+                let out = plugin
+                    .call_with_host_context::<Vec<u8>, Vec<u8>, HostCallCtx>(
+                        &fname,
+                        input,
+                        ctx,
+                    )
+                    .map_err(|e| e.to_string());
+                (plugin, out)
+            });
 
-        let outcome = tokio::time::timeout(CALL_TIMEOUT, handle).await;
-        match outcome {
-            Ok(Ok((plugin_back, Ok(output)))) => {
-                if let Some(loaded) = guard.get_mut(code) {
-                    loaded.plugin = Some(plugin_back);
+            let outcome = tokio::time::timeout(CALL_TIMEOUT, handle).await;
+            match outcome {
+                Ok(Ok((plugin_back, Ok(output)))) => {
+                    if let Some(loaded) = guard.get_mut(&code) {
+                        loaded.plugin = Some(plugin_back);
+                    }
+                    Ok(output)
                 }
-                Ok(output)
-            }
-            Ok(Ok((plugin_back, Err(e)))) => {
-                if let Some(loaded) = guard.get_mut(code) {
-                    loaded.plugin = Some(plugin_back);
+                Ok(Ok((plugin_back, Err(e)))) => {
+                    if let Some(loaded) = guard.get_mut(&code) {
+                        loaded.plugin = Some(plugin_back);
+                    }
+                    Err(DomainError::ValidationError(format!(
+                        "вызов {function} модуля {code}: {e}"
+                    )))
                 }
-                Err(DomainError::ValidationError(format!(
-                    "вызов {function} модуля {code}: {e}"
-                )))
+                Ok(Err(je)) => {
+                    guard.remove(&code);
+                    Err(DomainError::ValidationError(format!(
+                        "вызов {function} модуля {code} прерван: {je}"
+                    )))
+                }
+                Err(elapsed) => {
+                    guard.remove(&code);
+                    Err(DomainError::ValidationError(format!(
+                        "вызов {function} модуля {code}: таймаут {elapsed}"
+                    )))
+                }
             }
-            Ok(Err(je)) => {
-                guard.remove(code);
-                Err(DomainError::ValidationError(format!(
-                    "вызов {function} модуля {code} прерван: {je}"
-                )))
-            }
-            Err(elapsed) => {
-                guard.remove(code);
-                Err(DomainError::ValidationError(format!(
-                    "вызов {function} модуля {code}: таймаут {elapsed}"
-                )))
-            }
-        }
+        })
     }
 
-    async fn unload_module(&self, code: &str) -> Result<(), DomainError> {
-        if self.modules.write().await.remove(code).is_some() {
-            Ok(())
-        } else {
-            Err(DomainError::NotFound(format!("модуль не загружен: {code}")))
-        }
+    fn invoke_with_context(
+        &self,
+        code: &str,
+        function: &str,
+        input: &[u8],
+        ctx: PluginCallContext,
+    ) -> BoxFuture<'_, Result<Vec<u8>, DomainError>> {
+        let code = code.to_string();
+        let function = function.to_string();
+        let input = input.to_vec();
+        Box::pin(async move {
+            let host_ctx = HostCallCtx {
+                module_code: ctx.module_code,
+                company_id: ctx.company_id,
+                actor: ctx.actor,
+                capabilities: ctx.capabilities.into_iter().collect(),
+                settings: ctx.settings,
+            };
+            self.set_call_context(host_ctx).await;
+            let out = self.call_function(&code, &function, &input).await?;
+            Ok(out)
+        })
     }
 
-    async fn is_loaded(&self, code: &str) -> bool {
-        self.modules.read().await.contains_key(code)
+    fn unload_module(&self, code: &str) -> BoxFuture<'_, Result<(), DomainError>> {
+        let code = code.to_string();
+        Box::pin(async move {
+            if self.modules.write().await.remove(&code).is_some() {
+                Ok(())
+            } else {
+                Err(DomainError::NotFound(format!("модуль не загружен: {code}")))
+            }
+        })
+    }
+
+    fn is_loaded(&self, code: &str) -> BoxFuture<'_, bool> {
+        let code = code.to_string();
+        Box::pin(async move { self.modules.read().await.contains_key(&code) })
     }
 }
 

@@ -5,6 +5,7 @@ use core_domain::event::{Event, StreamType};
 use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityRelation, EntityState, EntityTransition, EntityType,
 };
+use core_domain::module::{ModuleRecord, PluginCallContext};
 use core_domain::permission::PermissionPolicy;
 use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
@@ -146,11 +147,11 @@ pub trait WasmHost: Send + Sync {
     ///
     /// Возвращает `DomainError::ValidationError`, если манифест не проходит
     /// проверку, либо `DomainError::Storage` при ошибке компиляции плагина.
-    async fn load_module(
+    fn load_module(
         &self,
         code: &str,
         wasm_bytes: &[u8],
-    ) -> Result<ModuleManifest, DomainError>;
+    ) -> BoxFuture<'_, Result<ModuleManifest, DomainError>>;
 
     /// Вызывает экспортированную функцию `function` модуля с входными
     /// байтами `input` и возвращает байты вывода. Хост соблюдает ресурсные
@@ -160,18 +161,29 @@ pub trait WasmHost: Send + Sync {
     ///
     /// Возвращает `DomainError::NotFound`, если модуль не загружен, или
     /// `DomainError::ValidationError` при ошибке исполнения.
-    async fn call_function(
+    fn call_function(
         &self,
         code: &str,
         function: &str,
         input: &[u8],
-    ) -> Result<Vec<u8>, DomainError>;
+    ) -> BoxFuture<'_, Result<Vec<u8>, DomainError>>;
+
+    /// Вызывает функцию модуля с предоставленным контекстом единичного вызова
+    /// (компания, исполнитель, capabilities, настройки). Используется
+    /// командами `plugin.{code}.{name}` из сценария 9b.
+    fn invoke_with_context(
+        &self,
+        code: &str,
+        function: &str,
+        input: &[u8],
+        ctx: PluginCallContext,
+    ) -> BoxFuture<'_, Result<Vec<u8>, DomainError>>;
 
     /// Выгружает модуль из памяти; не влияет на установку в БД.
-    async fn unload_module(&self, code: &str) -> Result<(), DomainError>;
+    fn unload_module(&self, code: &str) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Возвращает `true`, если модуль с заданным кодом загружен в память.
-    async fn is_loaded(&self, code: &str) -> bool;
+    fn is_loaded(&self, code: &str) -> BoxFuture<'_, bool>;
 }
 
 /// Хранилище материализованных компаний.
@@ -367,27 +379,24 @@ pub trait MetadataRepository: Send + Sync {
         &self,
         schema: &EntitySchema,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Получает тип сущности по id.
     ///
     /// # Ошибки
     ///
     /// Возвращает `DomainError::NotFound`, если тип не существует.
-    fn get_entity_type(
-        &self,
-        id: &Uuid,
-    ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
+    fn get_entity_type(&self, id: &Uuid) -> BoxFuture<'_, Result<EntityType, DomainError>>;
 
     /// Получает тип сущности по коду в рамках компании.
     fn get_entity_type_by_code(
         &self,
         company_id: &str,
         code: &str,
-    ) -> impl Future<Output = Result<EntityType, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<EntityType, DomainError>>;
 
     /// Перечисляет все типы сущностей, упорядоченные по `code`.
-    fn list_entity_types(&self) -> impl Future<Output = Result<Vec<EntityType>, DomainError>> + Send;
+    fn list_entity_types(&self) -> BoxFuture<'_, Result<Vec<EntityType>, DomainError>>;
 
     /// Повторно регистрирует тип сущности и его ресурсы, добавляя переданные
     /// события в той же транзакции. Существующие ресурсы обновляются по коду;
@@ -396,14 +405,82 @@ pub trait MetadataRepository: Send + Sync {
         &self,
         schema: &EntitySchema,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Собирает полный снимок схемы типа сущности компании.
     fn get_schema(
         &self,
         company_id: &str,
         entity_type: &str,
-    ) -> impl Future<Output = Result<EntitySchema, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<EntitySchema, DomainError>>;
+}
+
+/// Хранилище установленных WASM-модулей: каталог `modules` (глобальная запись
+/// с манифестными данными) и проекция `company_modules` (включение для
+/// конкретной компании). Методы записи транзакционно продвигают Трубу
+/// (события `module.*`) и Доску (записи таблиц) вместе, согласно концепции.
+pub trait ModuleRepository: Send + Sync {
+    /// Устанавливает модуль в каталог `modules` с ensure-семантикой по коду.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::ValidationError`, если модуль с таким кодом
+    /// уже установлен.
+    fn install(
+        &self,
+        record: &ModuleRecord,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
+
+    /// Помечает модуль как `Uninstalled` и возвращает обновлённую запись.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::NotFound`, если модуль не установлен.
+    fn uninstall(
+        &self,
+        code: &str,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<ModuleRecord, DomainError>>;
+
+    /// Получает запись установленного модуля по коду.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::NotFound`, если модуль не установлен.
+    fn get(&self, code: &str) -> BoxFuture<'_, Result<ModuleRecord, DomainError>>;
+
+    /// Перечисляет все записи каталога модулей, упорядоченные по коду.
+    fn list(&self) -> BoxFuture<'_, Result<Vec<ModuleRecord>, DomainError>>;
+
+    /// Включает модуль для компании (строго один раз на пару компания+код).
+    fn enable_for_company(
+        &self,
+        company_id: &str,
+        code: &str,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
+
+    /// Отключает модуль для компании. Отсутствие пары — не ошибка.
+    fn disable_for_company(
+        &self,
+        company_id: &str,
+        code: &str,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
+
+    /// Возвращает установленные модули, включённые для компании.
+    fn list_enabled_for_company(
+        &self,
+        company_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<ModuleRecord>, DomainError>>;
+
+    /// Проверяет, включён ли модуль для компании.
+    fn is_enabled_for_company(
+        &self,
+        company_id: &str,
+        code: &str,
+    ) -> BoxFuture<'_, Result<bool, DomainError>>;
 }
 
 /// Хранилище операционного аудита (`audit_log`) — отдельная подсистема,

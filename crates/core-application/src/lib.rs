@@ -1,5 +1,6 @@
 pub mod app_registry;
 pub mod command_registry;
+pub mod module_manager;
 pub mod permission_manager;
 pub mod ports;
 pub mod registry;
@@ -7,6 +8,7 @@ pub mod seed;
 
 pub use app_registry::AppRegistry;
 pub use command_registry::{CommandExecutionCtx, CommandMetadata, CommandRegistry};
+pub use module_manager::ModuleManager;
 pub use permission_manager::PermissionManager;
 pub use ports::{
     AuditRepository, CompanyRepository, EntitySchema, EventStore, MetadataRepository,

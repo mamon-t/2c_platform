@@ -14,13 +14,14 @@ use core_application::command_registry::CommandExecutionCtx;
 use core_application::permission_manager::PermissionManager;
 use core_application::ports::{EventStore, WasmHost};
 use core_application::CommandRegistry;
+use core_application::ModuleManager;
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_infrastructure::extism_wasm_host::{ExtismWasmHost, HostCallCtx};
 use core_infrastructure::{
     connect_db, SurrealAuditRepository, SurrealCompanyRepository, SurrealEventStore,
-    SurrealMetadataRepository, SurrealObjectRepository, SurrealPermissionPolicyRepository,
-    SurrealRoleRepository, SurrealUserRepository,
+    SurrealMetadataRepository, SurrealModuleRepository, SurrealObjectRepository,
+    SurrealPermissionPolicyRepository, SurrealRoleRepository, SurrealUserRepository,
 };
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -80,9 +81,12 @@ async fn main() -> Result<()> {
         .await
         .context("не удалось создать схему permission_policies")?;
 
-    let cache_dir: PathBuf = std::env::var("MODULE_CACHE_DIR")
-        .unwrap_or_else(|_| "./.module_cache".into())
-        .into();
+    let cache_dir: PathBuf = std::env::var("MODULE_CACHE_DIR").map(PathBuf::from).unwrap_or_else(
+        |_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".cache/2c-platform/modules")
+        },
+    );
     let host = Arc::new(
         ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), cache_dir.clone()).context("не удалось создать WASM-хост")?,
     );
@@ -91,19 +95,35 @@ async fn main() -> Result<()> {
         .context("не удалось создать схему ModuleKv")?;
     info!("WASM-хост Extism готов (module_cache_dir={})", cache_dir.display());
 
-    let registry = Arc::new(CommandRegistry::new());
+    let app_registry = Arc::new(core_application::AppRegistry::new());
+    let registry = app_registry.commands.clone();
     commands::register_phase2_commands(&registry, companies.clone(), users, roles.clone()).await;
     commands::register_phase3_commands(&registry, metadata.clone()).await;
-    commands::register_phase4_commands(&registry, objects, metadata).await;
+    commands::register_phase4_commands(&registry, objects, metadata.clone()).await;
     commands::register_phase4_audit_commands(&registry, audit.clone()).await;
     commands::register_phase5_commands(
         &registry,
         roles.clone(),
         policies.clone(),
         audit.clone(),
-        companies,
+        companies.clone(),
     )
     .await;
+
+    let modules = Arc::new(SurrealModuleRepository::new(db.clone()));
+    modules
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему модулей")?;
+    let module_manager = Arc::new(ModuleManager::new(
+        host.clone(),
+        modules.clone(),
+        app_registry.clone(),
+        policies.clone(),
+        metadata.clone(),
+        audit.clone(),
+    ));
+    commands::register_phase9_module_commands(&registry, module_manager, companies.clone()).await;
 
     let permissions = Arc::new(PermissionManager::new(roles, policies));
     registry.attach_pipeline(audit, permissions).await;

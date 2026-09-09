@@ -31,15 +31,16 @@ Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, комп�
 
 | Файл | Зачем нужен |
 |---|---|
-| `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,aggregate,error}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError` |
-| `crates/core-application/src/ports.rs` | Порты: EventStore, все `*Repository`, WasmHost, EntitySchema |
+| `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,module,aggregate,error}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError` |
+| `crates/core-application/src/ports.rs` | Порты: EventStore, все `*Repository` (+`ModuleRepository`), WasmHost, EntitySchema |
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (префиксные команды) + `CommandExecutionPipeline` (аудит + RBAC перед каждой командой) |
 | `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик, ensure-регистры |
+| `crates/core-application/src/module_manager.rs` | `ModuleManager` (9b): install/uninstall/enable/disable + декларативная регистрация манифеста (политики, схемы, команды `plugin.*`) |
 | `crates/core-infrastructure/src/connector.rs`, `events.rs` | `connect_db` (единая WS-сессия), транзакционные хелперы append/assign_versions/with_transaction |
-| `crates/core-infrastructure/src/surreal_{event_store,company,user,role,permission_policy,object,audit,metadata}_repository.rs` | SQL-доступ по коллекциям; у каждого `ensure_schema()` с UNIQUE-индексами; схема создаётся при старте, а не SQL-миграциями |
+| `crates/core-infrastructure/src/surreal_{event_store,company,user,role,permission_policy,object,audit,metadata,module}_repository.rs` | SQL-доступ по коллекциям; у каждого `ensure_schema()` с UNIQUE-индексами; схема создаётся при старте, а не SQL-миграциями |
 | `crates/core-infrastructure/src/extism_wasm_host.rs`, `module_kv.rs` | WASM-хост (Extism 1.30), host-функции, KV-хранилище модулей |
 | `apps/platform-server/src/main.rs` | Старт: ensure_schema всех репо, регистрация команд по фазам, attach RBAC-pipeline, /health + debug REST |
-| `apps/platform-server/src/commands.rs` | Все команды: `company.*`, `user.*` (+contact/profile), `role.*` (+`role.seed`), `metadata.*`, `object.*` (+snapshot), `document.number.*`, `audit.*`, `system.migrate_permissions` |
+| `apps/platform-server/src/commands.rs` | Все команды: `company.*`, `user.*` (+contact/profile), `role.*` (+`role.seed`), `metadata.*`, `object.*` (+snapshot), `document.number.*`, `audit.*`, `module.*`, `system.migrate_permissions` |
 
 ## Команды
 
@@ -105,7 +106,11 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 объекты с OCC, Event Store, CommandRegistry/AppRegistry с ensure-семантикой). Фаза 9 (WASM/Extism):
 готова подфаза 8b (манифест v2, ExtismWasmHost, ModuleKv, host-fn 8a–8b
 объекты и метаданные, hello_plugin с objects_probe, debug-REST `/debug/modules`, `/debug/module/load`,
-`/debug/module/invoke` + live-проверка на живом SurrealDB: KV, объекты, OCC `CONFLICT_ERROR`) — коммит `9d79db7`.
+`/debug/module/invoke` + live-проверка на живом SurrealDB: KV, объекты, OCC `CONFLICT_ERROR`) — коммит `9d79db7`;
+готовы подфазы 9b (ModuleStore: каталог `modules` + проекция `company_modules`, ModuleManager
+с декларативной регистрацией политик/схем/команд по манифесту, команды `module.install/uninstall/
+enable/disable/list/info` с правом `module.manage`, кэш `~/.cache/2c-platform/modules`,
+интеграционные тесты `phase9b_modules` на `mem://` + live-проверка полного цикла жизни hello).
 Не начинать Фазы 10+ (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления, криптоподпись, диагностика, тесты).
 Детали фазирования и приёмки — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 

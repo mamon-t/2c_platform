@@ -2,7 +2,7 @@
 //! метатиповой модели: entity_types, entity_fields, entity_states,
 //! entity_transitions, entity_forms, entity_actions, entity_relations).
 
-use core_application::ports::{EntitySchema, MetadataRepository};
+use core_application::ports::{BoxFuture, EntitySchema, MetadataRepository};
 use core_domain::error::DomainError;
 use core_domain::event::Event;
 use core_domain::metadata::EntityType;
@@ -340,192 +340,219 @@ async fn apply_schema(
 }
 
 impl MetadataRepository for SurrealMetadataRepository {
-    async fn create_entity_type(
+    fn create_entity_type(
         &self,
         schema: &EntitySchema,
         events: &[Event],
-    ) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                if apply_schema(&txn, schema, false).await? {
-                    let mut events = events.to_vec();
-                    assign_versions(&txn, &mut events).await?;
-                    write_events(&txn, &events).await?;
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let db = self.db.clone();
+        let schema = schema.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&db, |txn| {
+                let schema = schema.clone();
+                let events = events.clone();
+                async move {
+                    let outcome: Result<(), DomainError> = async {
+                        if apply_schema(&txn, &schema, false).await? {
+                            let mut events = events.clone();
+                            assign_versions(&txn, &mut events).await?;
+                            write_events(&txn, &events).await?;
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    (txn, outcome)
                 }
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
-        })
-        .await
-    }
-
-    async fn get_entity_type(&self, id: &Uuid) -> Result<EntityType, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
-                 WHERE record::id(id) = $id LIMIT 1"
-            ))
-            .bind(("id", id.to_string()))
+            })
             .await
-            .map_err(|e| DomainError::Storage(format!("entity_types get: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_types get take: {e}")))?;
-        decode_row("Тип сущности", row)
+        })
     }
 
-    async fn get_entity_type_by_code(
+    fn get_entity_type(&self, id: &Uuid) -> BoxFuture<'_, Result<EntityType, DomainError>> {
+        let db = self.db.clone();
+        let id = *id;
+        Box::pin(async move {
+            let mut response = db
+                .query(format!(
+                    "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
+                     WHERE record::id(id) = $id LIMIT 1"
+                ))
+                .bind(("id", id.to_string()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_types get: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_types get take: {e}")))?;
+            decode_row("Тип сущности", row)
+        })
+    }
+
+    fn get_entity_type_by_code(
         &self,
         company_id: &str,
         code: &str,
-    ) -> Result<EntityType, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
-                 WHERE code = $code AND company_id = $company_id LIMIT 1"
-            ))
-            .bind(("code", code.to_string()))
-            .bind(("company_id", company_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_types get by code: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_types get by code take: {e}")))?;
-        decode_row("Тип сущности", row)
+    ) -> BoxFuture<'_, Result<EntityType, DomainError>> {
+        let db = self.db.clone();
+        let company_id = company_id.to_string();
+        let code = code.to_string();
+        Box::pin(async move {
+            let mut response = db
+                .query(format!(
+                    "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
+                     WHERE code = $code AND company_id = $company_id LIMIT 1"
+                ))
+                .bind(("code", code.clone()))
+                .bind(("company_id", company_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_types get by code: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_types get by code take: {e}")))?;
+            decode_row("Тип сущности", row)
+        })
     }
 
-    async fn list_entity_types(&self) -> Result<Vec<EntityType>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} ORDER BY code"
-            ))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_types list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_types list take: {e}")))?;
-        decode_rows("entity_types", rows)
+    fn list_entity_types(&self) -> BoxFuture<'_, Result<Vec<EntityType>, DomainError>> {
+        let db = self.db.clone();
+        Box::pin(async move {
+            let mut response = db
+                .query(format!(
+                    "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} ORDER BY code"
+                ))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_types list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_types list take: {e}")))?;
+            decode_rows("entity_types", rows)
+        })
     }
 
-    async fn update_entity_type(
+    fn update_entity_type(
         &self,
         schema: &EntitySchema,
         events: &[Event],
-    ) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                if apply_schema(&txn, schema, true).await? {
-                    let mut events = events.to_vec();
-                    assign_versions(&txn, &mut events).await?;
-                    write_events(&txn, &events).await?;
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let db = self.db.clone();
+        let schema = schema.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&db, |txn| {
+                let schema = schema.clone();
+                let events = events.clone();
+                async move {
+                    let outcome: Result<(), DomainError> = async {
+                        if apply_schema(&txn, &schema, true).await? {
+                            let mut events = events.clone();
+                            assign_versions(&txn, &mut events).await?;
+                            write_events(&txn, &events).await?;
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    (txn, outcome)
                 }
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn get_schema(
+    fn get_schema(
         &self,
         company_id: &str,
         entity_type_code: &str,
-    ) -> Result<EntitySchema, DomainError> {
-        let entity_type = self
-            .get_entity_type_by_code(company_id, entity_type_code)
-            .await?;
+    ) -> BoxFuture<'_, Result<EntitySchema, DomainError>> {
+        let db = self.db.clone();
+        let company_id = company_id.to_string();
+        let entity_type_code = entity_type_code.to_string();
+        Box::pin(async move {
+            let repo = SurrealMetadataRepository::new(db.clone());
+            let entity_type = repo
+                .get_entity_type_by_code(&company_id, &entity_type_code)
+                .await?;
 
-        let mut fields_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_FIELD_FIELDS} FROM {ENTITY_FIELD_TABLE} \
-                 WHERE entity_type = $et ORDER BY order"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_fields read: {e}")))?;
-        let fields: Vec<Value> = fields_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_fields read take: {e}")))?;
+            let mut fields_response = db
+                .query(format!(
+                    "SELECT {ENTITY_FIELD_FIELDS} FROM {ENTITY_FIELD_TABLE} \
+                     WHERE entity_type = $et ORDER BY order"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_fields read: {e}")))?;
+            let fields: Vec<Value> = fields_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_fields read take: {e}")))?;
 
-        let mut states_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_STATE_FIELDS} FROM {ENTITY_STATE_TABLE} \
-                 WHERE entity_type = $et ORDER BY code"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_states read: {e}")))?;
-        let states: Vec<Value> = states_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_states read take: {e}")))?;
+            let mut states_response = db
+                .query(format!(
+                    "SELECT {ENTITY_STATE_FIELDS} FROM {ENTITY_STATE_TABLE} \
+                     WHERE entity_type = $et ORDER BY code"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_states read: {e}")))?;
+            let states: Vec<Value> = states_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_states read take: {e}")))?;
 
-        let mut transitions_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_TRANSITION_FIELDS} FROM {ENTITY_TRANSITION_TABLE} \
-                 WHERE entity_type = $et ORDER BY code"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_transitions read: {e}")))?;
-        let transitions: Vec<Value> = transitions_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_transitions read take: {e}")))?;
+            let mut transitions_response = db
+                .query(format!(
+                    "SELECT {ENTITY_TRANSITION_FIELDS} FROM {ENTITY_TRANSITION_TABLE} \
+                     WHERE entity_type = $et ORDER BY code"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_transitions read: {e}")))?;
+            let transitions: Vec<Value> = transitions_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_transitions read take: {e}")))?;
 
-        let mut forms_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_FORM_FIELDS} FROM {ENTITY_FORM_TABLE} \
-                 WHERE entity_type = $et ORDER BY code"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_forms read: {e}")))?;
-        let forms: Vec<Value> = forms_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_forms read take: {e}")))?;
+            let mut forms_response = db
+                .query(format!(
+                    "SELECT {ENTITY_FORM_FIELDS} FROM {ENTITY_FORM_TABLE} \
+                     WHERE entity_type = $et ORDER BY code"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_forms read: {e}")))?;
+            let forms: Vec<Value> = forms_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_forms read take: {e}")))?;
 
-        let mut actions_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_ACTION_FIELDS} FROM {ENTITY_ACTION_TABLE} \
-                 WHERE entity_type = $et ORDER BY code"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_actions read: {e}")))?;
-        let actions: Vec<Value> = actions_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_actions read take: {e}")))?;
+            let mut actions_response = db
+                .query(format!(
+                    "SELECT {ENTITY_ACTION_FIELDS} FROM {ENTITY_ACTION_TABLE} \
+                     WHERE entity_type = $et ORDER BY code"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_actions read: {e}")))?;
+            let actions: Vec<Value> = actions_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_actions read take: {e}")))?;
 
-        let mut relations_response = self
-            .db
-            .query(format!(
-                "SELECT {ENTITY_RELATION_FIELDS} FROM {ENTITY_RELATION_TABLE} \
-                 WHERE entity_type = $et ORDER BY code"
-            ))
-            .bind(("et", entity_type_code.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("entity_relations read: {e}")))?;
-        let relations: Vec<Value> = relations_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("entity_relations read take: {e}")))?;
+            let mut relations_response = db
+                .query(format!(
+                    "SELECT {ENTITY_RELATION_FIELDS} FROM {ENTITY_RELATION_TABLE} \
+                     WHERE entity_type = $et ORDER BY code"
+                ))
+                .bind(("et", entity_type_code.clone()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("entity_relations read: {e}")))?;
+            let relations: Vec<Value> = relations_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("entity_relations read take: {e}")))?;
 
-        Ok(EntitySchema {
-            entity_type,
-            fields: decode_rows("entity_fields", fields)?,
-            states: decode_rows("entity_states", states)?,
-            transitions: decode_rows("entity_transitions", transitions)?,
-            forms: decode_rows("entity_forms", forms)?,
-            actions: decode_rows("entity_actions", actions)?,
-            relations: decode_rows("entity_relations", relations)?,
+            Ok(EntitySchema {
+                entity_type,
+                fields: decode_rows("entity_fields", fields)?,
+                states: decode_rows("entity_states", states)?,
+                transitions: decode_rows("entity_transitions", transitions)?,
+                forms: decode_rows("entity_forms", forms)?,
+                actions: decode_rows("entity_actions", actions)?,
+                relations: decode_rows("entity_relations", relations)?,
+            })
         })
     }
 }
