@@ -49,7 +49,7 @@ cargo build
 cargo test                 # ср. ниже: интеграционные тесты НЕ требуют живого SurrealDB
 cargo test -p core-infrastructure   # только интеграционные приёмочные (mem://)
 cargo clippy --workspace --all-targets   # ⚠️ surrealdb-core делает медленным — ставь таймаут >= 600s
-cargo +1.96.0 fmt --all    # toolchain уже закреплён, + не нужен
+❌ cargo fmt --all — НЕ использовать, ломает форматирование. Допускаются только ручные правки.
 
 # Сервер (читает .env через dotenvy)
 cargo run -p platform-server
@@ -78,11 +78,16 @@ curl -u root:root -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" :8000/sq
 
 ```bash
 rustup target add wasm32-unknown-unknown
-cargo build --release --target wasm32-unknown-unknown -p hello_plugin \
-    --manifest-path examples/hello_plugin/Cargo.toml
+cd examples/hello_plugin && cargo build --release --target wasm32-unknown-unknown
+cd ../..
 cp examples/hello_plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm \
    crates/core-infrastructure/tests/fixtures/hello.wasm
 ```
+
+Сборку запускать **из каталога `examples/hello_plugin`** (без `--manifest-path`):
+только так cargo прочитает локальный `.cargo/config` с обёрткой линкера
+`lld-wrapper.sh`, которая отбрасывает `-fuse-ld=*` из глобального
+`~/.cargo/config` (этот флаг rust-lld на wasm32 не принимает).
 
 ## Окружение
 
@@ -100,25 +105,14 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
   в `doc/technical_report.md` — таблица фаз §2 с хешем из `git rev-parse --short HEAD`
   и «Журнал снимков» (хеш, дата, затронутые разделы).
 
-## Статус фаз (что уже работает)
+## Статус фаз
 
-Реализовано: Фазы 1–8 (каркас, компании/пользователи/роли, метаданные, аудит, RBAC,
-объекты с OCC, Event Store, CommandRegistry/AppRegistry с ensure-семантикой). Фаза 9 (WASM/Extism):
-готова подфаза 8b (манифест v2, ExtismWasmHost, ModuleKv, host-fn 8a–8b
-объекты и метаданные, hello_plugin с objects_probe, debug-REST `/debug/modules`, `/debug/module/load`,
-`/debug/module/invoke` + live-проверка на живом SurrealDB: KV, объекты, OCC `CONFLICT_ERROR`) — коммит `9d79db7`;
-готовы подфазы 9b (ModuleStore: каталог `modules` + проекция `company_modules`, ModuleManager
-с декларативной регистрацией политик/схем/команд по манифесту, команды `module.install/uninstall/
-enable/disable/list/info` с правом `module.manage`, кэш `~/.cache/2c-platform/modules`,
-интеграционные тесты `phase9b_modules` на `mem://` + live-проверка полного цикла жизни hello);
-готова подфаза 9c (первая реальная host-fn `emit_event` — запись в Event Store c cap `events.emit`,
-коды `INVALID_UUID`/`INVALID_JSON`/`DB_ERROR`; заглушки `run_script`/`notify_user`/`users_by_role`/
-`signature_required`/`cms_verify` со строгими конвертами Прил. №6; **reinstall — первоклассная
-операция**: `module.installed/reinstalled/uninstalled` в потоке Module + аудит «кто ставил/удалял/переустанавливал»
-(актор в events-metadata и audit-актор; до аутентификации — `ActorSnapshot::system()`);
-тесты 127, live-цикл 9c на живом SurrealDB).
-Не начинать Фазы 10+ (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления, криптоподпись, диагностика, тесты).
-Детали фазирования и приёмки — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
+Реализовано: Фазы 1–9c. Фаза 9 (WASM/Extism): host-fn `emit_event`, `module_kv`, менеджер
+модулей с install/uninstall/enable/disable, интеграционные тесты (`phase5_rbac`, `hello_wasm`,
+`phase9b_modules`).
+**Не начинать Фазу 10+** (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления,
+криптоподпись, диагностика, тесты).
+Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
 ## Решения, которые не предлагать заново
 
@@ -129,3 +123,15 @@ enable/disable/list/info` с правом `module.manage`, кэш `~/.cache/2c-p
 - **Криптоподпись**: cpcsp-rs, Linux-first (ADR-004).
 - **UI будущего клиента**: Flutter + SDUI из метаданных (ADR-006, ADR-008).
 - **JMJ-слой**: Event Store — true source, `audit_log` — операционный, с retention (ADR-011).
+
+## Специфичные skills проекта
+| Название скилла | Триггер | Путь к файлу |
+|---|---|---|
+| `lsp-code-generation` | Написание или исправление кода на Rust | `.opencode/skills/lsp-code-generation/SKILL.md` |
+
+## Глоссарий домена
+| Термин | Расшифровка | Английский эквивалент |
+|---|---|---|
+| **Труба** | Event Store (источник истины) | `EventStore` |
+| **Доска** | Материализованные проекции | `Projections` |
+| **Модуль** | WASM-плагин (Extism) | `Module` / `Plugin` |

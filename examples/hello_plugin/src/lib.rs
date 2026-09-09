@@ -1,11 +1,12 @@
-//! Пример WASM-модуля для хоста платформы (подфазы 8a–8b и 9c).
+//! Пример WASM-модуля для хоста платформы (подфазы 8a–8b, 9c и 9d).
 //!
 //! Экспортирует `get_info()` (манифест v2), `greet()` (приветствие с вызовом
 //! host-функций `whoami`/`now_ms`), `kv_probe()` (запись/чтение KV-хранилища),
 //! `objects_probe()` (создание/чтение/список объектов «Доски» через
-//! host-функции подфазы 8b), а также пробы подфазы 9c: `events_probe()`
+//! host-функции подфазы 8b), пробы подфазы 9c: `events_probe()`
 //! (эмиссия события через `emit_event`), `run_script()` (заглушка Rhai)
-//! и `stubs_probe()` (заглушки уведомлений и подписей). Собирается отдельным
+//! и `stubs_probe()` (заглушки уведомлений и подписей), а также пробу подфазы
+//! 9d `users_probe()` (`users_by_role`). Собирается отдельным
 //! крейтом с целью `wasm32-unknown-unknown` и вне workspace:
 //! `cargo build --release --target wasm32-unknown-unknown`.
 
@@ -201,6 +202,14 @@ pub fn stubs_probe() -> FnResult<String> {
     Ok(format!(
         "script={script_conv}; notify={notify_conv}; users={users_conv}; sigreq={sigreq_conv}; cms={cms_conv}"
     ))
+}
+
+/// Проба подфазы 9d: `users_by_role` для заданной роли. Возвращает конверт
+/// хоста как есть.
+#[extism_pdk::plugin_fn]
+pub fn users_probe(role_id: String) -> FnResult<String> {
+    let conv = unsafe { host::users_by_role(role_id)? };
+    Ok(conv)
 }
 
 // Фиктивный помощник, чтобы `Error` был задействован (never-type fallback не
