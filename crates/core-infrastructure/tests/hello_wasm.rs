@@ -9,10 +9,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::Utc;
 use core_application::ports::{
-    EntitySchema, EventStore, MetadataRepository, RoleRepository, UserRepository, WasmHost,
+    EntitySchema, EventStore, MetadataRepository, ObjectRepository, RoleRepository, UserRepository,
+    WasmHost,
 };
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::metadata::{EntityField, EntityKind, EntityState, EntityType, FieldType};
@@ -46,16 +48,18 @@ fn temp_cache() -> PathBuf {
 async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     let cache = temp_cache();
     let db = mem_db().await;
-    let objects = SurrealObjectRepository::new(db.clone());
-    let metadata = SurrealMetadataRepository::new(db.clone());
-    let events = core_infrastructure::SurrealEventStore::new(db.clone());
-    let users = core_infrastructure::SurrealUserRepository::new(db.clone());
+    let objects = Arc::new(SurrealObjectRepository::new(db.clone()));
+    let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
+    let events = Arc::new(core_infrastructure::SurrealEventStore::new(db.clone()));
+    let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
+    let transactions = core_application::TransactionOrchestrator::new(objects.clone());
     let h = ExtismWasmHost::new(
         db.clone(),
-        objects.clone(),
-        metadata.clone(),
-        events.clone(),
-        users.clone(),
+        objects.as_ref().clone(),
+        metadata.as_ref().clone(),
+        events.as_ref().clone(),
+        users.as_ref().clone(),
+        transactions,
         cache.clone(),
     )
     .unwrap();
@@ -726,4 +730,335 @@ async fn users_by_role_9d_foreign_company_role_returns_empty_list() {
         users.as_array().map(Vec::is_empty).unwrap_or(false),
         "роль чужой компании → пустой список, получено: {users}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Подфаза 9d: транзакционная оркестрация (tx_begin/tx_add_op/tx_commit).
+// ---------------------------------------------------------------------------
+
+use core_domain::object::{Object, ObjectKind};
+
+/// Регистрирует тип сущности `document` (проводка: draft → posted/cancelled)
+/// в компании `comp1` и возвращает его id для объектов подфазы 9d.
+async fn seed_document_schema(db: &Surreal<Any>) -> Uuid {
+    let metadata = SurrealMetadataRepository::new(db.clone());
+    let s = |code: &str, label: &str, initial: bool| EntityState {
+        id: Uuid::new_v4(),
+        entity_type: "document".to_string(),
+        code: code.to_string(),
+        label: label.to_string(),
+        color: None,
+        is_initial: initial,
+        is_final: code == "posted" || code == "cancelled",
+    };
+    let entity_type = EntityType {
+        id: Uuid::new_v4(),
+        code: "document".to_string(),
+        name: "Документ".to_string(),
+        kind: EntityKind::Document,
+        company_id: "comp1".to_string(),
+        metadata_version: 1,
+        is_system: false,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let schema = EntitySchema {
+        entity_type: entity_type.clone(),
+        fields: vec![EntityField {
+            id: Uuid::new_v4(),
+            entity_type: "document".to_string(),
+            code: "sum".to_string(),
+            label: "Сумма".to_string(),
+            data_type: FieldType::Money,
+            required: false,
+            is_unique: false,
+            is_indexed: false,
+            options: Value::Null,
+            is_system: false,
+            order: 1,
+        }],
+        states: vec![s("draft", "Черновик", true), s("posted", "Проведён", false), s("cancelled", "Отменён", false)],
+        transitions: vec![],
+        forms: vec![],
+        actions: vec![],
+        relations: vec![],
+    };
+    metadata.create_entity_type(&schema, &[]).await.unwrap();
+    entity_type.id
+}
+
+/// Создаёт объект `document` состояния `draft` v1 в компании `comp1`.
+async fn create_document(db: &Surreal<Any>, entity_type: &str) -> Object {
+    let objects = SurrealObjectRepository::new(db.clone());
+    let obj = Object {
+        id: Uuid::new_v4(),
+        entity_type: entity_type.to_string(),
+        kind: ObjectKind::Document,
+        company_id: "comp1".to_string(),
+        state: "draft".to_string(),
+        data: json!({ "sum": 100 }),
+        computed: Value::Null,
+        number: None,
+        date: None,
+        parent_id: None,
+        version: 1,
+        created_by: "system".to_string(),
+        updated_by: "system".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    objects
+        .create(
+            &obj,
+            &[Event {
+                id: Uuid::new_v4(),
+                stream_type: StreamType::Object,
+                stream_id: obj.id.to_string(),
+                event_type: "object.created".to_string(),
+                version: 0,
+                payload: json!(obj),
+                metadata: ActorSnapshot::system(),
+                company_id: "comp1".to_string(),
+                correlation_id: "corr-tx".to_string(),
+                causation_id: None,
+                occurred_at: Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+    obj
+}
+
+/// Извлекает JSON-конверт из вывода экспорта: `outer` — весь вывод, `name` —
+/// ключ с сырым конвертом (строкой). Возвращает распарсенный конверт.
+fn export_conv(outer: &Value, name: &str) -> Value {
+    serde_json::from_str::<Value>(outer[name].as_str().expect(name)).expect(name)
+}
+
+fn conv_err_code(conv: &Value) -> String {
+    conv["error"]["code"].as_str().unwrap_or_default().to_string()
+}
+
+fn assert_conv_ok(conv: &Value, what: &str) {
+    assert!(
+        conv["ok"] == Value::Bool(true),
+        "конверт {what} должен быть ok, получено: {conv}"
+    );
+}
+
+#[tokio::test]
+async fn tx_9d_commit_posts_object_atomically() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["transactions".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    seed_document_schema(&db).await;
+    let obj = create_document(&db, "document").await;
+
+    let out = h
+        .call_function(
+            "hello",
+            "tx_probe",
+            json!({ "object_id": obj.id, "expected_version": 1 })
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+
+    let begin = export_conv(&parsed, "begin");
+    assert_conv_ok(&begin, "tx_begin");
+    assert_eq!(begin["data"]["operations_count"], json!(0));
+    let add_op = export_conv(&parsed, "add_op");
+    assert_conv_ok(&add_op, "tx_add_op");
+    let commit = export_conv(&parsed, "commit");
+    assert_conv_ok(&commit, "tx_commit");
+    assert_eq!(commit["data"]["committed"], json!(true));
+
+    let objects = SurrealObjectRepository::new(db.clone());
+    let posted = objects.get(&obj.id).await.unwrap();
+    assert_eq!(posted.state, "posted", "объект должен стать проведённым");
+    assert_eq!(posted.version, 2, "версия должна вырасти до 2");
+}
+
+#[tokio::test]
+async fn tx_9d_ref_binding_resolves_params_from_previous_op() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["transactions".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    seed_document_schema(&db).await;
+    let obj = create_document(&db, "document").await;
+
+    let out = h
+        .call_function(
+            "hello",
+            "tx_ref_probe",
+            json!({ "object_id": obj.id, "expected_version": 1 })
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+
+    assert_conv_ok(&export_conv(&parsed, "begin"), "tx_begin");
+    let noop = export_conv(&parsed, "noop");
+    assert_conv_ok(&noop, "test.noop");
+    assert!(noop["data"]["op_id"].is_string());
+    assert_conv_ok(&export_conv(&parsed, "add_op"), "tx_add_op");
+    assert_conv_ok(&export_conv(&parsed, "commit"), "tx_commit");
+
+    let objects = SurrealObjectRepository::new(db.clone());
+    let posted = objects.get(&obj.id).await.unwrap();
+    assert_eq!(posted.state, "posted", "$ref → object.post должен провести объект");
+    assert_eq!(posted.version, 2);
+}
+
+#[tokio::test]
+async fn tx_9d_idempotent_begin_returns_same_handle() {
+    let (h, _db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["transactions".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function("hello", "tx_idem_probe", b"")
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+
+    let first = export_conv(&parsed, "first");
+    let second = export_conv(&parsed, "second");
+    assert_conv_ok(&first, "первый tx_begin");
+    assert_conv_ok(&second, "второй tx_begin");
+    assert_conv_ok(&export_conv(&parsed, "noop"), "noop между begin");
+
+    assert_eq!(
+        first["data"]["handle"], second["data"]["handle"],
+        "повторный begin с тем же business_key должен вернуть тот же handle"
+    );
+    assert_eq!(first["data"]["operations_count"], json!(0));
+    assert_eq!(
+        second["data"]["operations_count"], json!(1),
+        "при повторе пачки оркестратор должен сообщить о добавленной операции"
+    );
+}
+
+#[tokio::test]
+async fn tx_9d_requires_transactions_capability() {
+    let (h, _db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["objects.read".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    let out = h
+        .call_function(
+            "hello",
+            "tx_probe",
+            json!({ "object_id": Uuid::new_v4(), "expected_version": 1 })
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+
+    let begin = export_conv(&parsed, "begin");
+    assert_eq!(
+        begin["ok"], Value::Bool(false),
+        "begin без capability transactions должен отклоняться"
+    );
+    assert_eq!(conv_err_code(&begin), "CAPABILITY_DENIED");
+}
+
+#[tokio::test]
+async fn tx_9d_stale_version_conflicts_at_commit() {
+    let (h, db, _cache) = host().await;
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["transactions".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    seed_document_schema(&db).await;
+    let obj = create_document(&db, "document").await;
+
+    // Внешний писатель доводит объект до v2 до транзакции.
+    let objects = SurrealObjectRepository::new(db.clone());
+    let mut moved = obj.clone();
+    moved.state = "posted".to_string();
+    objects
+        .update(
+            &moved,
+            &[Event {
+                id: Uuid::new_v4(),
+                stream_type: StreamType::Object,
+                stream_id: obj.id.to_string(),
+                event_type: "object.posted".to_string(),
+                version: 0,
+                payload: json!(moved),
+                metadata: ActorSnapshot::system(),
+                company_id: "comp1".to_string(),
+                correlation_id: "corr-ext".to_string(),
+                causation_id: None,
+                occurred_at: Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let out = h
+        .call_function(
+            "hello",
+            "tx_probe",
+            json!({ "object_id": obj.id, "expected_version": 1 })
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_str(&String::from_utf8(out).unwrap()).unwrap();
+
+    let commit = export_conv(&parsed, "commit");
+    assert_eq!(
+        commit["ok"], Value::Bool(false),
+        "commit при устаревшей версии должен откатиться и вернуть ошибку"
+    );
+    assert_eq!(conv_err_code(&commit), "CONFLICT_ERROR");
+
+    let after = objects.get(&obj.id).await.unwrap();
+    assert_eq!(after.version, 2, "неудачная транзакция не должна менять объект");
+    assert_eq!(after.state, "posted");
 }

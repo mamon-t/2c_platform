@@ -70,6 +70,7 @@ async fn setup() -> Env {
     let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
     users.ensure_schema().await.unwrap();
 
+    let transactions = core_application::TransactionOrchestrator::new(objects.clone());
     let host = Arc::new(
         ExtismWasmHost::new(
             db.clone(),
@@ -77,6 +78,7 @@ async fn setup() -> Env {
             metadata.as_ref().clone(),
             store.as_ref().clone(),
             users.as_ref().clone(),
+            transactions,
             cache.clone(),
         )
         .unwrap(),
