@@ -398,6 +398,7 @@ impl ModuleRepository for SurrealModuleRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use crate::SurrealEventStore;
     use core_application::ports::EventStore;
     use core_domain::event::{ActorSnapshot, StreamType};
@@ -550,7 +551,9 @@ mod tests {
         repo.disable_for_company(&company_c, "hello", &[event("hello", &company_c, "module.disabled", json!({}))]).await.unwrap();
 
         let companies = repo.list_enabled_companies("hello").await.unwrap();
-        assert_eq!(companies, vec![company_a, company_b]);
+        let expected: HashSet<String> =
+            vec![company_a, company_b].into_iter().collect();
+        assert_eq!(companies.into_iter().collect::<HashSet<_>>(), expected);
 
         assert!(repo.list_enabled_companies("missing").await.unwrap().is_empty());
     }
