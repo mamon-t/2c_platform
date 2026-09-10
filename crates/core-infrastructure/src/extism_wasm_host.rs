@@ -2,8 +2,8 @@
 //! манифеста через `get_info()`, исполнение экспортируемых функций с
 //! ресурсными лимитами (топливо, память, таймауты) и host-функции подфаз
 //! 8a–8b (контекст/сервис, KV-хранилище, объекты «Доски» и метаданные),
-//! 9c (`emit_event` и заглушки workflow/подписи) и 9d (`users_by_role`)
-//! в namespace `ExtismHost`.
+//! 9c (`emit_event` и заглушки workflow/подписи) и 9d (`users_by_role`,
+//! транзакции `tx_begin`/`tx_add_op`/`tx_commit`) в namespace `ExtismHost`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -14,6 +14,7 @@ use chrono::Utc;
 use core_application::ports::{
     BoxFuture, EventStore, MetadataRepository, ObjectRepository, UserRepository, WasmHost,
 };
+use core_application::TransactionOrchestrator;
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::module::PluginCallContext;
@@ -75,6 +76,7 @@ struct HostShared {
     metadata: SurrealMetadataRepository,
     events: SurrealEventStore,
     users: SurrealUserRepository,
+    transactions: Arc<TransactionOrchestrator>,
     runtime: Handle,
 }
 
@@ -102,6 +104,11 @@ impl HostShared {
     /// Клон репозитория пользователей для асинхронной операции в `block_on_db`.
     fn users_module(&self) -> SurrealUserRepository {
         self.users.clone()
+    }
+
+    /// Клон оркестратора транзакций host-функций `tx_*`.
+    fn transactions_module(&self) -> Arc<TransactionOrchestrator> {
+        self.transactions.clone()
     }
 }
 
@@ -144,10 +151,10 @@ impl ExtismWasmHost {
             .collect()
     }
 
-    /// Создаёт хост. `db`, `objects`, `metadata`, `events` и `users`
-    /// используются host-функциями 8b/9c/9d (объекты «Доски», метаданные,
-    /// Event Store, пользователи для `users_by_role`), `cache_dir` — кэш
-    /// бинарников.
+    /// Создаёт хост. `db`, `objects`, `metadata`, `events`, `users` и
+    /// `transactions` используются host-функциями 8b/9c/9d (объекты «Доски»,
+    /// метаданные, Event Store, пользователи для `users_by_role`,
+    /// оркестратор операций для `tx_*`), `cache_dir` — кэш бинарников.
     /// Должен вызываться внутри tokio-runtime (берётся `Handle::current()`).
     ///
     /// # Errors
@@ -159,6 +166,7 @@ impl ExtismWasmHost {
         metadata: SurrealMetadataRepository,
         events: SurrealEventStore,
         users: SurrealUserRepository,
+        transactions: Arc<TransactionOrchestrator>,
         cache_dir: PathBuf,
     ) -> Result<Self, DomainError> {
         let runtime = Handle::try_current()
@@ -171,6 +179,7 @@ impl ExtismWasmHost {
                 metadata,
                 events,
                 users,
+                transactions,
                 runtime,
             }),
             modules: RwLock::new(HashMap::new()),
@@ -881,6 +890,122 @@ impl ExtismWasmHost {
                                     }));
                                 }
                                 Ok(envelope_ok(json!({ "users": payload })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "tx_begin",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "tx_begin",
+                    Some("transactions"),
+                    |ctx, args| {
+                        let business_key = args.first().cloned().unwrap_or_default();
+                        let orch = shared.transactions_module();
+                        let company = ctx.company_id.clone();
+                        let actor = ctx.actor.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "tx_begin".to_string(),
+                            async move {
+                                let (handle, operations_count) =
+                                    orch.begin(&business_key, &company, actor).await?;
+                                Ok(envelope_ok(json!({
+                                    "handle": handle,
+                                    "operations_count": operations_count,
+                                })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "tx_add_op",
+            vec![PTR, PTR, PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "tx_add_op",
+                    Some("transactions"),
+                    |ctx, args| {
+                        let handle = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "tx_add_op",
+                        )?;
+                        let op_type = args.get(1).cloned().unwrap_or_default();
+                        if op_type.is_empty() {
+                            return Err(envelope_err(
+                                "INVALID_ACTION",
+                                "tx_add_op: пустой op_type",
+                            ));
+                        }
+                        let params = parse_arg(&args.get(2).cloned().unwrap_or_default())?;
+                        let orch = shared.transactions_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            format!("tx_add_op:{op_type}"),
+                            async move {
+                                let op_id = orch.add_op(handle, &op_type, params).await?;
+                                Ok(envelope_ok(json!({ "op_id": op_id })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
+            "tx_commit",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "tx_commit",
+                    Some("transactions"),
+                    |ctx, args| {
+                        let handle = parse_arg_uuid(
+                            args.first().cloned().unwrap_or_default(),
+                            "tx_commit",
+                        )?;
+                        let orch = shared.transactions_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "tx_commit".to_string(),
+                            async move {
+                                orch.commit(handle).await?;
+                                Ok(envelope_ok(json!({ "committed": true })))
                             },
                         )
                     },

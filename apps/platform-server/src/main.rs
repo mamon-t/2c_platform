@@ -87,8 +87,9 @@ async fn main() -> Result<()> {
             PathBuf::from(home).join(".cache/2c-platform/modules")
         },
     );
+    let tx_orchestrator = core_application::TransactionOrchestrator::new(objects.clone());
     let host = Arc::new(
-        ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), store.as_ref().clone(), users.as_ref().clone(), cache_dir.clone()).context("не удалось создать WASM-хост")?,
+        ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), store.as_ref().clone(), users.as_ref().clone(), tx_orchestrator, cache_dir.clone()).context("не удалось создать WASM-хост")?,
     );
     host.ensure_schema()
         .await
