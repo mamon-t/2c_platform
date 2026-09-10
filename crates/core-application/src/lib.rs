@@ -5,6 +5,7 @@ pub mod permission_manager;
 pub mod ports;
 pub mod registry;
 pub mod seed;
+pub mod transaction_orchestrator;
 
 pub use app_registry::AppRegistry;
 pub use command_registry::{CommandExecutionCtx, CommandMetadata, CommandRegistry};
@@ -16,3 +17,4 @@ pub use ports::{
 };
 pub use registry::CodeRegistry;
 pub use seed::seed_system_roles_and_policies;
+pub use transaction_orchestrator::TransactionOrchestrator;
