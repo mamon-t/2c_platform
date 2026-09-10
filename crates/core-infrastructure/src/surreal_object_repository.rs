@@ -5,7 +5,7 @@
 //! Проверка полей по метатиповой модели выполняется на командном слое через
 //! `Object::validate`; этот репозиторий только сохраняет.
 
-use core_application::ports::ObjectRepository;
+use core_application::ports::{BoxFuture, ObjectRepository};
 use core_domain::error::DomainError;
 use core_domain::event::Event;
 use core_domain::object::{Object, ObjectSnapshot};
@@ -161,270 +161,341 @@ fn number_key(entity_type: &str, company_id: &str) -> String {
 }
 
 impl ObjectRepository for SurrealObjectRepository {
-    async fn get_with_version(
+    fn get_with_version(
         &self,
         id: &AggregateId,
-    ) -> Result<(Object, Version), DomainError> {
-        let obj = self.get(id).await?;
-        Ok((obj.clone(), obj.version))
+    ) -> BoxFuture<'_, Result<(Object, Version), DomainError>> {
+        let id = *id;
+        Box::pin(async move {
+            let obj = self.get(&id).await?;
+            Ok((obj.clone(), obj.version))
+        })
     }
 
-    async fn get(&self, id: &AggregateId) -> Result<Object, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {OBJECT_FIELDS} FROM {OBJECT_TABLE} \
-                 WHERE record::id(id) = $id LIMIT 1"
-            ))
-            .bind(("id", id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("objects get: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("objects get take: {e}")))?;
-        decode_row("Объект", row)
+    fn get(&self, id: &AggregateId) -> BoxFuture<'_, Result<Object, DomainError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {OBJECT_FIELDS} FROM {OBJECT_TABLE} \
+                     WHERE record::id(id) = $id LIMIT 1"
+                ))
+                .bind(("id", id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("objects get: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("objects get take: {e}")))?;
+            decode_row("Объект", row)
+        })
     }
 
-    async fn create(
+    fn create(
         &self,
         obj: &Object,
         events: &[Event],
-    ) -> Result<Object, DomainError> {
+    ) -> BoxFuture<'_, Result<Object, DomainError>> {
         let mut stored = obj.clone();
-        stored.version = 1;
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<Object, DomainError> = async {
-                let mut response = txn
-                    .query(format!(
-                        "SELECT record::id(id) AS id FROM {OBJECT_TABLE} \
-                         WHERE record::id(id) = $id LIMIT 1"
-                    ))
-                    .bind(("id", stored.id.to_string()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("objects lookup: {e}")))?;
-                let existing: Option<Value> = response
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("objects lookup take: {e}")))?;
-                if existing.is_some() {
-                    return Err(DomainError::ValidationError(format!(
-                        "Объект {} уже существует",
-                        stored.id
-                    )));
+        let events = events.to_vec();
+        Box::pin(async move {
+            stored.version = 1;
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<Object, DomainError> = async {
+                    let mut response = txn
+                        .query(format!(
+                            "SELECT record::id(id) AS id FROM {OBJECT_TABLE} \
+                             WHERE record::id(id) = $id LIMIT 1"
+                        ))
+                        .bind(("id", stored.id.to_string()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("objects lookup: {e}")))?;
+                    let existing: Option<Value> = response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("objects lookup take: {e}")))?;
+                    if existing.is_some() {
+                        return Err(DomainError::ValidationError(format!(
+                            "Объект {} уже существует",
+                            stored.id
+                        )));
+                    }
+
+                    if stored.number.is_none() && stored.is_document() {
+                        let number = assign_document_number(
+                            &txn,
+                            &stored.entity_type,
+                            &stored.company_id,
+                        )
+                        .await?;
+                        stored.number = Some(number);
+                    }
+
+                    write_object(&txn, &stored).await?;
+                    write_snapshot(&txn, &stored).await?;
+
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+                    Ok(stored)
                 }
-
-                if stored.number.is_none() && stored.is_document() {
-                    let number =
-                        assign_document_number(&txn, &stored.entity_type, &stored.company_id).await?;
-                    stored.number = Some(number);
-                }
-
-                write_object(&txn, &stored).await?;
-                write_snapshot(&txn, &stored).await?;
-
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-                Ok(stored)
-            }
-            .await;
-            (txn, outcome)
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn update(
+    fn update(
         &self,
         obj: &Object,
         events: &[Event],
-    ) -> Result<Object, DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<Object, DomainError> = async {
-                let current = load_object(&txn, &obj.id).await?;
-                current_version_checked(&current, obj.version)?;
-                let mut stored = obj.clone();
-                stored.version = current.version + 1;
-                write_object(&txn, &stored).await?;
-                write_snapshot(&txn, &stored).await?;
+    ) -> BoxFuture<'_, Result<Object, DomainError>> {
+        let obj = obj.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<Object, DomainError> = async {
+                    let current = load_object(&txn, &obj.id).await?;
+                    current_version_checked(&current, obj.version)?;
+                    let mut stored = obj.clone();
+                    stored.version = current.version + 1;
+                    write_object(&txn, &stored).await?;
+                    write_snapshot(&txn, &stored).await?;
 
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-                Ok(stored)
-            }
-            .await;
-            (txn, outcome)
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+                    Ok(stored)
+                }
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn delete(
+    fn update_batch(
+        &self,
+        ops: &[(Object, Vec<Event>)],
+    ) -> BoxFuture<'_, Result<Vec<Object>, DomainError>> {
+        let ops = ops.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<Vec<Object>, DomainError> = async {
+                    let mut stored_objects = Vec::with_capacity(ops.len());
+                    let mut all_events = Vec::new();
+                    for (obj, events) in &ops {
+                        let current = load_object(&txn, &obj.id).await?;
+                        current_version_checked(&current, obj.version)?;
+                        let mut stored = obj.clone();
+                        stored.version = current.version + 1;
+                        write_object(&txn, &stored).await?;
+                        write_snapshot(&txn, &stored).await?;
+                        stored_objects.push(stored);
+                        all_events.extend(events.iter().cloned());
+                    }
+                    assign_versions(&txn, &mut all_events).await?;
+                    write_events(&txn, &all_events).await?;
+                    Ok(stored_objects)
+                }
+                .await;
+                (txn, outcome)
+            })
+            .await
+        })
+    }
+
+    fn delete(
         &self,
         id: &AggregateId,
         events: &[Event],
-    ) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let current = load_object(&txn, id).await?;
-                if current.version > 1 {
-                    return Err(DomainError::ValidationError(
-                        "Удаление объекта с историей запрещено".to_string(),
-                    ));
-                }
-                let _: Option<Value> = txn
-                    .delete((OBJECT_TABLE, id.to_string()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("objects delete: {e}")))?;
-                let _: Option<Value> = txn
-                    .query(format!(
-                        "DELETE FROM {SNAPSHOT_TABLE} WHERE object_id = $id"
-                    ))
-                    .bind(("id", id.to_string()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("snapshots delete: {e}")))?
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("snapshots delete take: {e}")))?;
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let id = *id;
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let current = load_object(&txn, &id).await?;
+                    if current.version > 1 {
+                        return Err(DomainError::ValidationError(
+                            "Удаление объекта с историей запрещено".to_string(),
+                        ));
+                    }
+                    let _: Option<Value> = txn
+                        .delete((OBJECT_TABLE, id.to_string()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("objects delete: {e}")))?;
+                    let _: Option<Value> = txn
+                        .query(format!(
+                            "DELETE FROM {SNAPSHOT_TABLE} WHERE object_id = $id"
+                        ))
+                        .bind(("id", id.to_string()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("snapshots delete: {e}")))?
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("snapshots delete take: {e}")))?;
 
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+                    Ok(())
+                }
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn list(
+    fn list(
         &self,
         entity_type: &str,
         company_id: &str,
         limit: usize,
-    ) -> Result<Vec<Object>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {OBJECT_FIELDS} FROM {OBJECT_TABLE} \
-                 WHERE entity_type = $et AND company_id = $cid \
-                 ORDER BY updated_at DESC LIMIT $limit"
-            ))
-            .bind(("et", entity_type.to_string()))
-            .bind(("cid", company_id.to_string()))
-            .bind(("limit", limit as u64))
-            .await
-            .map_err(|e| DomainError::Storage(format!("objects list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("objects list take: {e}")))?;
-        decode_rows("objects", rows)
+    ) -> BoxFuture<'_, Result<Vec<Object>, DomainError>> {
+        let entity_type = entity_type.to_string();
+        let company_id = company_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {OBJECT_FIELDS} FROM {OBJECT_TABLE} \
+                     WHERE entity_type = $et AND company_id = $cid \
+                     ORDER BY updated_at DESC LIMIT $limit"
+                ))
+                .bind(("et", entity_type))
+                .bind(("cid", company_id))
+                .bind(("limit", limit as u64))
+                .await
+                .map_err(|e| DomainError::Storage(format!("objects list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("objects list take: {e}")))?;
+            decode_rows("objects", rows)
+        })
     }
 
-    async fn count(
+    fn count(
         &self,
         entity_type: &str,
         company_id: &str,
-    ) -> Result<u64, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT count() AS total FROM {OBJECT_TABLE} \
-                 WHERE entity_type = $et AND company_id = $cid GROUP ALL"
-            ))
-            .bind(("et", entity_type.to_string()))
-            .bind(("cid", company_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("objects count: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("objects count take: {e}")))?;
-        Ok(rows
-            .first()
-            .and_then(|row| row.get("total"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0))
+    ) -> BoxFuture<'_, Result<u64, DomainError>> {
+        let entity_type = entity_type.to_string();
+        let company_id = company_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT count() AS total FROM {OBJECT_TABLE} \
+                     WHERE entity_type = $et AND company_id = $cid GROUP ALL"
+                ))
+                .bind(("et", entity_type))
+                .bind(("cid", company_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("objects count: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("objects count take: {e}")))?;
+            Ok(rows
+                .first()
+                .and_then(|row| row.get("total"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0))
+        })
     }
 
-    async fn get_snapshots(
+    fn get_snapshots(
         &self,
         object_id: &AggregateId,
-    ) -> Result<Vec<ObjectSnapshot>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {SNAPSHOT_FIELDS} FROM {SNAPSHOT_TABLE} \
-                 WHERE object_id = $id ORDER BY version"
-            ))
-            .bind(("id", object_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("snapshots list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("snapshots list take: {e}")))?;
-        decode_rows("object_snapshots", rows)
+    ) -> BoxFuture<'_, Result<Vec<ObjectSnapshot>, DomainError>> {
+        let object_id = object_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {SNAPSHOT_FIELDS} FROM {SNAPSHOT_TABLE} \
+                     WHERE object_id = $id ORDER BY version"
+                ))
+                .bind(("id", object_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("snapshots list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("snapshots list take: {e}")))?;
+            decode_rows("object_snapshots", rows)
+        })
     }
 
-    async fn restore_snapshot(
+    fn restore_snapshot(
         &self,
         object_id: &AggregateId,
         version: Version,
         events: &[Event],
-    ) -> Result<Object, DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<Object, DomainError> = async {
-                let current = load_object(&txn, object_id).await?;
+    ) -> BoxFuture<'_, Result<Object, DomainError>> {
+        let object_id = *object_id;
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<Object, DomainError> = async {
+                    let current = load_object(&txn, &object_id).await?;
 
-                let mut response = txn
-                    .query(format!(
-                        "SELECT {SNAPSHOT_FIELDS} FROM {SNAPSHOT_TABLE} \
-                         WHERE object_id = $id AND version = $version LIMIT 1"
-                    ))
-                    .bind(("id", object_id.to_string()))
-                    .bind(("version", version))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("snapshot read: {e}")))?;
-                let row: Option<Value> = response
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("snapshot read take: {e}")))?;
-                let snapshot: ObjectSnapshot =
-                    decode_row("Снимок объекта", row).map_err(|e| match e {
-                        DomainError::NotFound(_) => DomainError::NotFound(format!(
-                            "Версия {} не найдена у объекта {}",
-                            version, object_id
-                        )),
-                        other => other,
-                    })?;
+                    let mut response = txn
+                        .query(format!(
+                            "SELECT {SNAPSHOT_FIELDS} FROM {SNAPSHOT_TABLE} \
+                             WHERE object_id = $id AND version = $version LIMIT 1"
+                        ))
+                        .bind(("id", object_id.to_string()))
+                        .bind(("version", version))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("snapshot read: {e}")))?;
+                    let row: Option<Value> = response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("snapshot read take: {e}")))?;
+                    let snapshot: ObjectSnapshot =
+                        decode_row("Снимок объекта", row).map_err(|e| match e {
+                            DomainError::NotFound(_) => DomainError::NotFound(format!(
+                                "Версия {} не найдена у объекта {}",
+                                version, object_id
+                            )),
+                            other => other,
+                        })?;
 
-                let mut next = current.clone();
-                next.data = snapshot.data;
-                next.state = snapshot.state;
-                next.version = current.version + 1;
-                next.updated_by = "system".to_string();
-                next.updated_at = Utc::now();
-                write_object(&txn, &next).await?;
-                write_snapshot(&txn, &next).await?;
+                    let mut next = current.clone();
+                    next.data = snapshot.data;
+                    next.state = snapshot.state;
+                    next.version = current.version + 1;
+                    next.updated_by = "system".to_string();
+                    next.updated_at = Utc::now();
+                    write_object(&txn, &next).await?;
+                    write_snapshot(&txn, &next).await?;
 
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-                Ok(next)
-            }
-            .await;
-            (txn, outcome)
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+                    Ok(next)
+                }
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn next_document_number(
+    fn next_document_number(
         &self,
         entity_type: &str,
         company_id: &str,
-    ) -> Result<String, DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<String, DomainError> =
-                assign_document_number(&txn, entity_type, company_id).await;
-            (txn, outcome)
+    ) -> BoxFuture<'_, Result<String, DomainError>> {
+        let entity_type = entity_type.to_string();
+        let company_id = company_id.to_string();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<String, DomainError> =
+                    assign_document_number(&txn, &entity_type, &company_id).await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 }
 
@@ -592,6 +663,80 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn update_batch_is_atomic_and_rolls_back_whole_batch() {
+        let (repo, _store) = fixtures().await;
+        let a = sample_object("c1", json!({"sum": 100}));
+        let b = sample_object("c1", json!({"sum": 200}));
+        repo.create(&a, &[system_event(&a.id.to_string(), "object.created")])
+            .await
+            .unwrap();
+        repo.create(&b, &[system_event(&b.id.to_string(), "object.created")])
+            .await
+            .unwrap();
+
+        // Внешнее изменение b доводит его до v2.
+        let mut b_v2 = b.clone();
+        b_v2.data = json!({"sum": 777});
+        b_v2.version = 1;
+        repo.update(&b_v2, &[system_event(&b.id.to_string(), "object.updated")])
+            .await
+            .unwrap();
+
+        // Пачка: a с валидной версией, b со «устаревшей» → весь батч откатывается.
+        let mut a_patch = a.clone();
+        a_patch.data = json!({"sum": 111});
+        a_patch.version = 1;
+        let mut b_stale = b.clone();
+        b_stale.data = json!({"sum": 999});
+        b_stale.version = 1;
+        let err = repo
+            .update_batch(&[
+                (a_patch, vec![system_event(&a.id.to_string(), "object.updated")]),
+                (b_stale, vec![system_event(&b.id.to_string(), "object.updated")]),
+            ])
+            .await
+            .unwrap_err();
+        match err {
+            DomainError::VersionConflict { expected, actual } => {
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        // a не изменился — батч откатан целиком.
+        let after = repo.get(&a.id).await.unwrap();
+        assert_eq!(after.version, 1);
+        assert_eq!(after.data, json!({"sum": 100}));
+    }
+
+    #[tokio::test]
+    async fn update_batch_applies_all_and_writes_events() {
+        let (repo, store) = fixtures().await;
+        let a = sample_object("c1", json!({"sum": 100}));
+        let b = sample_object("c1", json!({"sum": 200}));
+        repo.create(&a, &[system_event(&a.id.to_string(), "object.created")])
+            .await
+            .unwrap();
+        repo.create(&b, &[system_event(&b.id.to_string(), "object.created")])
+            .await
+            .unwrap();
+
+        let pa = (a.clone(), vec![system_event(&a.id.to_string(), "object.posted")]);
+        let pb = (b.clone(), vec![system_event(&b.id.to_string(), "object.posted")]);
+        let stored = repo.update_batch(&[pa, pb]).await.unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(stored.iter().all(|o| o.version == 2));
+
+        let stream = store
+            .read_stream(StreamType::Object, &a.id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(stream.len(), 2);
+        assert_eq!(stream[1].event_type, "object.posted");
     }
 
     #[tokio::test]

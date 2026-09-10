@@ -51,10 +51,10 @@ pub trait ObjectRepository: Send + Sync {
     fn get_with_version(
         &self,
         id: &AggregateId,
-    ) -> impl Future<Output = Result<(Object, Version), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(Object, Version), DomainError>>;
 
     /// Получает объект по id.
-    fn get(&self, id: &AggregateId) -> impl Future<Output = Result<Object, DomainError>> + Send;
+    fn get(&self, id: &AggregateId) -> BoxFuture<'_, Result<Object, DomainError>>;
 
     /// Создаёт объект с `version == 1`, записывает его начальный снимок и
     /// добавляет события в одной транзакции.
@@ -69,7 +69,7 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         obj: &Object,
         events: &[Event],
-    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Object, DomainError>>;
 
     /// Обновляет объект с применением OCC: сохранённая версия должна совпадать
     /// с `obj.version` (ожидаемой версией вызывающей стороны), иначе возвращается
@@ -79,7 +79,19 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         obj: &Object,
         events: &[Event],
-    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Object, DomainError>>;
+
+    /// Атомарно применяет пачку обновлений объектов в одной транзакции
+    /// SurrealDB: обороты, снимки и события всех записей коммитятся вместе,
+    /// а сбой любого обновления (включая `DomainError::VersionConflict`)
+    /// откатывает всю пачку целиком.
+    ///
+    /// OCC проверяется для каждой пары `(Object, events)` по её `version`;
+    /// возвращённые объекты содержат сохранённые версии (`current + 1`).
+    fn update_batch(
+        &self,
+        ops: &[(Object, Vec<Event>)],
+    ) -> BoxFuture<'_, Result<Vec<Object>, DomainError>>;
 
     /// Физически удаляет черновик без истории изменений (`version == 1`).
     ///
@@ -91,7 +103,7 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         id: &AggregateId,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Перечисляет объекты типа сущности в компании, сначала самые новые,
     /// ограниченные по `limit`.
@@ -100,7 +112,7 @@ pub trait ObjectRepository: Send + Sync {
         entity_type: &str,
         company_id: &str,
         limit: usize,
-    ) -> impl Future<Output = Result<Vec<Object>, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Vec<Object>, DomainError>>;
 
     /// Возвращает общее количество объектов типа сущности в компании
     /// (без применения `limit`); используется для пагинации и `total_count`.
@@ -108,13 +120,13 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         entity_type: &str,
         company_id: &str,
-    ) -> impl Future<Output = Result<u64, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<u64, DomainError>>;
 
     /// Перечисляет историю версий объекта, сначала самые старые.
     fn get_snapshots(
         &self,
         object_id: &AggregateId,
-    ) -> impl Future<Output = Result<Vec<ObjectSnapshot>, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Vec<ObjectSnapshot>, DomainError>>;
 
     /// Восстанавливает объект к данным/состоянию `version`, создавая новую
     /// версию объекта (`current + 1`) со свежим снимком; история
@@ -124,7 +136,7 @@ pub trait ObjectRepository: Send + Sync {
         object_id: &AggregateId,
         version: Version,
         events: &[Event],
-    ) -> impl Future<Output = Result<Object, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Object, DomainError>>;
 
     /// Атомарно наращивает счётчик для пары (тип сущности, компания) и возвращает
     /// форматированный номер документа `{entity_type}-{YYYY}-{sequential:04}`.
@@ -132,7 +144,7 @@ pub trait ObjectRepository: Send + Sync {
         &self,
         entity_type: &str,
         company_id: &str,
-    ) -> impl Future<Output = Result<String, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<String, DomainError>>;
 }
 
 /// Хост для WASM-модулей (Extism): загрузка, исполнение и выгрузка модуля.
