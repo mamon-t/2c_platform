@@ -168,23 +168,26 @@ impl ModuleManager {
                                 .get("company_id")
                                 .and_then(|v| v.as_str())
                                 .ok_or_else(|| {
-                                    "отсутствует обязательный параметр 'company_id'".to_string()
+                                    DomainError::ValidationError(
+                                        "отсутствует обязательный параметр 'company_id'".to_string(),
+                                    )
                                 })?
                                 .to_string();
                             let enabled = modules
                                 .is_enabled_for_company(&company_id, &code)
-                                .await
-                                .map_err(|e| e.to_string())?;
+                                .await?;
                             if !enabled {
-                                return Err(format!(
+                                return Err(DomainError::ValidationError(format!(
                                     "INVALID_ACTION: модуль {code} отключён для компании"
-                                ));
+                                )));
                             }
                             let input = params
                                 .get("input")
                                 .and_then(|v| v.as_str())
                                 .ok_or_else(|| {
-                                    "отсутствует обязательный параметр 'input'".to_string()
+                                    DomainError::ValidationError(
+                                        "отсутствует обязательный параметр 'input'".to_string(),
+                                    )
                                 })?
                                 .to_string();
                             let actor = params
@@ -192,7 +195,9 @@ impl ModuleManager {
                                 .cloned()
                                 .map(serde_json::from_value::<core_domain::event::ActorSnapshot>)
                                 .transpose()
-                                .map_err(|e| format!("некорректный 'actor': {e}"))?;
+                                .map_err(|e| {
+                                    DomainError::ValidationError(format!("некорректный 'actor': {e}"))
+                                })?;
                             let settings = params
                                 .get("settings")
                                 .cloned()
@@ -206,8 +211,7 @@ impl ModuleManager {
                             };
                             let out = host
                                 .invoke_with_context(&code, &fname, input.as_bytes(), ctx)
-                                .await
-                                .map_err(|e| e.to_string())?;
+                                .await?;
                             let output = String::from_utf8_lossy(&out).to_string();
                             Ok(json!({ "output": output }))
                         }

@@ -161,7 +161,13 @@ async fn main() -> Result<()> {
         .route("/debug/modules", get(debug_modules))
         .route("/debug/module/load", post(debug_module_load))
         .route("/debug/module/invoke", post(debug_module_invoke))
-        .with_state(state);
+        .with_state(state.clone())
+        // Фаза 10a: транспортный конверт RpcMessage поверх Axum.
+        .merge(core_api::router(core_api::ApiState {
+            registry: state.registry.clone(),
+            store: state.store.clone(),
+            idempotency: core_api::IdempotencyStore::new(),
+        }));
 
     let addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let listener = TcpListener::bind(&addr).await?;
@@ -257,7 +263,7 @@ async fn debug_command(
         .registry
         .execute_ctx(name, params, ctx)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true, "command": name, "result": result })))
 }
 

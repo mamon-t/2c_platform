@@ -12,5 +12,16 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+jsonwebtoken = { workspace = true }
+lru = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# kv-mem активируется только при компиляции тестов (feature unification),
+# поэтому интеграционные тесты RPC не требуют живого SurrealDB.
+core-infrastructure = { path = "../core-infrastructure" }
+surrealdb = { workspace = true, features = ["kv-mem"] }
+tower = { workspace = true, features = ["util"] }

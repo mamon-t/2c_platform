@@ -25,15 +25,17 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait EventStore: Send + Sync {
     /// Добавляет события атомарно, по порядку, с ключами по потокам. Должен быть идемпотентным
     /// для каждого ID события, чтобы повторная отправка пакета не создавала дублей.
-    fn append(&self, events: &[Event])
-        -> impl Future<Output = Result<(), DomainError>> + Send;
+    ///
+    /// Методы возвращают `BoxFuture` вместо `impl Future`, чтобы трейт был
+    /// объектно-безопасным (позволяет `Arc<dyn EventStore>` на транспортном слое).
+    fn append<'a>(&'a self, events: &[Event]) -> BoxFuture<'a, Result<(), DomainError>>;
 
     /// Загружает полную историю потока, упорядоченную по `version`.
-    fn read_stream(
-        &self,
+    fn read_stream<'a>(
+        &'a self,
         stream_type: StreamType,
         stream_id: &str,
-    ) -> impl Future<Output = Result<Vec<Event>, DomainError>> + Send;
+    ) -> BoxFuture<'a, Result<Vec<Event>, DomainError>>;
 }
 
 /// Хранилище материализованных объектов — Доска. Поддерживает OCC (оптимистичную блокировку) через `version`.
@@ -241,6 +243,9 @@ pub trait CompanyRepository: Send + Sync {
 /// Хранилище материализованных пользователей, персон, контактов, профилей и
 /// сертификатов. Методы записи сохраняют запись Доски и переданные
 /// `events` атомарно в единой транзакции SurrealDB.
+///
+/// Методы используют `BoxFuture` для dyn-совместимости: трейт используется
+/// как `Arc<dyn UserRepository>` в транспортном слое (`core-api`).
 pub trait UserRepository: Send + Sync {
     /// Создаёт пользователя вместе с персоной и добавляет события в одной транзакции.
     ///
@@ -252,17 +257,17 @@ pub trait UserRepository: Send + Sync {
         user: &User,
         person: &Person,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Получает пользователя по id.
-    fn get(&self, id: &Uuid) -> impl Future<Output = Result<User, DomainError>> + Send;
+    fn get(&self, id: &Uuid) -> BoxFuture<'_, Result<User, DomainError>>;
 
     /// Получает пользователя по логину; используется для аутентификации и проверок
     /// дубликатов логинов.
-    fn get_by_login(&self, login: &str) -> impl Future<Output = Result<User, DomainError>> + Send;
+    fn get_by_login(&self, login: &str) -> BoxFuture<'_, Result<User, DomainError>>;
 
     /// Перечисляет всех пользователей, упорядоченных по `login`.
-    fn list(&self) -> impl Future<Output = Result<Vec<User>, DomainError>> + Send;
+    fn list(&self) -> BoxFuture<'_, Result<Vec<User>, DomainError>>;
 
     /// Перечисляет активных (не `Archived`) пользователей с назначенной ролью.
     ///
@@ -273,56 +278,49 @@ pub trait UserRepository: Send + Sync {
         &self,
         role_id: Uuid,
         company_id: Uuid,
-    ) -> impl Future<Output = Result<Vec<User>, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Vec<User>, DomainError>>;
 
     /// Обновляет пользователя и добавляет события в одной транзакции.
-    fn update(
-        &self,
-        user: &User,
-        events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    fn update(&self, user: &User, events: &[Event]) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Получает запись персоны пользователя.
-    fn get_person(&self, user_id: &Uuid) -> impl Future<Output = Result<Person, DomainError>> + Send;
+    fn get_person(&self, user_id: &Uuid) -> BoxFuture<'_, Result<Person, DomainError>>;
 
     /// Добавляет канал связи и соответствующее ему событие в одной транзакции.
     fn add_contact(
         &self,
         contact: &UserContact,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Перечисляет каналы связи пользователя.
-    fn list_contacts(
-        &self,
-        user_id: &Uuid,
-    ) -> impl Future<Output = Result<Vec<UserContact>, DomainError>> + Send;
+    fn list_contacts(&self, user_id: &Uuid) -> BoxFuture<'_, Result<Vec<UserContact>, DomainError>>;
 
     /// Добавляет профиль трудоустройства и соответствующее ему событие в одной транзакции.
     fn add_profile(
         &self,
         profile: &UserCompanyProfile,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Перечисляет профили трудоустройства пользователя.
     fn list_profiles(
         &self,
         user_id: &Uuid,
-    ) -> impl Future<Output = Result<Vec<UserCompanyProfile>, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Vec<UserCompanyProfile>, DomainError>>;
 
     /// Добавляет сертификат и соответствующее ему событие в одной транзакции.
     fn add_certificate(
         &self,
         certificate: &UserCertificate,
         events: &[Event],
-    ) -> impl Future<Output = Result<(), DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<(), DomainError>>;
 
     /// Перечисляет сертификаты пользователя.
     fn list_certificates(
         &self,
         user_id: &Uuid,
-    ) -> impl Future<Output = Result<Vec<UserCertificate>, DomainError>> + Send;
+    ) -> BoxFuture<'_, Result<Vec<UserCertificate>, DomainError>>;
 }
 
 /// Хранилище материализованных ролей. Методы используют `BoxFuture` для

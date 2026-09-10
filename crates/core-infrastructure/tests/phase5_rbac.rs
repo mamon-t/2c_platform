@@ -185,8 +185,8 @@ async fn pipeline_env(
     (registry, audit)
 }
 
-fn err_contains(err: &str, needle: &str) -> bool {
-    err.contains(needle)
+fn err_contains(err: &DomainError, needle: &str) -> bool {
+    err.to_string().contains(needle)
 }
 
 #[tokio::test]
@@ -505,15 +505,14 @@ async fn role_seed_requires_role_manage() {
                 let company_id: Uuid = serde_json::from_value(
                     params.get("company_id").cloned().unwrap_or_default(),
                 )
-                .map_err(|e: serde_json::Error| e.to_string())?;
+                .map_err(|e: serde_json::Error| DomainError::ValidationError(e.to_string()))?;
                 seed_system_roles_and_policies(
                     &company_id,
                     role_repo.as_ref(),
                     policy_repo.as_ref(),
                     audit.as_ref(),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
                 Ok(json!({"seeded": true}))
             }
         }
@@ -631,7 +630,7 @@ async fn migrate_permissions_seeds_companies_without_roles() {
             let policy_repo = policy_repo.clone();
             let audit = audit.clone();
             async move {
-                let list = companies.list().await.map_err(|e| e.to_string())?;
+                let list = companies.list().await?;
                 let mut seeded = 0usize;
                 for company in &list {
                     if role_repo.get_by_code(&company.id, "admin").await.is_err() {
@@ -641,8 +640,7 @@ async fn migrate_permissions_seeds_companies_without_roles() {
                             policy_repo.as_ref(),
                             audit.as_ref(),
                         )
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                         seeded += 1;
                     }
                 }

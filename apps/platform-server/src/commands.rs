@@ -16,6 +16,7 @@ use core_application::ModuleManager;
 use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
 use core_domain::company::Company;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_domain::error::DomainError;
 use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
     EntityType, FieldType, OnDelete, RelationKind,
@@ -56,48 +57,48 @@ fn system_event(
     }
 }
 
-fn encode<T: serde::Serialize>(value: &T) -> Result<Value, String> {
-    serde_json::to_value(value).map_err(|e| format!("сериализация: {e}"))
+fn encode<T: serde::Serialize>(value: &T) -> Result<Value, DomainError> {
+    serde_json::to_value(value).map_err(|e| DomainError::ValidationError(format!("сериализация: {e}")))
 }
 
-fn require(value: &Value, key: &str) -> Result<String, String> {
+fn require(value: &Value, key: &str) -> Result<String, DomainError> {
     value
         .get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
+        .ok_or_else(|| DomainError::ValidationError(format!("отсутствует обязательный параметр '{key}'")))
 }
 
-fn optional(value: &Value, key: &str) -> Result<Option<String>, String> {
+fn optional(value: &Value, key: &str) -> Result<Option<String>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_str()
             .map(|s| Some(s.to_string()))
-            .ok_or_else(|| format!("параметр '{key}' должен быть строкой")),
+            .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен быть строкой"))),
     }
 }
 
-fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>, String> {
+fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_bool()
             .map(Some)
-            .ok_or_else(|| format!("параметр '{key}' должен быть булевым")),
+            .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен быть булевым"))),
     }
 }
 
-fn parse_enum<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<T, String> {
+fn parse_enum<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Result<T, DomainError> {
     let raw = value
         .get(key)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))?;
+        .ok_or_else(|| DomainError::ValidationError(format!("отсутствует обязательный параметр '{key}'")))?;
     serde_json::from_value(Value::String(raw.to_string()))
-        .map_err(|e| format!("некорректное значение '{key}': {e}"))
+        .map_err(|e| DomainError::ValidationError(format!("некорректное значение '{key}': {e}")))
 }
 
-fn parse_uuids(value: &Value, key: &str) -> Result<Vec<String>, String> {
+fn parse_uuids(value: &Value, key: &str) -> Result<Vec<String>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => items
@@ -105,23 +106,23 @@ fn parse_uuids(value: &Value, key: &str) -> Result<Vec<String>, String> {
             .map(|i| {
                 i.as_str()
                     .map(|s| s.to_string())
-                    .ok_or_else(|| format!("параметр '{key}' должен содержать строки"))
+                    .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен содержать строки")))
             })
             .collect(),
-        Some(_) => Err(format!("параметр '{key}' должен быть массивом")),
+        Some(_) => Err(DomainError::ValidationError(format!("параметр '{key}' должен быть массивом"))),
     }
 }
 
-fn parse_purposes(value: &Value) -> Result<Vec<ContactPurpose>, String> {
+fn parse_purposes(value: &Value) -> Result<Vec<ContactPurpose>, DomainError> {
     parse_uuids(value, "purposes").and_then(|names| name_list_to_purposes(&names))
 }
 
-fn name_list_to_purposes(names: &[String]) -> Result<Vec<ContactPurpose>, String> {
+fn name_list_to_purposes(names: &[String]) -> Result<Vec<ContactPurpose>, DomainError> {
     names
         .iter()
         .map(|name| {
             serde_json::from_value(Value::String(name.clone()))
-                .map_err(|e| format!("некорректное назначение контакта: {e}"))
+                .map_err(|e| DomainError::ValidationError(format!("некорректное назначение контакта: {e}")))
         })
         .collect()
 }
@@ -158,8 +159,7 @@ async fn register_company_commands(
                     );
                     companies
                         .create(&company, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&company)
                 }
             }
@@ -173,7 +173,7 @@ async fn register_company_commands(
                 let companies = companies.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let company = companies.get(&id).await.map_err(|e| e.to_string())?;
+                    let company = companies.get(&id).await?;
                     encode(&company)
                 }
             }
@@ -186,8 +186,8 @@ async fn register_company_commands(
             move |_params: Value| {
                 let companies = companies.clone();
                 async move {
-                    let list = companies.list().await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> =
+                    let list = companies.list().await?;
+                    let rows: Result<Vec<Value>, DomainError> =
                         list.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
@@ -202,7 +202,7 @@ async fn register_company_commands(
                 let companies = companies.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let existing = companies.get(&id).await.map_err(|e| e.to_string())?;
+                    let existing = companies.get(&id).await?;
                     let company = Company {
                         id,
                         code: optional(&params, "code")?.unwrap_or(existing.code),
@@ -221,8 +221,7 @@ async fn register_company_commands(
                     );
                     companies
                         .update(&company, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&company)
                 }
             }
@@ -302,8 +301,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                     ];
                     users
                         .create(&user, &person, &events)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     Ok(json!({
                         "user": encode(&user)?,
                         "person": encode(&person)?,
@@ -320,7 +318,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                 let users = users.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let user = users.get(&id).await.map_err(|e| e.to_string())?;
+                    let user = users.get(&id).await?;
                     encode(&user)
                 }
             }
@@ -333,8 +331,8 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
             move |_params: Value| {
                 let users = users.clone();
                 async move {
-                    let list = users.list().await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                    let list = users.list().await?;
+                    let rows: Result<Vec<Value>, DomainError> = list.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -348,7 +346,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                 let users = users.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let existing = users.get(&id).await.map_err(|e| e.to_string())?;
+                    let existing = users.get(&id).await?;
                     let user = User {
                         id,
                         login: optional(&params, "login")?.unwrap_or(existing.login),
@@ -381,7 +379,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                         &company_id,
                         encode(&user)?,
                     );
-                    users.update(&user, &[event]).await.map_err(|e| e.to_string())?;
+                    users.update(&user, &[event]).await?;
                     encode(&user)
                 }
             }
@@ -419,8 +417,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                     );
                     users
                         .add_contact(&contact, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&contact)
                 }
             }
@@ -456,8 +453,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                     );
                     users
                         .add_profile(&profile, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&profile)
                 }
             }
@@ -497,7 +493,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
                         &role.company_id.to_string(),
                         encode(&role)?,
                     );
-                    roles.create(&role, &[event]).await.map_err(|e| e.to_string())?;
+                    roles.create(&role, &[event]).await?;
                     encode(&role)
                 }
             }
@@ -511,7 +507,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
                 let roles = roles.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let role = roles.get(&id).await.map_err(|e| e.to_string())?;
+                    let role = roles.get(&id).await?;
                     encode(&role)
                 }
             }
@@ -524,8 +520,8 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
             move |_params: Value| {
                 let roles = roles.clone();
                 async move {
-                    let list = roles.list().await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                    let list = roles.list().await?;
+                    let rows: Result<Vec<Value>, DomainError> = list.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -547,8 +543,7 @@ async fn register_metadata_commands(
                     let event = metadata_event(&schema, "metadata.entity_type.created");
                     metadata
                         .create_entity_type(&schema, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&schema)
                 }
             }
@@ -564,8 +559,7 @@ async fn register_metadata_commands(
                     let id = parse_uuid(&params, "id")?;
                     let entity_type = metadata
                         .get_entity_type(&id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&entity_type)
                 }
             }
@@ -582,8 +576,7 @@ async fn register_metadata_commands(
                     let code = require(&params, "code")?;
                     let entity_type = metadata
                         .get_entity_type_by_code(&company_id, &code)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&entity_type)
                 }
             }
@@ -596,8 +589,8 @@ async fn register_metadata_commands(
             move |_params: Value| {
                 let metadata = metadata.clone();
                 async move {
-                    let list = metadata.list_entity_types().await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                    let list = metadata.list_entity_types().await?;
+                    let rows: Result<Vec<Value>, DomainError> = list.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -614,16 +607,14 @@ async fn register_metadata_commands(
                     let company_id = schema.entity_type.company_id.clone();
                     let existing = metadata
                         .get_entity_type_by_code(&company_id, &schema.entity_type.code)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     schema.entity_type.id = existing.id;
                     schema.entity_type.created_at = existing.created_at;
                     schema.entity_type.updated_at = Utc::now();
                     let event = metadata_event(&schema, "metadata.entity_type.updated");
                     metadata
                         .update_entity_type(&schema, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&schema)
                 }
             }
@@ -640,8 +631,7 @@ async fn register_metadata_commands(
                     let code = require(&params, "code")?;
                     let schema = metadata
                         .get_schema(&company_id, &code)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&schema)
                 }
             }
@@ -670,8 +660,7 @@ async fn register_object_commands(
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
                     let schema = metadata
                         .get_schema(&company_id, &entity_type)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     let kind = parse_enum::<ObjectKind>(&params, "kind")?;
                     let state = match optional(&params, "state")? {
                         Some(state) => state,
@@ -701,8 +690,7 @@ async fn register_object_commands(
                         updated_at: now,
                     };
                     object
-                        .validate(&schema.fields, &schema.states)
-                        .map_err(|e| e.to_string())?;
+                        .validate(&schema.fields, &schema.states)?;
                     let event = system_event(
                         StreamType::Object,
                         object.id.to_string(),
@@ -712,8 +700,7 @@ async fn register_object_commands(
                     );
                     let stored = objects
                         .create(&object, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&stored)
                 }
             }
@@ -727,7 +714,7 @@ async fn register_object_commands(
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let object = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let object = objects.get(&id).await?;
                     encode(&object)
                 }
             }
@@ -745,9 +732,8 @@ async fn register_object_commands(
                     let limit = optional_u32(&params, "limit")?.unwrap_or(100) as usize;
                     let list = objects
                         .list(&entity_type, &company_id, limit)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = list.iter().map(encode).collect();
+                        .await?;
+                    let rows: Result<Vec<Value>, DomainError> = list.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -764,11 +750,10 @@ async fn register_object_commands(
                 async move {
                     let id = parse_uuid(&params, "id")?;
                     let expected_version = parse_u64(&params, "expected_version")?;
-                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let existing = objects.get(&id).await?;
                     let schema = metadata
                         .get_schema(&existing.company_id, &existing.entity_type)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     let updated = Object {
                         id,
                         entity_type: existing.entity_type.clone(),
@@ -798,8 +783,7 @@ async fn register_object_commands(
                         updated_at: Utc::now(),
                     };
                     updated
-                        .validate(&schema.fields, &schema.states)
-                        .map_err(|e| e.to_string())?;
+                        .validate(&schema.fields, &schema.states)?;
                     let event = system_event(
                         StreamType::Object,
                         id.to_string(),
@@ -809,8 +793,7 @@ async fn register_object_commands(
                     );
                     let stored = objects
                         .update(&updated, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&stored)
                 }
             }
@@ -824,7 +807,7 @@ async fn register_object_commands(
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let existing = objects.get(&id).await?;
                     let event = system_event(
                         StreamType::Object,
                         id.to_string(),
@@ -834,8 +817,7 @@ async fn register_object_commands(
                     );
                     objects
                         .delete(&id, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     Ok(json!({ "deleted": true, "id": id.to_string() }))
                 }
             }
@@ -851,9 +833,8 @@ async fn register_object_commands(
                     let id = parse_uuid(&params, "object_id")?;
                     let snapshots = objects
                         .get_snapshots(&id)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = snapshots.iter().map(encode).collect();
+                        .await?;
+                    let rows: Result<Vec<Value>, DomainError> = snapshots.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -868,7 +849,7 @@ async fn register_object_commands(
                 async move {
                     let id = parse_uuid(&params, "object_id")?;
                     let version = parse_u64(&params, "version")?;
-                    let existing = objects.get(&id).await.map_err(|e| e.to_string())?;
+                    let existing = objects.get(&id).await?;
                     let event = system_event(
                         StreamType::Object,
                         id.to_string(),
@@ -878,8 +859,7 @@ async fn register_object_commands(
                     );
                     let stored = objects
                         .restore_snapshot(&id, version, &[event])
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&stored)
                 }
             }
@@ -896,8 +876,7 @@ async fn register_object_commands(
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
                     let number = objects
                         .next_document_number(&entity_type, &company_id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     Ok(json!({ "number": number }))
                 }
             }
@@ -921,13 +900,13 @@ fn metadata_event(schema: &EntitySchema, event_type: &str) -> Event {
     }
 }
 
-fn parse_schema(value: &Value) -> Result<EntitySchema, String> {
+fn parse_schema(value: &Value) -> Result<EntitySchema, DomainError> {
     let entity_type_value = value
         .get("entity_type")
-        .ok_or_else(|| "отсутствует обязательный параметр 'entity_type'".to_string())?;
+        .ok_or_else(|| DomainError::ValidationError("отсутствует обязательный параметр 'entity_type'".to_string()))?;
     let id = match entity_type_value.get("id") {
         Some(Value::String(raw)) => Uuid::parse_str(raw)
-            .map_err(|e| format!("некорректный UUID 'entity_type.id': {e}"))?,
+            .map_err(|e| DomainError::ValidationError(format!("некорректный UUID 'entity_type.id': {e}")))?,
         _ => Uuid::new_v4(),
     };
     let code = require(entity_type_value, "code")?;
@@ -959,7 +938,7 @@ fn parse_schema(value: &Value) -> Result<EntitySchema, String> {
     })
 }
 
-fn parse_fields(value: &Value, entity_type_code: &str) -> Result<Vec<EntityField>, String> {
+fn parse_fields(value: &Value, entity_type_code: &str) -> Result<Vec<EntityField>, DomainError> {
     let items = items(value, "fields")?;
     items
         .iter()
@@ -981,7 +960,7 @@ fn parse_fields(value: &Value, entity_type_code: &str) -> Result<Vec<EntityField
         .collect()
 }
 
-fn parse_states(value: &Value, entity_type_code: &str) -> Result<Vec<EntityState>, String> {
+fn parse_states(value: &Value, entity_type_code: &str) -> Result<Vec<EntityState>, DomainError> {
     let items = items(value, "states")?;
     items
         .iter()
@@ -999,7 +978,7 @@ fn parse_states(value: &Value, entity_type_code: &str) -> Result<Vec<EntityState
         .collect()
 }
 
-fn parse_transitions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityTransition>, String> {
+fn parse_transitions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityTransition>, DomainError> {
     let items = items(value, "transitions")?;
     items
         .iter()
@@ -1016,7 +995,7 @@ fn parse_transitions(value: &Value, entity_type_code: &str) -> Result<Vec<Entity
         .collect()
 }
 
-fn parse_forms(value: &Value, entity_type_code: &str) -> Result<Vec<EntityForm>, String> {
+fn parse_forms(value: &Value, entity_type_code: &str) -> Result<Vec<EntityForm>, DomainError> {
     let items = items(value, "forms")?;
     items
         .iter()
@@ -1032,7 +1011,7 @@ fn parse_forms(value: &Value, entity_type_code: &str) -> Result<Vec<EntityForm>,
         .collect()
 }
 
-fn parse_actions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityAction>, String> {
+fn parse_actions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityAction>, DomainError> {
     let items = items(value, "actions")?;
     items
         .iter()
@@ -1048,7 +1027,7 @@ fn parse_actions(value: &Value, entity_type_code: &str) -> Result<Vec<EntityActi
         .collect()
 }
 
-fn parse_relations(value: &Value, entity_type_code: &str) -> Result<Vec<EntityRelation>, String> {
+fn parse_relations(value: &Value, entity_type_code: &str) -> Result<Vec<EntityRelation>, DomainError> {
     let items = items(value, "relations")?;
     items
         .iter()
@@ -1065,36 +1044,36 @@ fn parse_relations(value: &Value, entity_type_code: &str) -> Result<Vec<EntityRe
         .collect()
 }
 
-fn items(value: &Value, key: &str) -> Result<Vec<Value>, String> {
+fn items(value: &Value, key: &str) -> Result<Vec<Value>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(Vec::new()),
         Some(Value::Array(items)) => Ok(items.clone()),
-        Some(_) => Err(format!("параметр '{key}' должен быть массивом")),
+        Some(_) => Err(DomainError::ValidationError(format!("параметр '{key}' должен быть массивом"))),
     }
 }
 
-fn parse_u32(value: &Value, key: &str) -> Result<u32, String> {
+fn parse_u32(value: &Value, key: &str) -> Result<u32, DomainError> {
     value
         .get(key)
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
-        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
+        .ok_or_else(|| DomainError::ValidationError(format!("отсутствует обязательный параметр '{key}'")))
 }
 
-fn parse_u64(value: &Value, key: &str) -> Result<u64, String> {
+fn parse_u64(value: &Value, key: &str) -> Result<u64, DomainError> {
     value
         .get(key)
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| format!("отсутствует обязательный параметр '{key}'"))
+        .ok_or_else(|| DomainError::ValidationError(format!("отсутствует обязательный параметр '{key}'")))
 }
 
-fn optional_u32(value: &Value, key: &str) -> Result<Option<u32>, String> {
+fn optional_u32(value: &Value, key: &str) -> Result<Option<u32>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
             .as_u64()
             .map(|v| Some(v as u32))
-            .ok_or_else(|| format!("параметр '{key}' должен быть целым числом")),
+            .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен быть числом"))),
     }
 }
 
@@ -1144,8 +1123,7 @@ pub async fn register_phase5_commands(
                         policies.as_ref(),
                         audit.as_ref(),
                     )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
                     Ok(json!({ "seeded": true, "company_id": company_id.to_string() }))
                 }
             }
@@ -1169,8 +1147,7 @@ pub async fn register_phase5_commands(
                     async move {
                         let companies_list = companies
                             .list()
-                            .await
-                            .map_err(|e| e.to_string())?;
+                            .await?;
                         let mut seeded = 0usize;
                         for company in &companies_list {
                             if roles
@@ -1185,8 +1162,7 @@ pub async fn register_phase5_commands(
                                     policies.as_ref(),
                                     audit.as_ref(),
                                 )
-                                .await
-                                .map_err(|e| e.to_string())?;
+                                .await?;
                                 seeded += 1;
                             }
                         }
@@ -1205,7 +1181,7 @@ pub async fn register_phase5_commands(
                             company_id: None,
                             timestamp: Utc::now(),
                         };
-                        audit.log(entry).await.map_err(|e| e.to_string())?;
+                        audit.log(entry).await?;
                         Ok(json!({
                             "companies_total": companies_list.len(),
                             "seeded": seeded,
@@ -1244,7 +1220,7 @@ pub async fn register_phase4_audit_commands(
                 let audit = audit.clone();
                 async move {
                     let args: LogAuditArgs = serde_json::from_value(params)
-                        .map_err(|e| format!("audit.log параметры: {e}"))?;
+                        .map_err(|e| DomainError::ValidationError(format!("audit.log параметры: {e}")))?;
                     let entry = AuditEntry {
                         id: Uuid::new_v4(),
                         action: args.action,
@@ -1257,7 +1233,7 @@ pub async fn register_phase4_audit_commands(
                         company_id: args.company_id,
                         timestamp: Utc::now(),
                     };
-                    audit.log(entry.clone()).await.map_err(|e| e.to_string())?;
+                    audit.log(entry.clone()).await?;
                     encode(&entry)
                 }
             }
@@ -1271,7 +1247,7 @@ pub async fn register_phase4_audit_commands(
                 let audit = audit.clone();
                 async move {
                     let args: QueryAuditArgs = serde_json::from_value(params)
-                        .map_err(|e| format!("audit.query параметры: {e}"))?;
+                        .map_err(|e| DomainError::ValidationError(format!("audit.query параметры: {e}")))?;
                     let filter = AuditFilter {
                         action: args.action,
                         actor_user_id: args.actor_user_id,
@@ -1283,8 +1259,8 @@ pub async fn register_phase4_audit_commands(
                         to: args.to,
                         limit: args.limit,
                     };
-                    let entries = audit.query(filter).await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = entries.iter().map(encode).collect();
+                    let entries = audit.query(filter).await?;
+                    let rows: Result<Vec<Value>, DomainError> = entries.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -1335,12 +1311,12 @@ struct QueryAuditArgs {
     limit: Option<usize>,
 }
 
-fn parse_uuid(value: &Value, key: &str) -> Result<Uuid, String> {
+fn parse_uuid(value: &Value, key: &str) -> Result<Uuid, DomainError> {
     let raw = require(value, key)?;
-    Uuid::parse_str(&raw).map_err(|e| format!("некорректный UUID '{key}': {e}"))
+    Uuid::parse_str(&raw).map_err(|e| DomainError::ValidationError(format!("некорректный UUID '{key}': {e}")))
 }
 
-fn parse_optional_uuid(value: &Value, key: &str) -> Result<Option<Uuid>, String> {
+fn parse_optional_uuid(value: &Value, key: &str) -> Result<Option<Uuid>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(_) => parse_uuid(value, key).map(Some),
@@ -1350,30 +1326,30 @@ fn parse_optional_uuid(value: &Value, key: &str) -> Result<Option<Uuid>, String>
 fn parse_optional_enum<T: serde::de::DeserializeOwned>(
     value: &Value,
     key: &str,
-) -> Result<Option<T>, String> {
+) -> Result<Option<T>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => {
             let raw = v
                 .as_str()
-                .ok_or_else(|| format!("параметр '{key}' должен быть строкой"))?;
+                .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен быть строкой")))?;
             serde_json::from_value(Value::String(raw.to_string()))
                 .map(Some)
-                .map_err(|e| format!("некорректное значение '{key}': {e}"))
+                .map_err(|e| DomainError::ValidationError(format!("некорректное значение '{key}': {e}")))
         }
     }
 }
 
-fn parse_optional_date(value: &Value, key: &str) -> Result<Option<NaiveDate>, String> {
+fn parse_optional_date(value: &Value, key: &str) -> Result<Option<NaiveDate>, DomainError> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => {
             let raw = v
                 .as_str()
-                .ok_or_else(|| format!("параметр '{key}' должен быть строкой даты"))?;
+                .ok_or_else(|| DomainError::ValidationError(format!("параметр '{key}' должен быть строкой даты")))?;
             NaiveDate::parse_from_str(raw, "%Y-%m-%d")
                 .map(Some)
-                .map_err(|e| format!("некорректная дата '{key}': {e}"))
+                .map_err(|e| DomainError::ValidationError(format!("некорректная дата '{key}': {e}")))
         }
     }
 }
@@ -1397,18 +1373,17 @@ pub async fn register_phase9_module_commands(
                     let wasm_base64 = require(&params, "wasm_base64")?;
                     let company_id = require(&params, "company_id")?;
                     let company_uuid = Uuid::parse_str(&company_id)
-                        .map_err(|e| format!("некорректный 'company_id': {e}"))?;
+                        .map_err(|e| DomainError::ValidationError(format!("некорректный 'company_id': {e}")))?;
                     companies
                         .get(&company_uuid)
                         .await
-                        .map_err(|e| format!("компания не найдена: {e}"))?;
+                        .map_err(|e| DomainError::NotFound(format!("компания не найдена: {e}")))?;
                     let wasm_bytes =
                         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &wasm_base64)
-                            .map_err(|e| format!("некорректный wasm_base64: {e}"))?;
+                            .map_err(|e| DomainError::ValidationError(format!("некорректный wasm_base64: {e}")))?;
                     let record = manager
                         .install(&code, &wasm_bytes, &company_id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&record)
                 }
             }
@@ -1422,7 +1397,7 @@ pub async fn register_phase9_module_commands(
                 let manager = manager.clone();
                 async move {
                     let code = require(&params, "code")?;
-                    let record = manager.uninstall(&code).await.map_err(|e| e.to_string())?;
+                    let record = manager.uninstall(&code).await?;
                     encode(&record)
                 }
             }
@@ -1438,11 +1413,10 @@ pub async fn register_phase9_module_commands(
                     let code = require(&params, "code")?;
                     let company_id = require(&params, "company_id")?;
                     Uuid::parse_str(&company_id)
-                        .map_err(|e| format!("некорректный 'company_id': {e}"))?;
+                        .map_err(|e| DomainError::ValidationError(format!("некорректный 'company_id': {e}")))?;
                     let record = manager
                         .enable(&code, &company_id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     encode(&record)
                 }
             }
@@ -1459,8 +1433,7 @@ pub async fn register_phase9_module_commands(
                     let company_id = require(&params, "company_id")?;
                     manager
                         .disable(&code, &company_id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                        .await?;
                     Ok(json!({ "disabled": code, "company_id": company_id }))
                 }
             }
@@ -1474,8 +1447,8 @@ pub async fn register_phase9_module_commands(
                 let manager = manager.clone();
                 async move {
                     let modules = manager.modules();
-                    let records = modules.list().await.map_err(|e| e.to_string())?;
-                    let rows: Result<Vec<Value>, String> = records.iter().map(encode).collect();
+                    let records = modules.list().await?;
+                    let rows: Result<Vec<Value>, DomainError> = records.iter().map(encode).collect();
                     Ok(Value::Array(rows?))
                 }
             }
@@ -1489,7 +1462,7 @@ pub async fn register_phase9_module_commands(
                 let modules = manager.modules();
                 async move {
                     let code = require(&params, "code")?;
-                    let record = modules.get(&code).await.map_err(|e| e.to_string())?;
+                    let record = modules.get(&code).await?;
                     encode(&record)
                 }
             }

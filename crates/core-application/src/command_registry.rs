@@ -44,7 +44,7 @@ pub struct CommandExecutionCtx {
 }
 
 type CommandHandler = Arc<
-    dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync,
+    dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, DomainError>> + Send>> + Send + Sync,
 >;
 
 /// Динамический реестр асинхронных команд, согласно Приложению №1 ТЗ.
@@ -96,7 +96,7 @@ impl CommandRegistry {
         handler: F,
     ) where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, String>> + Send + 'static,
+        Fut: Future<Output = Result<Value, DomainError>> + Send + 'static,
     {
         let mut map = self.handlers.write().await;
         map.insert(
@@ -111,7 +111,7 @@ impl CommandRegistry {
     pub async fn register<F, Fut>(&self, name: &str, handler: F)
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, String>> + Send + 'static,
+        Fut: Future<Output = Result<Value, DomainError>> + Send + 'static,
     {
         self.register_with_metadata(name, CommandMetadata::unrestricted(), handler)
             .await;
@@ -133,7 +133,7 @@ impl CommandRegistry {
     }
 
     /// Выполняет команду от имени системного исполнителя с пустым контекстом.
-    pub async fn execute(&self, name: &str, params: Value) -> Result<Value, String> {
+    pub async fn execute(&self, name: &str, params: Value) -> Result<Value, DomainError> {
         self.execute_ctx(name, params, CommandExecutionCtx::default()).await
     }
 
@@ -155,13 +155,13 @@ impl CommandRegistry {
         name: &str,
         params: Value,
         ctx: CommandExecutionCtx,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, DomainError> {
         let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
         let handler = {
             let map = self.handlers.read().await;
             map.get(name).cloned()
         }
-        .ok_or_else(|| format!("Unknown command: {name}"))?;
+        .ok_or_else(|| DomainError::NotFound(format!("команда '{name}' не найдена")))?;
         let metadata = self.metadata.read().await.get(name).cloned();
 
         let pipeline = self.pipeline.read().await.clone();
@@ -204,7 +204,7 @@ impl CommandRegistry {
 
         let (_, start_fut) = audit_plan("started", AuditResult::Success);
         if let Err(e) = start_fut.await {
-            return Err(format!("audit start: {e}"));
+            return Err(DomainError::Storage(format!("audit start: {e}")));
         }
 
         let permitted = match &metadata.as_ref().and_then(|m| m.required_permission.as_deref()) {
@@ -220,7 +220,7 @@ impl CommandRegistry {
                             permission,
                         )
                         .await
-                        .map_err(|e| format!("permission check: {e}"))?,
+                        .map_err(|e| DomainError::Storage(format!("permission check: {e}")))?,
                     None => false,
                 },
                 None => true,
@@ -252,29 +252,28 @@ impl CommandRegistry {
                 company_id,
                 timestamp: chrono::Utc::now(),
             };
-            audit.clone().log(denied).await.map_err(|e| format!("audit denied: {e}"))?;
+            audit.clone().log(denied).await.map_err(|e| DomainError::Storage(format!("audit denied: {e}")))?;
             return Err(DomainError::PermissionDenied(format!(
                 "недостаточно прав на команду {name}"
-            ))
-            .to_string());
+            )));
         }
 
         let result = handler(params).await;
         match result {
             Ok(value) => {
                 let (_, end_fut) = audit_plan("finished", AuditResult::Success);
-                end_fut.await.map_err(|e| format!("audit finish: {e}"))?;
+                end_fut.await.map_err(|e| DomainError::Storage(format!("audit finish: {e}")))?;
                 Ok(value)
             }
-            Err(msg) => {
+            Err(err) => {
                 let (_, fail_fut) = audit_plan(
                     "failed",
                     AuditResult::Failure {
-                        reason: msg.clone(),
+                        reason: err.to_string(),
                     },
                 );
-                fail_fut.await.map_err(|e| format!("audit failed: {e}"))?;
-                Err(msg)
+                fail_fut.await.map_err(|e| DomainError::Storage(format!("audit failed: {e}")))?;
+                Err(err)
             }
         }
     }

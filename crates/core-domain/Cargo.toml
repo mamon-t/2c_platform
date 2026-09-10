@@ -10,3 +10,4 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 semver = "1.0"
+argon2 = { workspace = true }

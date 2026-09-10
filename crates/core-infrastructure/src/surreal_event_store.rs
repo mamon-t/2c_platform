@@ -1,6 +1,6 @@
 //! Хранилище событий на базе SurrealDB — «Труба» архитектуры «Труба и Доска».
 
-use core_application::ports::EventStore;
+use core_application::ports::{BoxFuture, EventStore};
 use core_domain::error::DomainError;
 use core_domain::event::{Event, StreamType};
 use serde_json::Value;
@@ -62,39 +62,45 @@ impl SurrealEventStore {
 }
 
 impl EventStore for SurrealEventStore {
-    async fn append(&self, events: &[Event]) -> Result<(), DomainError> {
-        if events.is_empty() {
-            return Ok(());
-        }
-        append_events(&self.db, events).await
+    fn append<'a>(&'a self, events: &[Event]) -> BoxFuture<'a, Result<(), DomainError>> {
+        let events = events.to_vec();
+        Box::pin(async move {
+            if events.is_empty() {
+                return Ok(());
+            }
+            append_events(&self.db, &events).await
+        })
     }
 
-    async fn read_stream(
-        &self,
+    fn read_stream<'a>(
+        &'a self,
         stream_type: StreamType,
         stream_id: &str,
-    ) -> Result<Vec<Event>, DomainError> {
-        let type_filter = stream_type.as_str();
-        let mut response = self
-            .db
-            .query(
-                "SELECT \
-                        record::id(id) AS id, stream_type, stream_id, event_type, version, \
-                        payload, metadata, company_id, correlation_id, causation_id, occurred_at \
-                     FROM events \
-                     WHERE stream_type = $stream_type AND stream_id = $stream_id \
-                     ORDER BY version ASC",
-            )
-            .bind(("stream_type", type_filter))
-            .bind(("stream_id", stream_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("read_stream: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("read_stream take: {e}")))?;
-        let events: Vec<Event> = serde_json::from_value(Value::Array(rows))
-            .map_err(|e| DomainError::Storage(format!("read_stream decode: {e}")))?;
-        Ok(events)
+    ) -> BoxFuture<'a, Result<Vec<Event>, DomainError>> {
+        let stream_id = stream_id.to_string();
+        Box::pin(async move {
+            let type_filter = stream_type.as_str();
+            let mut response = self
+                .db
+                .query(
+                    "SELECT \
+                            record::id(id) AS id, stream_type, stream_id, event_type, version, \
+                            payload, metadata, company_id, correlation_id, causation_id, occurred_at \
+                         FROM events \
+                         WHERE stream_type = $stream_type AND stream_id = $stream_id \
+                         ORDER BY version ASC",
+                )
+                .bind(("stream_type", type_filter))
+                .bind(("stream_id", stream_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("read_stream: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("read_stream take: {e}")))?;
+            let events: Vec<Event> = serde_json::from_value(Value::Array(rows))
+                .map_err(|e| DomainError::Storage(format!("read_stream decode: {e}")))?;
+            Ok(events)
+        })
     }
 }
 

@@ -1,7 +1,7 @@
 //! Хранилище пользователей, персон, контактов, профилей и сертификатов
 //! на базе SurrealDB (проекция «Доска»).
 
-use core_application::ports::UserRepository;
+use core_application::ports::{BoxFuture, UserRepository};
 use core_domain::error::DomainError;
 use core_domain::event::Event;
 use core_domain::user::{
@@ -84,301 +84,367 @@ fn decode_rows<T: serde::de::DeserializeOwned>(
 }
 
 impl UserRepository for SurrealUserRepository {
-    async fn create(&self, user: &User, person: &Person, events: &[Event]) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let mut existing_response = txn
-                    .query("SELECT 1 FROM users WHERE login = $login LIMIT 1")
-                    .bind(("login", user.login.clone()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("user check login: {e}")))?;
-                let existing: Option<Value> = existing_response
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("user check login take: {e}")))?;
-                if existing.is_some() {
-                    return Err(DomainError::ValidationError(format!(
-                        "Пользователь с логином {} уже существует",
-                        user.login
-                    )));
+    fn create(
+        &self,
+        user: &User,
+        person: &Person,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let user = user.clone();
+        let person = person.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let mut existing_response = txn
+                        .query("SELECT 1 FROM users WHERE login = $login LIMIT 1")
+                        .bind(("login", user.login.clone()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("user check login: {e}")))?;
+                    let existing: Option<Value> = existing_response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("user check login take: {e}")))?;
+                    if existing.is_some() {
+                        return Err(DomainError::ValidationError(format!(
+                            "Пользователь с логином {} уже существует",
+                            user.login
+                        )));
+                    }
+
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+
+                    let user_value = serde_json::to_value(&user)
+                        .map_err(|e| DomainError::Storage(format!("user encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("users", user.id.to_string()))
+                        .content(user_value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("user write: {e}")))?;
+                    let person_value = serde_json::to_value(&person)
+                        .map_err(|e| DomainError::Storage(format!("person encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("persons", person.id.to_string()))
+                        .content(person_value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("person write: {e}")))?;
+                    Ok(())
                 }
-
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-
-                let user_value = serde_json::to_value(user)
-                    .map_err(|e| DomainError::Storage(format!("user encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("users", user.id.to_string()))
-                    .content(user_value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("user write: {e}")))?;
-                let person_value = serde_json::to_value(person)
-                    .map_err(|e| DomainError::Storage(format!("person encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("persons", person.id.to_string()))
-                    .content(person_value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("person write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn get(&self, id: &Uuid) -> Result<User, DomainError> {
-        let mut response = self
-            .db
-            .query(format!("SELECT {USER_FIELDS} FROM users WHERE record::id(id) = $id LIMIT 1"))
-            .bind(("id", id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("user get: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("user get take: {e}")))?;
-        decode_row("Пользователь", row)
+    fn get(&self, id: &Uuid) -> BoxFuture<'_, Result<User, DomainError>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!("SELECT {USER_FIELDS} FROM users WHERE record::id(id) = $id LIMIT 1"))
+                .bind(("id", id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("user get: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("user get take: {e}")))?;
+            decode_row("Пользователь", row)
+        })
     }
 
-    async fn get_by_login(&self, login: &str) -> Result<User, DomainError> {
-        let mut response = self
-            .db
-            .query(format!("SELECT {USER_FIELDS} FROM users WHERE login = $login LIMIT 1"))
-            .bind(("login", login.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("user get_by_login: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("user get_by_login take: {e}")))?;
-        decode_row("Пользователь", row)
+    fn get_by_login(&self, login: &str) -> BoxFuture<'_, Result<User, DomainError>> {
+        let login = login.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!("SELECT {USER_FIELDS} FROM users WHERE login = $login LIMIT 1"))
+                .bind(("login", login))
+                .await
+                .map_err(|e| DomainError::Storage(format!("user get_by_login: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("user get_by_login take: {e}")))?;
+            decode_row("Пользователь", row)
+        })
     }
 
-    async fn list(&self) -> Result<Vec<User>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!("SELECT {USER_FIELDS} FROM users ORDER BY login"))
-            .await
-            .map_err(|e| DomainError::Storage(format!("user list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("user list take: {e}")))?;
-        decode_rows("Пользователь", rows)
+    fn list(&self) -> BoxFuture<'_, Result<Vec<User>, DomainError>> {
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!("SELECT {USER_FIELDS} FROM users ORDER BY login"))
+                .await
+                .map_err(|e| DomainError::Storage(format!("user list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("user list take: {e}")))?;
+            decode_rows("Пользователь", rows)
+        })
     }
 
-    async fn list_by_role(&self, role_id: Uuid, company_id: Uuid) -> Result<Vec<User>, DomainError> {
-        // Роль ограничена компанией, а `User` не хранит company_id: принадлежность
-        // проверяется через роль. Отсутствующая или чужая роль → пустой список.
-        let mut role_response = self
-            .db
-            .query("SELECT VALUE company_id FROM roles WHERE record::id(id) = $role_id LIMIT 1")
-            .bind(("role_id", role_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("user list_by_role role: {e}")))?;
-        let role_company: Option<String> = role_response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("user list_by_role role take: {e}")))?;
-        let Some(role_company) = role_company else {
-            return Ok(Vec::new());
-        };
-        if role_company != company_id.to_string() {
-            return Ok(Vec::new());
-        }
+    fn list_by_role(
+        &self,
+        role_id: Uuid,
+        company_id: Uuid,
+    ) -> BoxFuture<'_, Result<Vec<User>, DomainError>> {
+        Box::pin(async move {
+            // Роль ограничена компанией, а `User` не хранит company_id: принадлежность
+            // проверяется через роль. Отсутствующая или чужая роль → пустой список.
+            let mut role_response = self
+                .db
+                .query("SELECT VALUE company_id FROM roles WHERE record::id(id) = $role_id LIMIT 1")
+                .bind(("role_id", role_id.to_string()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("user list_by_role role: {e}")))?;
+            let role_company: Option<String> = role_response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("user list_by_role role take: {e}")))?;
+            let Some(role_company) = role_company else {
+                return Ok(Vec::new());
+            };
+            if role_company != company_id.to_string() {
+                return Ok(Vec::new());
+            }
 
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {USER_FIELDS} FROM users \
-                 WHERE role_ids CONTAINS $role_id AND status != 'archived' ORDER BY login"
-            ))
-            .bind(("role_id", role_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("user list_by_role: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("user list_by_role take: {e}")))?;
-        decode_rows("Пользователь", rows)
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {USER_FIELDS} FROM users \
+                     WHERE role_ids CONTAINS $role_id AND status != 'archived' ORDER BY login"
+                ))
+                .bind(("role_id", role_id.to_string()))
+                .await
+                .map_err(|e| DomainError::Storage(format!("user list_by_role: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("user list_by_role take: {e}")))?;
+            decode_rows("Пользователь", rows)
+        })
     }
 
-    async fn update(&self, user: &User, events: &[Event]) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let mut existing_response = txn
-                    .query("SELECT 1 FROM users WHERE record::id(id) = $id LIMIT 1")
-                    .bind(("id", user.id.to_string()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("user check id: {e}")))?;
-                let existing: Option<Value> = existing_response
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("user check id take: {e}")))?;
-                if existing.is_none() {
-                    return Err(DomainError::NotFound(format!("Пользователь {} не найден", user.id)));
+    fn update(&self, user: &User, events: &[Event]) -> BoxFuture<'_, Result<(), DomainError>> {
+        let user = user.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let mut existing_response = txn
+                        .query("SELECT 1 FROM users WHERE record::id(id) = $id LIMIT 1")
+                        .bind(("id", user.id.to_string()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("user check id: {e}")))?;
+                    let existing: Option<Value> = existing_response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("user check id take: {e}")))?;
+                    if existing.is_none() {
+                        return Err(DomainError::NotFound(format!("Пользователь {} не найден", user.id)));
+                    }
+
+                    let mut collision_response = txn
+                        .query(
+                            "SELECT 1 FROM users \
+                             WHERE login = $login AND record::id(id) != $id LIMIT 1",
+                        )
+                        .bind(("login", user.login.clone()))
+                        .bind(("id", user.id.to_string()))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("user check login: {e}")))?;
+                    let collision: Option<Value> = collision_response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("user check login take: {e}")))?;
+                    if collision.is_some() {
+                        return Err(DomainError::ValidationError(format!(
+                            "Логин {} уже занят другим пользователем",
+                            user.login
+                        )));
+                    }
+
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+
+                    let value = serde_json::to_value(&user)
+                        .map_err(|e| DomainError::Storage(format!("user encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("users", user.id.to_string()))
+                        .content(value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("user write: {e}")))?;
+                    Ok(())
                 }
+                .await;
+                (txn, outcome)
+            })
+            .await
+        })
+    }
 
-                let mut collision_response = txn
-                    .query(
-                        "SELECT 1 FROM users \
-                         WHERE login = $login AND record::id(id) != $id LIMIT 1",
-                    )
-                    .bind(("login", user.login.clone()))
-                    .bind(("id", user.id.to_string()))
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("user check login: {e}")))?;
-                let collision: Option<Value> = collision_response
-                    .take(0)
-                    .map_err(|e| DomainError::Storage(format!("user check login take: {e}")))?;
-                if collision.is_some() {
-                    return Err(DomainError::ValidationError(format!(
-                        "Логин {} уже занят другим пользователем",
-                        user.login
-                    )));
+    fn get_person(&self, user_id: &Uuid) -> BoxFuture<'_, Result<Person, DomainError>> {
+        let user_id = user_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!("SELECT {PERSON_FIELDS} FROM persons WHERE user_id = $uid LIMIT 1"))
+                .bind(("uid", user_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("person get: {e}")))?;
+            let row: Option<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("person get take: {e}")))?;
+            decode_row("Личные данные пользователя", row)
+        })
+    }
+
+    fn add_contact(
+        &self,
+        contact: &UserContact,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let contact = contact.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+
+                    let value = serde_json::to_value(&contact)
+                        .map_err(|e| DomainError::Storage(format!("contact encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("user_contacts", contact.id.to_string()))
+                        .content(value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("contact write: {e}")))?;
+                    Ok(())
                 }
-
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-
-                let value = serde_json::to_value(user)
-                    .map_err(|e| DomainError::Storage(format!("user encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("users", user.id.to_string()))
-                    .content(value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("user write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
-        })
-        .await
-    }
-
-    async fn get_person(&self, user_id: &Uuid) -> Result<Person, DomainError> {
-        let mut response = self
-            .db
-            .query(format!("SELECT {PERSON_FIELDS} FROM persons WHERE user_id = $uid LIMIT 1"))
-            .bind(("uid", user_id.to_string()))
+                .await;
+                (txn, outcome)
+            })
             .await
-            .map_err(|e| DomainError::Storage(format!("person get: {e}")))?;
-        let row: Option<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("person get take: {e}")))?;
-        decode_row("Личные данные пользователя", row)
-    }
-
-    async fn add_contact(&self, contact: &UserContact, events: &[Event]) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-
-                let value = serde_json::to_value(contact)
-                    .map_err(|e| DomainError::Storage(format!("contact encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("user_contacts", contact.id.to_string()))
-                    .content(value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("contact write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
         })
-        .await
     }
 
-    async fn list_contacts(&self, user_id: &Uuid) -> Result<Vec<UserContact>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {CONTACT_FIELDS} FROM user_contacts WHERE user_id = $uid ORDER BY channel_type"
-            ))
-            .bind(("uid", user_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("contact list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("contact list take: {e}")))?;
-        decode_rows("Контакт", rows)
-    }
-
-    async fn add_profile(&self, profile: &UserCompanyProfile, events: &[Event]) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
-
-                let value = serde_json::to_value(profile)
-                    .map_err(|e| DomainError::Storage(format!("profile encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("user_company_profiles", profile.id.to_string()))
-                    .content(value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("profile write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+    fn list_contacts(&self, user_id: &Uuid) -> BoxFuture<'_, Result<Vec<UserContact>, DomainError>> {
+        let user_id = user_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {CONTACT_FIELDS} FROM user_contacts WHERE user_id = $uid ORDER BY channel_type"
+                ))
+                .bind(("uid", user_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("contact list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("contact list take: {e}")))?;
+            decode_rows("Контакт", rows)
         })
-        .await
     }
 
-    async fn list_profiles(&self, user_id: &Uuid) -> Result<Vec<UserCompanyProfile>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {PROFILE_FIELDS} FROM user_company_profiles WHERE user_id = $uid ORDER BY company_id"
-            ))
-            .bind(("uid", user_id.to_string()))
+    fn add_profile(
+        &self,
+        profile: &UserCompanyProfile,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let profile = profile.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
+
+                    let value = serde_json::to_value(&profile)
+                        .map_err(|e| DomainError::Storage(format!("profile encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("user_company_profiles", profile.id.to_string()))
+                        .content(value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("profile write: {e}")))?;
+                    Ok(())
+                }
+                .await;
+                (txn, outcome)
+            })
             .await
-            .map_err(|e| DomainError::Storage(format!("profile list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("profile list take: {e}")))?;
-        decode_rows("Профиль сотрудника", rows)
+        })
     }
 
-    async fn add_certificate(
+    fn list_profiles(
+        &self,
+        user_id: &Uuid,
+    ) -> BoxFuture<'_, Result<Vec<UserCompanyProfile>, DomainError>> {
+        let user_id = user_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {PROFILE_FIELDS} FROM user_company_profiles WHERE user_id = $uid ORDER BY company_id"
+                ))
+                .bind(("uid", user_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("profile list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("profile list take: {e}")))?;
+            decode_rows("Профиль сотрудника", rows)
+        })
+    }
+
+    fn add_certificate(
         &self,
         certificate: &UserCertificate,
         events: &[Event],
-    ) -> Result<(), DomainError> {
-        with_transaction(&self.db, |txn| async move {
-            let outcome: Result<(), DomainError> = async {
-                let mut events = events.to_vec();
-                assign_versions(&txn, &mut events).await?;
-                write_events(&txn, &events).await?;
+    ) -> BoxFuture<'_, Result<(), DomainError>> {
+        let certificate = certificate.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&self.db, |txn| async move {
+                let outcome: Result<(), DomainError> = async {
+                    let mut events = events;
+                    assign_versions(&txn, &mut events).await?;
+                    write_events(&txn, &events).await?;
 
-                let value = serde_json::to_value(certificate)
-                    .map_err(|e| DomainError::Storage(format!("certificate encode: {e}")))?;
-                let _: Option<surrealdb::types::Value> = txn
-                    .upsert(("user_certificates", certificate.id.to_string()))
-                    .content(value)
-                    .await
-                    .map_err(|e| DomainError::Storage(format!("certificate write: {e}")))?;
-                Ok(())
-            }
-            .await;
-            (txn, outcome)
+                    let value = serde_json::to_value(&certificate)
+                        .map_err(|e| DomainError::Storage(format!("certificate encode: {e}")))?;
+                    let _: Option<surrealdb::types::Value> = txn
+                        .upsert(("user_certificates", certificate.id.to_string()))
+                        .content(value)
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("certificate write: {e}")))?;
+                    Ok(())
+                }
+                .await;
+                (txn, outcome)
+            })
+            .await
         })
-        .await
     }
 
-    async fn list_certificates(&self, user_id: &Uuid) -> Result<Vec<UserCertificate>, DomainError> {
-        let mut response = self
-            .db
-            .query(format!(
-                "SELECT {CERT_FIELDS} FROM user_certificates WHERE user_id = $uid ORDER BY fingerprint"
-            ))
-            .bind(("uid", user_id.to_string()))
-            .await
-            .map_err(|e| DomainError::Storage(format!("certificate list: {e}")))?;
-        let rows: Vec<Value> = response
-            .take(0)
-            .map_err(|e| DomainError::Storage(format!("certificate list take: {e}")))?;
-        decode_rows("Сертификат", rows)
+    fn list_certificates(
+        &self,
+        user_id: &Uuid,
+    ) -> BoxFuture<'_, Result<Vec<UserCertificate>, DomainError>> {
+        let user_id = user_id.to_string();
+        Box::pin(async move {
+            let mut response = self
+                .db
+                .query(format!(
+                    "SELECT {CERT_FIELDS} FROM user_certificates WHERE user_id = $uid ORDER BY fingerprint"
+                ))
+                .bind(("uid", user_id))
+                .await
+                .map_err(|e| DomainError::Storage(format!("certificate list: {e}")))?;
+            let rows: Vec<Value> = response
+                .take(0)
+                .map_err(|e| DomainError::Storage(format!("certificate list take: {e}")))?;
+            decode_rows("Сертификат", rows)
+        })
     }
 }
 

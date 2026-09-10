@@ -173,7 +173,10 @@ async fn plugin_command_executes_only_for_enabled_company() {
         .execute("plugin.hello.greet", params)
         .await
         .unwrap_err();
-    assert!(err.contains("отключён"), "ожидали ошибку disabled, получено: {err}");
+    assert!(
+        err.to_string().contains("отключён"),
+        "ожидали ошибку disabled, получено: {err}"
+    );
 }
 
 #[tokio::test]
