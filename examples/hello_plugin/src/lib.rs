@@ -37,6 +37,9 @@ mod host {
             object_id: String,
         ) -> String;
         pub fn cms_verify(data_b64: String, sig_b64: String) -> String;
+        pub fn tx_begin(business_key: String) -> String;
+        pub fn tx_add_op(handle: String, op_type: String, params_json: String) -> String;
+        pub fn tx_commit(handle: String) -> String;
     }
 }
 
@@ -51,7 +54,7 @@ pub fn get_info() -> FnResult<String> {
         "author": "2C Platform",
         "api_version": "2.0",
         "capabilities": ["logging", "storage", "objects.create", "objects.read", "objects.update",
-            "events.emit", "scripts", "notifications", "signature"],
+            "events.emit", "scripts", "notifications", "signature", "transactions"],
         "commands": [{
             "code": "greet",
             "name": "Поздороваться",
@@ -62,6 +65,9 @@ pub fn get_info() -> FnResult<String> {
         }, {
             "code": "run_script",
             "name": "Проба run_script"
+        }, {
+            "code": "tx_probe",
+            "name": "Проба транзакций"
         }],
         "permissions": [{
             "code": "hello.greet",
@@ -210,6 +216,97 @@ pub fn stubs_probe() -> FnResult<String> {
 pub fn users_probe(role_id: String) -> FnResult<String> {
     let conv = unsafe { host::users_by_role(role_id)? };
     Ok(conv)
+}
+
+/// Проба транзакций подфазы 9d: `tx_begin` → `tx_add_op(object.post)` →
+/// `tx_commit`. Вход — JSON `{"object_id": "...", "expected_version": N}`.
+/// Возвращает JSON с сырыми конвертами хоста для тестового разбора.
+#[extism_pdk::plugin_fn]
+pub fn tx_probe(request: String) -> FnResult<String> {
+    let req: serde_json::Value = serde_json::from_str(&request)?;
+    let object_id = req["object_id"].as_str().unwrap_or_default().to_string();
+    let expected_version = req["expected_version"].as_u64().unwrap_or(0);
+
+    let begin_conv = unsafe { host::tx_begin("tx-probe-key".to_string())? };
+    let begin: serde_json::Value = serde_json::from_str(&begin_conv)?;
+    let handle = begin["data"]["handle"].as_str().unwrap_or_default().to_string();
+
+    let post_params = serde_json::json!({
+        "id": object_id,
+        "expected_version": expected_version,
+    });
+    let add_op_conv = unsafe {
+        host::tx_add_op(handle.clone(), "object.post".to_string(), post_params.to_string())?
+    };
+    let commit_conv = unsafe { host::tx_commit(handle.clone())? };
+
+    Ok(serde_json::json!({
+        "begin": begin_conv,
+        "add_op": add_op_conv,
+        "commit": commit_conv,
+    })
+    .to_string())
+}
+
+/// Проба $ref-связывания подфазы 9d: `test.noop` отражает параметры, а
+/// `object.post` берёт id и версию через `{"$ref": "<op_id>.params.…"}`.
+/// Вход — JSON `{"object_id": "...", "expected_version": N}`. Возвращает
+/// JSON с сырыми конвертами хоста.
+#[extism_pdk::plugin_fn]
+pub fn tx_ref_probe(request: String) -> FnResult<String> {
+    let req: serde_json::Value = serde_json::from_str(&request)?;
+    let object_id = req["object_id"].as_str().unwrap_or_default().to_string();
+    let expected_version = req["expected_version"].as_u64().unwrap_or(0);
+
+    let begin_conv = unsafe { host::tx_begin("tx-ref-probe-key".to_string())? };
+    let begin: serde_json::Value = serde_json::from_str(&begin_conv)?;
+    let handle = begin["data"]["handle"].as_str().unwrap_or_default().to_string();
+
+    let noop_params = serde_json::json!({
+        "target_id": object_id,
+        "expected_version": expected_version,
+    });
+    let noop_conv = unsafe {
+        host::tx_add_op(handle.clone(), "test.noop".to_string(), noop_params.to_string())?
+    };
+    let noop: serde_json::Value = serde_json::from_str(&noop_conv)?;
+    let op1_id = noop["data"]["op_id"].as_str().unwrap_or_default().to_string();
+
+    let post_params = serde_json::json!({
+        "id": { "$ref": format!("{op1_id}.params.target_id") },
+        "expected_version": { "$ref": format!("{op1_id}.params.expected_version") },
+    });
+    let add_op_conv = unsafe {
+        host::tx_add_op(handle.clone(), "object.post".to_string(), post_params.to_string())?
+    };
+    let commit_conv = unsafe { host::tx_commit(handle.clone())? };
+
+    Ok(serde_json::json!({
+        "begin": begin_conv,
+        "noop": noop_conv,
+        "add_op": add_op_conv,
+        "commit": commit_conv,
+    })
+    .to_string())
+}
+
+/// Проба идемпотентности подфазы 9d: два `tx_begin` с одинаковым
+/// business_key должны вернуть один и тот же handle.
+#[extism_pdk::plugin_fn]
+pub fn tx_idem_probe() -> FnResult<String> {
+    let first_conv = unsafe { host::tx_begin("tx-idem-probe-key".to_string())? };
+    let first: serde_json::Value = serde_json::from_str(&first_conv)?;
+    let handle = first["data"]["handle"].as_str().unwrap_or_default().to_string();
+    let noop_conv = unsafe {
+        host::tx_add_op(handle.clone(), "test.noop".to_string(), "{}".to_string())?
+    };
+    let second_conv = unsafe { host::tx_begin("tx-idem-probe-key".to_string())? };
+    Ok(serde_json::json!({
+        "first": first_conv,
+        "noop": noop_conv,
+        "second": second_conv,
+    })
+    .to_string())
 }
 
 // Фиктивный помощник, чтобы `Error` был задействован (never-type fallback не
