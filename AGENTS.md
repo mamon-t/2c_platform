@@ -36,6 +36,7 @@ Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, комп�
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (префиксные команды) + `CommandExecutionPipeline` (аудит + RBAC перед каждой командой) |
 | `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик, ensure-регистры |
 | `crates/core-application/src/module_manager.rs` | `ModuleManager` (9b): install/uninstall/enable/disable + декларативная регистрация манифеста (политики, схемы, команды `plugin.*`) |
+| `crates/core-application/src/transaction_orchestrator.rs` | `TransactionOrchestrator` (9d): begin/add_op/commit транзакций модулей, `$ref`-связывание, идемпотентность по business_key, GC (TTL 5 мин) |
 | `crates/core-infrastructure/src/connector.rs`, `events.rs` | `connect_db` (единая WS-сессия), транзакционные хелперы append/assign_versions/with_transaction |
 | `crates/core-infrastructure/src/surreal_{event_store,company,user,role,permission_policy,object,audit,metadata,module}_repository.rs` | SQL-доступ по коллекциям; у каждого `ensure_schema()` с UNIQUE-индексами; схема создаётся при старте, а не SQL-миграциями |
 | `crates/core-infrastructure/src/extism_wasm_host.rs`, `module_kv.rs` | WASM-хост (Extism 1.30), host-функции, KV-хранилище модулей |
@@ -107,9 +108,11 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–9c. Фаза 9 (WASM/Extism): host-fn `emit_event`, `module_kv`, менеджер
-модулей с install/uninstall/enable/disable, интеграционные тесты (`phase5_rbac`, `hello_wasm`,
-`phase9b_modules`).
+Реализовано: Фазы 1–9. Фаза 9 (WASM/Extism): host-fn `emit_event`, `users_by_role`,
+`module_kv`, менеджер модулей с install/uninstall/enable/disable, транзакционная
+оркестрация `tx_begin`/`tx_add_op`/`tx_commit` (capability `transactions`,
+`$ref`-связывание, атомарная пачка `update_batch`), интеграционные тесты
+(`phase5_rbac`, `hello_wasm`, `phase9b_modules`, `phase9d_preload`).
 **Не начинать Фазу 10+** (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления,
 криптоподпись, диагностика, тесты).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
