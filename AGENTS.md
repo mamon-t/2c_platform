@@ -12,12 +12,14 @@
 Сквозная модель **Труба + Доска**: каждая изменяющая команда атомарно пишет и событие
 в Event Store (Труба — истина), и материализованную запись (Доска — проекции), и снимок
 в `audit_log` (двухуровневое журналирование: бизнес-события ≠ операционный аудит).
-Сейчас всё выполняется от системного исполнителя `ActorSnapshot::system()` — аутентификации ещё нет.
+С Фазы 10b есть JWT-аутентификация (`user.login`/`user.logout`,
+`Authorization: Bearer` в `/rpc` и `?token=` в `/ws`); большинство команд
+исполняются от системного исполнителя `ActorSnapshot::system()`.
 
 ## Workspace и слои
 
 Workspace: `crates/core-domain` → `crates/core-application` → `crates/core-infrastructure`
-+ `crates/core-api` (транспорт, пока каркас — 1 строка в `lib.rs`) + бинарник `apps/platform-server`.
++ `crates/core-api` (транспорт RpcMessage: `/rpc`, `/ws`, PushHub) + бинарник `apps/platform-server`.
 Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, компоненты rustfmt + clippy).
 
 - Зависимости направлены вниз. `core-domain` — чистый домен, в нём НЕ должно быть
@@ -31,16 +33,18 @@ Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, комп�
 
 | Файл | Зачем нужен |
 |---|---|
-| `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,module,aggregate,error}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError` |
+| `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,module,aggregate,error,types,password}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError`, `Version` (u64), Argon2id `hash_password`/`verify_password` |
 | `crates/core-application/src/ports.rs` | Порты: EventStore, все `*Repository` (+`ModuleRepository`), WasmHost, EntitySchema |
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (префиксные команды) + `CommandExecutionPipeline` (аудит + RBAC перед каждой командой) |
 | `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик, ensure-регистры |
+| `crates/core-application/src/auth.rs` | `AuthService` (10b): `login`/`logout`, аудит `user.login`/`user.login_failed`/`user.logout`, блокировка ≥5 попыток на 15 мин, `TokenManager`-порт |
 | `crates/core-application/src/module_manager.rs` | `ModuleManager` (9b): install/uninstall/enable/disable + декларативная регистрация манифеста (политики, схемы, команды `plugin.*`) |
-| `crates/core-application/src/transaction_orchestrator.rs` | `TransactionOrchestrator` (9d): begin/add_op/commit транзакций модулей, `$ref`-связывание, идемпотентность по business_key, GC (TTL 5 мин) |
+| `crates/core-application/src/transaction_orchestrator.rs` | `TransactionOrchestrator` (9e): begin/add_op/commit транзакций модулей, `$ref`-связывание, идемпотентность по business_key, GC (TTL 5 мин) |
 | `crates/core-infrastructure/src/connector.rs`, `events.rs` | `connect_db` (единая WS-сессия), транзакционные хелперы append/assign_versions/with_transaction |
 | `crates/core-infrastructure/src/surreal_{event_store,company,user,role,permission_policy,object,audit,metadata,module}_repository.rs` | SQL-доступ по коллекциям; у каждого `ensure_schema()` с UNIQUE-индексами; схема создаётся при старте, а не SQL-миграциями |
 | `crates/core-infrastructure/src/extism_wasm_host.rs`, `module_kv.rs` | WASM-хост (Extism 1.30), host-функции, KV-хранилище модулей |
-| `apps/platform-server/src/main.rs` | Старт: ensure_schema всех репо, регистрация команд по фазам, attach RBAC-pipeline, /health + debug REST |
+| `crates/core-api/src/{rpc_message,routes,token,ws,push_hub,error_mapping,idempotency}.rs` | (10a/10b/10c): конверт `RpcMessage`, `POST /rpc`, `JwtTokenManager`, `GET /ws`, `PushHub`, маппинг ошибок, идемпотентность |
+| `apps/platform-server/src/main.rs` | Старт: ensure_schema всех репо, регистрация команд по фазам, attach RBAC-pipeline, /health + debug REST, merge RpcMessage-роутера (`/rpc`, `/ws`) |
 | `apps/platform-server/src/commands.rs` | Все команды: `company.*`, `user.*` (+contact/profile), `role.*` (+`role.seed`), `metadata.*`, `object.*` (+snapshot), `document.number.*`, `audit.*`, `module.*`, `system.migrate_permissions` |
 
 ## Команды
@@ -59,6 +63,9 @@ curl -X POST :8080/debug/command -H 'Content-Type: application/json' \
      -d '{"name":"company.create","params":{"code":"x","name":"X"}}'
 curl -X POST :8080/debug/events -H 'Content-Type: application/json' -d '[{...Event...}]'
 curl :8080/debug/streams/object/{sid}
+curl -X POST :8080/rpc -H 'Content-Type: application/json' \
+     -d '{"type":"command","id":"1","module":"core","action":"company.create","payload":{"code":"x","name":"X"}}' \
+     -H 'Authorization: Bearer <JWT>'
 
 # Прямой SQL к SurrealDB (NS/DB — заголовки)
 curl -u root:root -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" :8000/sql \
@@ -67,9 +74,15 @@ curl -u root:root -H "Surreal-NS: main" -H "Surreal-DB: 2cplatform_v30" :8000/sq
 
 ## Тесты — как это реально работает
 
-- Интеграционные тесты `core-infrastructure` (`tests/phase5_rbac.rs`, `tests/hello_wasm.rs`)
-  гоняются на `mem://`-базе: репозитории подключаются к SurrealDB через feature `kv-mem`
-  (активируется только для тестов в `[dev-dependencies]`). Живой сервер не нужен.
+- Интеграционные тесты `core-infrastructure` (`tests/phase5_rbac.rs`, `tests/hello_wasm.rs`,
+  `tests/phase9b_modules.rs`, `tests/phase9d_preload.rs`) гоняются на `mem://`-базе: репозитории
+  подключаются к SurrealDB через feature `kv-mem` (активируется только для тестов в
+  `[dev-dependencies]`). Живой сервер не нужен.
+- Интеграционные тесты `core-api` (`tests/phase10a_rpc.rs`, `tests/phase10b_auth_rpc.rs`,
+  `tests/phase10c_ws.rs`) гоняются без живого сервера: 10a/10b через `Router::oneshot`,
+  10c — через live `axum::serve` на ephemeral-порту + `tokio-tungstenite::connect_async`.
+- Юнит-тесты внутри крейтов: репозитории (`mem://`), `IdempotencyStore`, `JwtTokenManager`,
+  `PushHub`, `password.rs` (Argon2id round-trip).
 - `hello_wasm.rs` требует фикстуру `crates/core-infrastructure/tests/fixtures/hello.wasm`.
   Она компилируется из `examples/hello_plugin` и закоммичена; после изменения модуля —
   пересобрать и заменить (см. ниже).
@@ -108,11 +121,23 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–10 (10a + 10b + 10c). Фаза 9 (WASM/Extism): host-fn `emit_event`, `users_by_role`,
-`module_kv`, менеджер модулей с install/uninstall/enable/disable, транзакционная
+Реализовано: Фазы 1–10 (10a + 10b + 10c). Фазы 1–8:
+`Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
+`Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
+`Фаза 3` — метаданные (entity_types, fields, states, transitions, forms, relations, actions);
+`Фаза 4` — аудит (`audit.log`/`audit.query`, 5 индексов);
+`Фаза 5` — RBAC (`PermissionManager` + `CommandExecutionPipeline`, системные роли/политики,
+`role.seed`/`system.migrate_permissions`);
+`Фаза 6` — объекты, CRUD + OCC по `version`, снимки, атомарная нумерация;
+`Фаза 7` — Event Store (Труба): `SurrealEventStore`, индексы, идемпотентный append;
+`Фаза 8` — `CommandRegistry`, `AppRegistry`, 5 ensure-регистров.
+Фаза 9 (WASM/Extism): host-fn `emit_event`, `users_by_role`, `module_kv`,
+`ObjectRepository::count`, менеджер модулей (install/uninstall/enable/disable,
+декларативная регистрация политик/схем/команд `plugin.*`), транзакционная
 оркестрация `tx_begin`/`tx_add_op`/`tx_commit` (capability `transactions`,
-`$ref`-связывание, атомарная пачка `update_batch`), интеграционные тесты
-(`phase5_rbac`, `hello_wasm`, `phase9b_modules`, `phase9d_preload`).
+`$ref`-связывание, атомарная пачка `update_batch`), `preload_all` при старте,
+reinstall, интеграционные тесты (`phase5_rbac`, `hello_wasm`, `phase9b_modules`,
+`phase9d_preload`).
 Фаза 10: конверт `RpcMessage` + `POST /rpc` (`core-api`), типизированные ошибки
 команд (`CommandRegistry` → `DomainError`), идемпотентность Command, JWT-аутентификация
 (`user.login`/`user.logout`, `AuthService`, `JwtTokenManager`, Argon2id-пароли, фикс
