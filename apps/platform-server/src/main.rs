@@ -34,6 +34,7 @@ struct AppState {
     store: Arc<SurrealEventStore>,
     registry: Arc<CommandRegistry>,
     host: Arc<ExtismWasmHost>,
+    pushes: Arc<core_api::PushHub>,
 }
 
 #[tokio::main]
@@ -155,6 +156,9 @@ async fn main() -> Result<()> {
     let auth_service = Arc::new(AuthService::new(users.clone(), audit.clone(), tokens.clone()));
     commands::register_phase10_commands(&registry, auth_service).await;
 
+    // Фаза 10c: WebSocket (ServerPush) — хаб уведомлений и отладочный эндпоинт.
+    let pushes = core_api::PushHub::new();
+
     let permissions = Arc::new(PermissionManager::new(roles, policies));
     registry.attach_pipeline(audit, permissions).await;
     info!("Зарегистрировано команд ({}):", registry.list().await.len());
@@ -163,6 +167,14 @@ async fn main() -> Result<()> {
         store,
         registry,
         host,
+        pushes: pushes.clone(),
+    };
+    let api_state = core_api::ApiState {
+        registry: state.registry.clone(),
+        store: state.store.clone(),
+        idempotency: core_api::IdempotencyStore::new(),
+        tokens,
+        pushes: pushes.clone(),
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -172,14 +184,12 @@ async fn main() -> Result<()> {
         .route("/debug/modules", get(debug_modules))
         .route("/debug/module/load", post(debug_module_load))
         .route("/debug/module/invoke", post(debug_module_invoke))
+        .route("/debug/push", post(debug_push))
         .with_state(state.clone())
         // Фаза 10a: транспортный конверт RpcMessage поверх Axum.
-        .merge(core_api::router(core_api::ApiState {
-            registry: state.registry.clone(),
-            store: state.store.clone(),
-            idempotency: core_api::IdempotencyStore::new(),
-            tokens,
-        }));
+        .merge(core_api::router(api_state.clone()))
+        // Фаза 10c: WebSocket-транспорт (duplex RPC + ServerPush).
+        .route("/ws", get(core_api::ws_handler).with_state(api_state));
 
     let addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let listener = TcpListener::bind(&addr).await?;
@@ -277,6 +287,30 @@ async fn debug_command(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true, "command": name, "result": result })))
+}
+
+/// Опубликовать `ServerPush` всем WebSocket-подписчикам:
+/// `{"module": "...", "event_type": "...", "payload": {...}}` (отладочный эндпоинт Фазы 10c).
+async fn debug_push(
+    State(state): State<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let module = payload
+        .get("module")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'module'".to_string()))?
+        .to_string();
+    let event_type = payload
+        .get("event_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "отсутствует поле 'event_type'".to_string()))?
+        .to_string();
+    let body = payload
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    state.pushes.push(&module, &event_type, body);
+    Ok(Json(serde_json::json!({ "ok": true, "module": module, "event_type": event_type })))
 }
 
 fn parse_stream_type(kind: &str) -> Result<StreamType, (StatusCode, String)> {

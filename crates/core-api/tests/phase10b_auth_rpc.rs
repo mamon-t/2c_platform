@@ -53,6 +53,7 @@ struct Env {
     users: Arc<SurrealUserRepository>,
     audit: Arc<SurrealAuditRepository>,
     company_id: Uuid,
+    pushes: Arc<core_api::PushHub>,
 }
 
 fn user_event(user: &User, company_id: Uuid) -> Event {
@@ -187,6 +188,7 @@ async fn setup() -> Env {
         users,
         audit,
         company_id,
+        pushes: core_api::PushHub::new(),
     }
 }
 
@@ -240,6 +242,7 @@ fn api_state(env: &Env) -> ApiState {
         store: env.store.clone(),
         idempotency: env.idempotency.clone(),
         tokens: env.tokens.clone(),
+        pushes: env.pushes.clone(),
     }
 }
 

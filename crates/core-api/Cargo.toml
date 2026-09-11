@@ -18,6 +18,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+futures-util = "0.3"
 
 [dev-dependencies]
 # kv-mem активируется только при компиляции тестов (feature unification),
@@ -25,3 +26,4 @@ tracing = { workspace = true }
 core-infrastructure = { path = "../core-infrastructure" }
 surrealdb = { workspace = true, features = ["kv-mem"] }
 tower = { workspace = true, features = ["util"] }
+tokio-tungstenite = "0.24"

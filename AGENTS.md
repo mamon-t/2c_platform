@@ -108,13 +108,20 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–9. Фаза 9 (WASM/Extism): host-fn `emit_event`, `users_by_role`,
+Реализовано: Фазы 1–10 (10a + 10b + 10c). Фаза 9 (WASM/Extism): host-fn `emit_event`, `users_by_role`,
 `module_kv`, менеджер модулей с install/uninstall/enable/disable, транзакционная
 оркестрация `tx_begin`/`tx_add_op`/`tx_commit` (capability `transactions`,
 `$ref`-связывание, атомарная пачка `update_batch`), интеграционные тесты
 (`phase5_rbac`, `hello_wasm`, `phase9b_modules`, `phase9d_preload`).
-**Не начинать Фазу 10+** (транспорт, Flutter, оффлайн, Rhai, учёт, экспорт, уведомления,
-криптоподпись, диагностика, тесты).
+Фаза 10: конверт `RpcMessage` + `POST /rpc` (`core-api`), типизированные ошибки
+команд (`CommandRegistry` → `DomainError`), идемпотентность Command, JWT-аутентификация
+(`user.login`/`user.logout`, `AuthService`, `JwtTokenManager`, Argon2id-пароли, фикс
+RBAC для анонимов), тесты `phase10a_rpc`/`phase10b_auth_rpc`.
+Фаза 10c: `PushHub` (broadcast ServerPush), `GET /ws` — WebSocket-транспорт `RpcMessage`
+(актор из `?token=`, общий `process()` для REST/WS), `POST /debug/push`,
+тесты `phase10c_ws`.
+**Не начинать Фазы 11+** (Flutter, оффлайн, Rhai, учёт, экспорт, уведомления,
+криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
 ## Решения, которые не предлагать заново

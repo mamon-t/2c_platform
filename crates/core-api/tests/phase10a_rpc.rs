@@ -129,6 +129,7 @@ fn api_state(env: &Env) -> ApiState {
         store: env.store.clone(),
         idempotency: env.idempotency.clone(),
         tokens: env.tokens.clone(),
+        pushes: core_api::PushHub::new(),
     }
 }
 

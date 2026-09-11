@@ -20,6 +20,18 @@ pub fn http_status(err: &DomainError) -> StatusCode {
     }
 }
 
+/// HTTP-статус по машиночитаемому коду `RpcMessage::Error`.
+pub fn http_status_for_code(code: &str) -> StatusCode {
+    match code {
+        "NOT_FOUND_ERROR" => StatusCode::NOT_FOUND,
+        "CONFLICT_ERROR" => StatusCode::CONFLICT,
+        "VALIDATION_ERROR" => StatusCode::UNPROCESSABLE_ENTITY,
+        "PERMISSION_ERROR" => StatusCode::FORBIDDEN,
+        "STORAGE_ERROR" => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
 /// Дополнительные детали ошибки (заполняются для конфликта версий).
 pub fn error_details(err: &DomainError) -> Option<Value> {
     match err {
