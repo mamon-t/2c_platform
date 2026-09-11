@@ -65,12 +65,16 @@ async fn ws_session(state: ApiState, socket: WebSocket, actor: core_domain::even
                             Err(broadcast::error::RecvError::Closed) => break,
                         }
                     }
-                    Some(msg) = out_rx.recv() => {
-                        if socket_tx.send(msg).await.is_err() {
-                            break;
+                    msg = out_rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                if socket_tx.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
                         }
                     }
-                    else => break,
                 }
             }
         })
@@ -97,7 +101,11 @@ async fn ws_session(state: ApiState, socket: WebSocket, actor: core_domain::even
                     let _ = out_tx.send(Message::Text(text.into())).await;
                 }
             }
-            Message::Close(_) => break,
+            Message::Close(_) => {
+                // Завершаем Close-рукопожатие RFC 6455 ответным фреймом.
+                let _ = out_tx.send(Message::Close(None)).await;
+                break;
+            }
             _ => {}
         }
     }
