@@ -11,3 +11,6 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 semver = "1.0"
 argon2 = { workspace = true }
+# Полный путь rand_core (через password-hash, который использует argon2):
+# feature `getrandom` открывает OsRng для SaltString::generate.
+rand_core = { version = "0.6.4", features = ["getrandom"], default-features = false }

@@ -7,6 +7,7 @@ pub mod event;
 pub mod metadata;
 pub mod module;
 pub mod object;
+pub mod password;
 pub mod permission;
 pub mod role;
 pub mod types;
@@ -27,6 +28,7 @@ pub use module::{
     CompanyModule, CompanyModulePayload, ModuleLifecyclePayload, ModuleRecord, ModuleState,
     PluginCallContext,
 };
+pub use password::{hash_password, verify_password};
 pub use object::{Object, ObjectKind, ObjectSnapshot};
 pub use permission::{PermissionPolicy, PermissionScopeType, RecordAccessLevel};
 pub use role::Role;

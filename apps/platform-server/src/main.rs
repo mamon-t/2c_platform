@@ -10,9 +10,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use core_application::auth::AuthService;
 use core_application::command_registry::CommandExecutionCtx;
 use core_application::permission_manager::PermissionManager;
-use core_application::ports::{EventStore, WasmHost};
+use core_application::ports::{EventStore, TokenManager, WasmHost};
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
 use core_domain::error::DomainError;
@@ -23,6 +24,7 @@ use core_infrastructure::{
     SurrealMetadataRepository, SurrealModuleRepository, SurrealObjectRepository,
     SurrealPermissionPolicyRepository, SurrealRoleRepository, SurrealUserRepository,
 };
+use core_api::{JwtConfig, JwtTokenManager};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -98,7 +100,7 @@ async fn main() -> Result<()> {
 
     let app_registry = Arc::new(core_application::AppRegistry::new());
     let registry = app_registry.commands.clone();
-    commands::register_phase2_commands(&registry, companies.clone(), users, roles.clone()).await;
+    commands::register_phase2_commands(&registry, companies.clone(), users.clone(), roles.clone()).await;
     commands::register_phase3_commands(&registry, metadata.clone()).await;
     commands::register_phase4_commands(&registry, objects, metadata.clone()).await;
     commands::register_phase4_audit_commands(&registry, audit.clone()).await;
@@ -144,6 +146,15 @@ async fn main() -> Result<()> {
         Err(e) => warn!("Предзагрузка модулей не выполнена: {e}"),
     }
 
+    // Фаза 10b: JWT-аутентификация (login/logout/audit) поверх Argon2 + jsonwebtoken.
+    let jwt_secret = std::env::var("JWT_SECRET").context("JWT_SECRET не задан")?;
+    let tokens: Arc<dyn TokenManager> = Arc::new(JwtTokenManager::new(JwtConfig {
+        secret: jwt_secret,
+        access_ttl: std::time::Duration::from_secs(3600),
+    }));
+    let auth_service = Arc::new(AuthService::new(users.clone(), audit.clone(), tokens.clone()));
+    commands::register_phase10_commands(&registry, auth_service).await;
+
     let permissions = Arc::new(PermissionManager::new(roles, policies));
     registry.attach_pipeline(audit, permissions).await;
     info!("Зарегистрировано команд ({}):", registry.list().await.len());
@@ -167,6 +178,7 @@ async fn main() -> Result<()> {
             registry: state.registry.clone(),
             store: state.store.clone(),
             idempotency: core_api::IdempotencyStore::new(),
+            tokens,
         }));
 
     let addr = std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());

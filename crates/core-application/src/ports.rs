@@ -1,7 +1,7 @@
 use core_domain::audit::{AuditEntry, AuditFilter};
 use core_domain::company::Company;
 use core_domain::error::DomainError;
-use core_domain::event::{Event, StreamType};
+use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::metadata::{
     EntityAction, EntityField, EntityForm, EntityRelation, EntityState, EntityTransition, EntityType,
 };
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 /// Пинованный boxed-футур для dyn-совместимых методов портов.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -521,4 +522,30 @@ pub trait AuditRepository: Send + Sync {
     /// Возвращает записи, удовлетворяющие фильтру, в порядке убывания
     /// `timestamp` (самые новые первыми).
     fn query(&self, filter: AuditFilter) -> BoxFuture<'_, Result<Vec<AuditEntry>, DomainError>>;
+}
+
+/// Выпущенный токен доступа. Сериализуется в ответе `user.login`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuthToken {
+    pub access_token: String,
+    pub expires_at: DateTime<Utc>,
+    pub token_type: &'static str,
+}
+
+/// Издаёт и проверяет токены доступа (ТЗ v3.1, §10b).
+pub trait TokenManager: Send + Sync {
+    /// Выпускает токен для данного исполнителя.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::Storage` при сбое подписи/кодирования.
+    fn issue(&self, actor: &ActorSnapshot) -> Result<AuthToken, DomainError>;
+
+    /// Разбирает токен и восстанавливает исполнителя.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::PermissionDenied`, если токен невалиден, просрочен
+    /// или подписан неизвестным ключом.
+    fn parse(&self, token: &str) -> Result<ActorSnapshot, DomainError>;
 }

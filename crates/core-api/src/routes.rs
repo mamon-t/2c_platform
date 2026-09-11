@@ -8,12 +8,13 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use core_application::command_registry::{CommandExecutionCtx, CommandRegistry};
-use core_application::ports::EventStore;
-use core_domain::event::Event;
+use core_application::ports::{EventStore, TokenManager};
+use core_domain::event::{ActorSnapshot, Event};
 use serde_json::{Value, json};
 
 use crate::error_mapping::{error_code, error_details, http_status};
@@ -26,6 +27,7 @@ pub struct ApiState {
     pub registry: Arc<CommandRegistry>,
     pub store: Arc<dyn EventStore>,
     pub idempotency: Arc<IdempotencyStore>,
+    pub tokens: Arc<dyn TokenManager>,
 }
 
 /// Собирает роутер `POST /rpc` с уже подставленным состоянием.
@@ -37,13 +39,15 @@ pub fn router(state: ApiState) -> Router {
 /// команду и возвращает `Response`/`Error`.
 pub async fn rpc_handler(
     State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<RpcMessage>) {
+    let actor = resolve_actor(&state, &headers);
     match body.get("type").and_then(Value::as_str) {
         Some(_) => {
             let parsed = serde_json::from_value::<RpcMessage>(body);
             match parsed {
-                Ok(message) => handle_message(&state, message).await,
+                Ok(message) => handle_message(&state, message, actor).await,
                 Err(e) => (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(RpcMessage::Error {
@@ -55,18 +59,36 @@ pub async fn rpc_handler(
                 ),
             }
         }
-        None => handle_legacy(&state, &body).await,
+        None => handle_legacy(&state, &body, actor).await,
+    }
+}
+
+/// Резолвит исполнителя из заголовка `Authorization: Bearer <jwt>`.
+/// Без валидного токена возвращает анонимного актора, чтобы пайплайн RBAC
+/// мог отказать ему в командах с `required_permission`.
+fn resolve_actor(state: &ApiState, headers: &HeaderMap) -> ActorSnapshot {
+    let token = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "));
+    match token {
+        Some(token) => state.tokens.parse(token).unwrap_or_else(|_| ActorSnapshot::anonymous()),
+        None => ActorSnapshot::anonymous(),
     }
 }
 
 /// Обрабатывает сообщение в конверте RpcMessage.
-async fn handle_message(state: &ApiState, message: RpcMessage) -> (StatusCode, Json<RpcMessage>) {
+async fn handle_message(
+    state: &ApiState,
+    message: RpcMessage,
+    actor: ActorSnapshot,
+) -> (StatusCode, Json<RpcMessage>) {
     match message {
         RpcMessage::Command { id, module, action, payload } => {
-            run_command(state, id, module, action, payload, true).await
+            run_command(state, id, module, action, payload, true, actor).await
         }
         RpcMessage::Query { id, module, action, payload } => {
-            run_command(state, id, module, action, payload, false).await
+            run_command(state, id, module, action, payload, false, actor).await
         }
         RpcMessage::EventBatch { id, module, events } => {
             if module != "core" {
@@ -145,6 +167,7 @@ async fn run_command(
     action: String,
     payload: Value,
     idempotent: bool,
+    actor: ActorSnapshot,
 ) -> (StatusCode, Json<RpcMessage>) {
     let command_name = if module == "core" {
         action.clone()
@@ -152,13 +175,17 @@ async fn run_command(
         format!("plugin.{module}.{action}")
     };
     let ctx = CommandExecutionCtx {
-        actor: None,
+        actor: Some(actor),
         module_code: if module == "core" { None } else { Some(module) },
         entity_type: None,
     };
 
     let key = IdempotencyKey {
-        actor_user_id: None,
+        actor_user_id: ctx
+            .actor
+            .as_ref()
+            .and_then(|a| a.user_id)
+            .map(|id| id.to_string()),
         request_id: id.clone(),
     };
     if idempotent {
@@ -187,7 +214,11 @@ async fn run_command(
 }
 
 /// Автоконвертация legacy-формы `{"name", "params", ...}` в Command.
-async fn handle_legacy(state: &ApiState, body: &Value) -> (StatusCode, Json<RpcMessage>) {
+async fn handle_legacy(
+    state: &ApiState,
+    body: &Value,
+    actor: ActorSnapshot,
+) -> (StatusCode, Json<RpcMessage>) {
     let name = match body.get("name").and_then(Value::as_str) {
         Some(name) => name.to_string(),
         None => {
@@ -213,5 +244,5 @@ async fn handle_legacy(state: &ApiState, body: &Value) -> (StatusCode, Json<RpcM
         .and_then(Value::as_str)
         .unwrap_or("core")
         .to_string();
-    run_command(state, id, module, name, payload, true).await
+    run_command(state, id, module, name, payload, true, actor).await
 }

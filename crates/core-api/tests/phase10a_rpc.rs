@@ -8,15 +8,15 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use core_api::idempotency::IdempotencyStore;
 use core_api::routes::ApiState;
-use core_api::RpcMessage;
-use core_api::router;
+use core_api::{JwtConfig, JwtTokenManager, RpcMessage, router};
 use core_application::command_registry::CommandRegistry;
-use core_application::ports::{EventStore, ObjectRepository};
+use core_application::ports::{EventStore, ObjectRepository, TokenManager};
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::object::{Object, ObjectKind};
 use core_infrastructure::surreal_object_repository::SurrealObjectRepository;
@@ -41,6 +41,7 @@ struct Env {
     registry: Arc<CommandRegistry>,
     idempotency: Arc<IdempotencyStore>,
     _objects: Arc<SurrealObjectRepository>,
+    tokens: Arc<dyn TokenManager>,
 }
 
 async fn setup() -> Env {
@@ -115,6 +116,10 @@ async fn setup() -> Env {
         registry,
         idempotency: IdempotencyStore::new(),
         _objects: objects,
+        tokens: Arc::new(JwtTokenManager::new(JwtConfig {
+            secret: "test-secret".to_string(),
+            access_ttl: Duration::from_secs(600),
+        })),
     }
 }
 
@@ -123,6 +128,7 @@ fn api_state(env: &Env) -> ApiState {
         registry: env.registry.clone(),
         store: env.store.clone(),
         idempotency: env.idempotency.clone(),
+        tokens: env.tokens.clone(),
     }
 }
 

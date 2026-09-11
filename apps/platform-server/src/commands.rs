@@ -11,6 +11,7 @@ use core_application::ports::{
     RoleRepository, UserRepository,
 };
 use core_application::seed::seed_system_roles_and_policies;
+use core_application::auth::AuthService;
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
 use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
@@ -22,6 +23,7 @@ use core_domain::metadata::{
     EntityType, FieldType, OnDelete, RelationKind,
 };
 use core_domain::object::{Object, ObjectKind};
+use core_domain::password::hash_password;
 use core_domain::role::Role;
 use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
@@ -237,7 +239,9 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                 let users = users.clone();
                 async move {
                     let login = require(&params, "login")?;
-                    let password_hash = require(&params, "password_hash")?;
+                    let password = require(&params, "password")?;
+                    let password_hash =
+                        hash_password(&password).map_err(DomainError::ValidationError)?;
                     let last_name = require(&params, "last_name")?;
                     let first_name = require(&params, "first_name")?;
                     let middle_name = optional(&params, "middle_name")?;
@@ -350,7 +354,9 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
                     let user = User {
                         id,
                         login: optional(&params, "login")?.unwrap_or(existing.login),
-                        password_hash: optional(&params, "password_hash")?
+                        password_hash: optional(&params, "password")?
+                            .map(|password| hash_password(&password).map_err(DomainError::ValidationError))
+                            .transpose()?
                             .unwrap_or(existing.password_hash),
                         status: parse_optional_enum::<UserStatus>(&params, "status")?
                             .unwrap_or(existing.status),
@@ -1464,6 +1470,40 @@ pub async fn register_phase9_module_commands(
                     let code = require(&params, "code")?;
                     let record = modules.get(&code).await?;
                     encode(&record)
+                }
+            }
+        })
+        .await;
+}
+
+/// Команды аутентификации Фазы 10b: логин/выход через JWT на базе `AuthService`.
+pub async fn register_phase10_commands(
+    registry: &CommandRegistry,
+    auth: std::sync::Arc<AuthService>,
+) {
+    registry
+        .register_with_metadata("user.login", CommandMetadata::unrestricted(), {
+            let auth = auth.clone();
+            move |params: Value| {
+                let auth = auth.clone();
+                async move {
+                    let login = require(&params, "login")?;
+                    let password = require(&params, "password")?;
+                    let token = auth.login(&login, &password, None, None).await?;
+                    encode(&token)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("user.logout", CommandMetadata::unrestricted(), {
+            let auth = auth.clone();
+            move |_: Value| {
+                let auth = auth.clone();
+                async move {
+                    auth.logout(None, None, None).await?;
+                    Ok(json!({ "logout": true }))
                 }
             }
         })

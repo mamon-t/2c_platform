@@ -140,4 +140,23 @@ impl ActorSnapshot {
             ip_address: None,
         }
     }
+
+    /// Истина только для системного исполнителя (`user_id` отсутствует и
+    /// специализированный логин `system`). Используется пайплайном прав,
+    /// чтобы отличить легитимный внутрипроцессный вызов от анонима без токена.
+    pub fn is_system(&self) -> bool {
+        self.user_id.is_none() && self.login == "system"
+    }
+
+    /// Анонимный исполнитель для запросов без `Authorization`-токена.
+    pub fn anonymous() -> Self {
+        Self {
+            user_id: None,
+            login: "anonymous".to_string(),
+            full_name: "Аноним".to_string(),
+            position: None,
+            company_id: None,
+            ip_address: None,
+        }
+    }
 }

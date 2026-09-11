@@ -221,9 +221,16 @@ impl CommandRegistry {
                         )
                         .await
                         .map_err(|e| DomainError::Storage(format!("permission check: {e}")))?,
-                    None => false,
-                },
-                None => true,
+None => false,
+                    },
+                // Отсутствие user_id разрешено только системному исполнителю
+                // (внутрипроцессный bootstrap) либо вызову без явного актора.
+                // Аноним (actor без токена) прав не получает.
+                None => ctx
+                    .actor
+                    .as_ref()
+                    .map(|a| a.is_system())
+                    .unwrap_or(true),
             },
             None => true,
         };
