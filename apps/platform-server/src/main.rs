@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
     let jwt_secret = std::env::var("JWT_SECRET").context("JWT_SECRET не задан")?;
     let tokens: Arc<dyn TokenManager> = Arc::new(JwtTokenManager::new(JwtConfig {
         secret: jwt_secret,
-        access_ttl: std::time::Duration::from_secs(3600),
+        access_ttl: std::time::Duration::from_secs(8 * 60 * 60),
     }));
     let auth_service = Arc::new(AuthService::new(users.clone(), audit.clone(), tokens.clone()));
     commands::register_phase10_commands(&registry, auth_service).await;
