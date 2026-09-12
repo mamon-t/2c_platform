@@ -21,3 +21,6 @@ doc/technical_report.md
 
 # WASM-модули: локальный кэш бинарников (debug REST)
 /.module_cache/
+
+# Локальный рабочий отчёт по клиенту
+doc/frontend_report.md
