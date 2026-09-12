@@ -1,0 +1,21 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    invalid_annotation_target: ignore
+
+linter:
+  rules:
+    - avoid_print
+    - prefer_single_quotes
+    - require_trailing_commas
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - annotate_overrides
+    - avoid_unnecessary_containers
+    - sized_box_for_whitespace
+    - use_key_in_widget_constructors
+    - avoid_dynamic_calls
+    - always_declare_return_types
+    - prefer_is_empty
+    - prefer_is_not_empty
