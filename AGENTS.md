@@ -121,7 +121,7 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–10 (10a + 10b + 10c). Фазы 1–8:
+Реализовано: Фазы 1–10 (10a + 10b + 10c) и 13. Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
 `Фаза 3` — метаданные (entity_types, fields, states, transitions, forms, relations, actions);
@@ -145,7 +145,16 @@ RBAC для анонимов), тесты `phase10a_rpc`/`phase10b_auth_rpc`.
 Фаза 10c: `PushHub` (broadcast ServerPush), `GET /ws` — WebSocket-транспорт `RpcMessage`
 (актор из `?token=`, общий `process()` для REST/WS), `POST /debug/push`,
 тесты `phase10c_ws`.
-**Не начинать Фазы 11+** (Flutter, оффлайн, Rhai, учёт, экспорт, уведомления,
+Фаза 13 (скрипты Rhai, ТЗ §15): `RhaiScriptEngine` (песочница `Engine::new_raw()`,
+fuel 10M, лимиты коллекций/вложенности, выполнение на OS-потоке с таймаутом,
+кэш AST), Core API `log_info/log_error/emit_event/emit_transaction/db_query`
+через `await_core_api` (паттерн «spawn на владеющем рантайме + std-канал»),
+`ScriptRepository` + модель `Script`, `ScriptContext`, манифестные скрипты в
+`ModuleManifest`, host-fn `run_script` — теперь реальная (была заглушка 9c),
+команды `script.create/update/list/delete` (capability `scripts`); фикс
+блокировки воркера в WASM-пути: std `recv_timeout` → `tokio::sync::mpsc` +
+`tokio::time::timeout`. Тесты 113 (unit + hello_wasm/phase9b/phase9d).
+**Не начинать Фазы 11–12, 14+** (Flutter, оффлайн, учёт, экспорт, уведомления,
 криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
