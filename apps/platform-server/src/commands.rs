@@ -5,11 +5,12 @@
 //! от системного исполнителя, пока не появится аутентификация.
 
 use chrono::{DateTime, NaiveDate, Utc};
-use core_application::command_registry::CommandMetadata;
+use core_application::command_registry::{CommandExecutionCtx, CommandMetadata};
 use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
-    RoleRepository, ScriptRepository, UserRepository,
+    RoleRepository, ScriptEngine, ScriptRepository, UserRepository,
 };
+use core_application::script_runner::execute_script;
 use core_application::seed::seed_system_roles_and_policies;
 use core_application::auth::AuthService;
 use core_application::CommandRegistry;
@@ -137,7 +138,7 @@ async fn register_company_commands(
     registry
         .register_with_metadata("company.create", CommandMetadata::requires("create"), {
             let companies = companies.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let companies = companies.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -172,7 +173,7 @@ async fn register_company_commands(
     registry
         .register_with_metadata("company.get", CommandMetadata::requires("read"), {
             let companies = companies.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let companies = companies.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -186,7 +187,7 @@ async fn register_company_commands(
     registry
         .register_with_metadata("company.list", CommandMetadata::requires("read"), {
             let companies = companies.clone();
-            move |_params: Value| {
+            move |_params: Value, _ctx: CommandExecutionCtx| {
                 let companies = companies.clone();
                 async move {
                     let list = companies.list().await?;
@@ -201,7 +202,7 @@ async fn register_company_commands(
     registry
         .register_with_metadata("company.update", CommandMetadata::requires("update"), {
             let companies = companies.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let companies = companies.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -236,7 +237,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.create", CommandMetadata::requires("create"), {
             let users = users.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let login = require(&params, "login")?;
@@ -319,7 +320,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.get", CommandMetadata::requires("read"), {
             let users = users.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -333,7 +334,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.list", CommandMetadata::requires("read"), {
             let users = users.clone();
-            move |_params: Value| {
+            move |_params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let list = users.list().await?;
@@ -347,7 +348,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.update", CommandMetadata::requires("update"), {
             let users = users.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -396,7 +397,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.contact.add", CommandMetadata::requires("create"), {
             let users = users.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let user_id = parse_uuid(&params, "user_id")?;
@@ -434,7 +435,7 @@ async fn register_user_commands(registry: &CommandRegistry, users: Arc<SurrealUs
     registry
         .register_with_metadata("user.profile.add", CommandMetadata::requires("create"), {
             let users = users.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let users = users.clone();
                 async move {
                     let user_id = parse_uuid(&params, "user_id")?;
@@ -472,7 +473,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
     registry
         .register_with_metadata("role.create", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let roles = roles.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -510,7 +511,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
     registry
         .register_with_metadata("role.get", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let roles = roles.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -524,7 +525,7 @@ async fn register_role_commands(registry: &CommandRegistry, roles: Arc<SurrealRo
     registry
         .register_with_metadata("role.list", CommandMetadata::requires("role.manage"), {
             let roles = roles.clone();
-            move |_params: Value| {
+            move |_params: Value, _ctx: CommandExecutionCtx| {
                 let roles = roles.clone();
                 async move {
                     let list = roles.list().await?;
@@ -543,7 +544,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.entity_type.create", CommandMetadata::requires("metadata.manage"), {
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let schema = parse_schema(&params)?;
@@ -560,7 +561,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.entity_type.get", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -576,7 +577,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.entity_type.get_by_code", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
@@ -593,7 +594,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.entity_type.list", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
-            move |_params: Value| {
+            move |_params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let list = metadata.list_entity_types().await?;
@@ -607,7 +608,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.entity_type.update", CommandMetadata::requires("metadata.manage"), {
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let mut schema = parse_schema(&params)?;
@@ -631,7 +632,7 @@ async fn register_metadata_commands(
     registry
         .register_with_metadata("metadata.schema.get", CommandMetadata::requires("metadata.read"), {
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let metadata = metadata.clone();
                 async move {
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
@@ -659,7 +660,7 @@ async fn register_object_commands(
         .register_with_metadata("object.create", CommandMetadata::requires("create"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
                 async move {
@@ -717,7 +718,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.get", CommandMetadata::requires("read"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -731,7 +732,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.list", CommandMetadata::requires("read"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let entity_type = require(&params, "entity_type")?;
@@ -751,7 +752,7 @@ async fn register_object_commands(
         .register_with_metadata("object.update", CommandMetadata::requires("update"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
                 async move {
@@ -810,7 +811,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.delete", CommandMetadata::requires("delete"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
@@ -834,7 +835,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.snapshot.list", CommandMetadata::requires("read"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "object_id")?;
@@ -851,7 +852,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.snapshot.restore", CommandMetadata::requires("update"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let id = parse_uuid(&params, "object_id")?;
@@ -876,7 +877,7 @@ async fn register_object_commands(
     registry
         .register_with_metadata("document.number.next", CommandMetadata::requires("create"), {
             let objects = objects.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 async move {
                     let entity_type = require(&params, "entity_type")?;
@@ -1118,7 +1119,7 @@ pub async fn register_phase5_commands(
             let roles = roles.clone();
             let policies = policies.clone();
             let audit = audit.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let roles = roles.clone();
                 let policies = policies.clone();
                 let audit = audit.clone();
@@ -1146,7 +1147,7 @@ pub async fn register_phase5_commands(
                 let policies = policies.clone();
                 let audit = audit.clone();
                 let companies = companies.clone();
-                move |_params: Value| {
+                move |_params: Value, _ctx: CommandExecutionCtx| {
                     let roles = roles.clone();
                     let policies = policies.clone();
                     let audit = audit.clone();
@@ -1223,7 +1224,7 @@ pub async fn register_phase4_audit_commands(
     registry
         .register_with_metadata("audit.log", CommandMetadata::requires("role.manage"), {
             let audit = audit.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let audit = audit.clone();
                 async move {
                     let args: LogAuditArgs = serde_json::from_value(params)
@@ -1250,7 +1251,7 @@ pub async fn register_phase4_audit_commands(
     registry
         .register_with_metadata("audit.query", CommandMetadata::requires("audit.read"), {
             let audit = audit.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let audit = audit.clone();
                 async move {
                     let args: QueryAuditArgs = serde_json::from_value(params)
@@ -1372,7 +1373,7 @@ pub async fn register_phase9_module_commands(
         .register_with_metadata("module.install", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
             let companies = companies.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let manager = manager.clone();
                 let companies = companies.clone();
                 async move {
@@ -1400,7 +1401,7 @@ pub async fn register_phase9_module_commands(
     registry
         .register_with_metadata("module.uninstall", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let manager = manager.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -1414,7 +1415,7 @@ pub async fn register_phase9_module_commands(
     registry
         .register_with_metadata("module.enable", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let manager = manager.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -1433,7 +1434,7 @@ pub async fn register_phase9_module_commands(
     registry
         .register_with_metadata("module.disable", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let manager = manager.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -1450,7 +1451,7 @@ pub async fn register_phase9_module_commands(
     registry
         .register_with_metadata("module.list", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
-            move |_params: Value| {
+            move |_params: Value, _ctx: CommandExecutionCtx| {
                 let manager = manager.clone();
                 async move {
                     let modules = manager.modules();
@@ -1465,7 +1466,7 @@ pub async fn register_phase9_module_commands(
     registry
         .register_with_metadata("module.info", CommandMetadata::requires("module.manage"), {
             let manager = manager.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let modules = manager.modules();
                 async move {
                     let code = require(&params, "code")?;
@@ -1485,7 +1486,7 @@ pub async fn register_phase10_commands(
     registry
         .register_with_metadata("user.login", CommandMetadata::unrestricted(), {
             let auth = auth.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let auth = auth.clone();
                 async move {
                     let login = require(&params, "login")?;
@@ -1500,7 +1501,7 @@ pub async fn register_phase10_commands(
     registry
         .register_with_metadata("user.logout", CommandMetadata::unrestricted(), {
             let auth = auth.clone();
-            move |_: Value| {
+            move |_: Value, _ctx: CommandExecutionCtx| {
                 let auth = auth.clone();
                 async move {
                     auth.logout(None, None, None).await?;
@@ -1511,16 +1512,20 @@ pub async fn register_phase10_commands(
         .await;
 }
 
-/// Команды управления скриптами Rhai Фазы 13d: `script.create/update/list/delete`.
-/// Все команды требуют права `script.manage` (deny-by-default RBAC, префиксные команды).
+/// Команды управления скриптами Rhai Фазы 13d.
+///
+/// `script.create/update/delete` — право `script.manage`; `script.get/list/validate` —
+/// `script.read`; `script.execute` — `script.execute`. Права выдаются политикой
+/// `platform.scripts` (seed), deny-by-default RBAC, префиксные команды.
 pub async fn register_phase13_commands(
     registry: &CommandRegistry,
     scripts: Arc<SurrealScriptRepository>,
+    engine: Arc<dyn ScriptEngine>,
 ) {
     registry
         .register_with_metadata("script.create", CommandMetadata::requires("script.manage"), {
             let scripts = scripts.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let scripts = scripts.clone();
                 async move {
                     let code = require(&params, "code")?;
@@ -1583,7 +1588,7 @@ pub async fn register_phase13_commands(
     registry
         .register_with_metadata("script.update", CommandMetadata::requires("script.manage"), {
             let scripts = scripts.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let scripts = scripts.clone();
                 async move {
                     let mut record = resolve_script(&scripts, &params).await?;
@@ -1618,9 +1623,9 @@ pub async fn register_phase13_commands(
         .await;
 
     registry
-        .register_with_metadata("script.list", CommandMetadata::requires("script.manage"), {
+        .register_with_metadata("script.list", CommandMetadata::requires("script.read"), {
             let scripts = scripts.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let scripts = scripts.clone();
                 async move {
                     let company_id = params
@@ -1643,13 +1648,58 @@ pub async fn register_phase13_commands(
     registry
         .register_with_metadata("script.delete", CommandMetadata::requires("script.manage"), {
             let scripts = scripts.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let scripts = scripts.clone();
                 async move {
                     let record = resolve_script(&scripts, &params).await?;
                     let event = script_event(&record, "script.deleted");
                     scripts.delete(&record.id, &[event]).await?;
                     Ok(json!({ "deleted": record.id }))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.get", CommandMetadata::requires("script.read"), {
+            let scripts = scripts.clone();
+            move |params: Value, _ctx: CommandExecutionCtx| {
+                let scripts = scripts.clone();
+                async move {
+                    let record = resolve_script(&scripts, &params).await?;
+                    encode(&record)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.validate", CommandMetadata::requires("script.read"), {
+            let engine = engine.clone();
+            move |params: Value, _ctx: CommandExecutionCtx| {
+                let engine = engine.clone();
+                async move {
+                    let source = require(&params, "source")?;
+                    engine.validate(&source)?;
+                    Ok(json!({ "valid": true }))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.execute", CommandMetadata::requires("script.execute"), {
+            let scripts = scripts.clone();
+            let engine = engine.clone();
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let scripts = scripts.clone();
+                let engine = engine.clone();
+                async move {
+                    let actor = ctx
+                        .actor
+                        .clone()
+                        .unwrap_or_else(ActorSnapshot::system);
+                    execute_script(&*scripts, engine.as_ref(), &params, &actor).await
                 }
             }
         })

@@ -150,35 +150,35 @@ async fn pipeline_env(
         .register_with_metadata(
             "invoice.issue",
             CommandMetadata::requires("create"),
-            |_: Value| async move { Ok(json!({"issued": true})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"issued": true})) },
         )
         .await;
     registry
         .register_with_metadata(
             "invoice.read",
             CommandMetadata::requires("read"),
-            |_: Value| async move { Ok(json!({"invoice_id": "i-1"})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"invoice_id": "i-1"})) },
         )
         .await;
     registry
         .register_with_metadata(
             "company.remove",
             CommandMetadata::requires("admin.purge"),
-            |_: Value| async move { Ok(json!({"removed": true})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"removed": true})) },
         )
         .await;
     registry
         .register_with_metadata(
             "role.list",
             CommandMetadata::requires("role.manage"),
-            |_: Value| async move { Ok(json!({"roles": []})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"roles": []})) },
         )
         .await;
     registry
         .register_with_metadata(
             "audit.query",
             CommandMetadata::requires("audit.read"),
-            |_: Value| async move { Ok(json!({"entries": []})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"entries": []})) },
         )
         .await;
 
@@ -412,7 +412,7 @@ async fn system_actor_bypasses_permission_check() {
         .register_with_metadata(
             "system.only",
             CommandMetadata::requires("admin.purge"),
-            |_: Value| async move { Ok(json!({"system": true})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"system": true})) },
         )
         .await;
 
@@ -497,7 +497,7 @@ async fn role_seed_requires_role_manage() {
         let role_repo = role_repo.clone();
         let policy_repo = policy_repo.clone();
         let audit = audit.clone();
-        move |params: Value| {
+        move |params: Value, _ctx: CommandExecutionCtx| {
             let role_repo = role_repo.clone();
             let policy_repo = policy_repo.clone();
             let audit = audit.clone();
@@ -624,7 +624,7 @@ async fn migrate_permissions_seeds_companies_without_roles() {
         let role_repo = role_repo.clone();
         let policy_repo = policy_repo.clone();
         let audit = audit.clone();
-        move |_params: Value| {
+        move |_params: Value, _ctx: CommandExecutionCtx| {
             let companies = companies.clone();
             let role_repo = role_repo.clone();
             let policy_repo = policy_repo.clone();

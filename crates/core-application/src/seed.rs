@@ -32,6 +32,13 @@ const SYSTEM_POLICIES: &[(&str, &str, &[&str], RecordAccessLevel, i32)] = &[
         RecordAccessLevel::Owned,
         40,
     ),
+    (
+        "platform.scripts",
+        "Управление скриптами",
+        &["script.manage", "script.execute", "script.read"],
+        RecordAccessLevel::All,
+        90,
+    ),
 ];
 
 /// Описание системной роли: код, имя, ссылки на политики.

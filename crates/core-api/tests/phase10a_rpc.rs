@@ -15,7 +15,7 @@ use axum::http::{Request, StatusCode};
 use core_api::idempotency::IdempotencyStore;
 use core_api::routes::ApiState;
 use core_api::{JwtConfig, JwtTokenManager, RpcMessage, router};
-use core_application::command_registry::CommandRegistry;
+use core_application::command_registry::{CommandExecutionCtx, CommandRegistry};
 use core_application::ports::{EventStore, ObjectRepository, TokenManager};
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_domain::object::{Object, ObjectKind};
@@ -54,10 +54,10 @@ async fn setup() -> Env {
 
     let registry = Arc::new(CommandRegistry::new());
     registry
-        .register("core.sample.echo", |params: Value| async move { Ok(params) })
+        .register("core.sample.echo", |params: Value, _ctx: CommandExecutionCtx| async move { Ok(params) })
         .await;
     registry
-        .register("plugin.hello.greet", |_: Value| async move {
+        .register("plugin.hello.greet", |_: Value, _ctx: CommandExecutionCtx| async move {
             Ok(json!({"greeted": true}))
         })
         .await;
@@ -66,7 +66,7 @@ async fn setup() -> Env {
     let counter = Arc::new(AtomicUsize::new(0));
     let c = counter.clone();
     registry
-        .register("core.sample.counter", move |_: Value| {
+        .register("core.sample.counter", move |_: Value, _ctx: CommandExecutionCtx| {
             let c = c.clone();
             async move {
                 let n = c.fetch_add(1, Ordering::SeqCst) + 1;
@@ -79,7 +79,7 @@ async fn setup() -> Env {
     // репозиторий возвращает `DomainError::VersionConflict`.
     let objects_conflict = objects.clone();
     registry
-        .register("core.sample.conflict", move |_: Value| {
+        .register("core.sample.conflict", move |_: Value, _ctx: CommandExecutionCtx| {
             let objects = objects_conflict.clone();
             async move {
                 let now = chrono::Utc::now();

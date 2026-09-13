@@ -22,7 +22,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app_registry::AppRegistry;
-use crate::command_registry::CommandMetadata;
+use crate::command_registry::{CommandExecutionCtx, CommandMetadata};
 use crate::ports::{
     AuditRepository, EntitySchema, MetadataRepository, ModuleRepository, PermissionPolicyRepository,
     ScriptRepository, WasmHost,
@@ -187,7 +187,7 @@ impl ModuleManager {
                     CommandMetadata::requires(
                         required_permission.as_deref().unwrap_or("module.execute"),
                     ),
-                    move |params: Value| {
+                    move |params: Value, _ctx: CommandExecutionCtx| {
                         let modules = modules.clone();
                         let host = host.clone();
                         let code = code_for_handler.clone();

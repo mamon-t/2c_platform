@@ -44,7 +44,9 @@ pub struct CommandExecutionCtx {
 }
 
 type CommandHandler = Arc<
-    dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, DomainError>> + Send>> + Send + Sync,
+    dyn Fn(Value, CommandExecutionCtx) -> Pin<Box<dyn Future<Output = Result<Value, DomainError>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Динамический реестр асинхронных команд, согласно Приложению №1 ТЗ.
@@ -95,13 +97,13 @@ impl CommandRegistry {
         metadata: CommandMetadata,
         handler: F,
     ) where
-        F: Fn(Value) -> Fut + Send + Sync + 'static,
+        F: Fn(Value, CommandExecutionCtx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, DomainError>> + Send + 'static,
     {
         let mut map = self.handlers.write().await;
         map.insert(
             name.to_string(),
-            Arc::new(move |params| Box::pin(handler(params))),
+            Arc::new(move |params, ctx| Box::pin(handler(params, ctx))),
         );
         self.metadata.write().await.insert(name.to_string(), metadata);
     }
@@ -110,7 +112,7 @@ impl CommandRegistry {
     /// [`Self::register_with_metadata`] с `CommandMetadata::unrestricted`).
     pub async fn register<F, Fut>(&self, name: &str, handler: F)
     where
-        F: Fn(Value) -> Fut + Send + Sync + 'static,
+        F: Fn(Value, CommandExecutionCtx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, DomainError>> + Send + 'static,
     {
         self.register_with_metadata(name, CommandMetadata::unrestricted(), handler)
@@ -166,7 +168,7 @@ impl CommandRegistry {
 
         let pipeline = self.pipeline.read().await.clone();
         let Some(pipeline) = pipeline else {
-            return handler(params).await;
+            return handler(params, ctx).await;
         };
 
         let company_id = ctx
@@ -265,7 +267,7 @@ None => false,
             )));
         }
 
-        let result = handler(params).await;
+        let result = handler(params, ctx.clone()).await;
         match result {
             Ok(value) => {
                 let (_, end_fut) = audit_plan("finished", AuditResult::Success);
@@ -302,7 +304,9 @@ mod tests {
         let registry = CommandRegistry::new();
 
         registry
-            .register("echo", |params: Value| async move { Ok(params) })
+            .register("echo", |params: Value, _ctx: CommandExecutionCtx| async move {
+                Ok(params)
+            })
             .await;
         assert_eq!(registry.list().await, vec!["echo".to_string()]);
 
@@ -322,13 +326,13 @@ mod tests {
         registry
             .register(
                 "plugin.warehouse.post_document",
-                |_: Value| async move { Ok(json!({"ok": true})) },
+                |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"ok": true})) },
             )
             .await;
         registry
             .register(
                 "core.hello",
-                |_: Value| async move { Ok(json!({})) },
+                |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({})) },
             )
             .await;
 

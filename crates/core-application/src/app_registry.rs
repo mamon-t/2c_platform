@@ -71,6 +71,7 @@ impl Default for AppRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command_registry::CommandExecutionCtx;
     use serde_json::{json, Value};
 
     #[tokio::test]
@@ -94,7 +95,7 @@ mod tests {
             .commands
             .register(
                 "plugin.stock.post_document",
-                |_: Value| async move { Ok(json!({})) },
+                |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({})) },
             )
             .await;
         registry.register_module("stock").await.unwrap();

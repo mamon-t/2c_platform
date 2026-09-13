@@ -13,7 +13,7 @@ use axum::routing::get;
 use core_api::idempotency::IdempotencyStore;
 use core_api::routes::ApiState;
 use core_api::{JwtConfig, JwtTokenManager, PushHub, RpcMessage, ws_handler};
-use core_application::command_registry::CommandRegistry;
+use core_application::command_registry::{CommandExecutionCtx, CommandRegistry};
 use core_application::ports::{EventStore, TokenManager};
 use core_domain::event::{ActorSnapshot, Event, StreamType};
 use core_infrastructure::SurrealEventStore;
@@ -53,7 +53,7 @@ async fn setup() -> Env {
 
     let registry = Arc::new(CommandRegistry::new());
     registry
-        .register("core.sample.echo", |params: Value| async move { Ok(params) })
+        .register("core.sample.echo", |params: Value, _ctx: CommandExecutionCtx| async move { Ok(params) })
         .await;
 
     Env {

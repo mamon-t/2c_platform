@@ -861,6 +861,7 @@ impl ExtismWasmHost {
                                     action,
                                     object,
                                     changes,
+                                    args: None,
                                     settings,
                                     test_run: false,
                                 };

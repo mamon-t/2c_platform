@@ -122,6 +122,14 @@ fn build_ctx_map(context: &ScriptContext) -> Map {
             .unwrap_or(Dynamic::UNIT),
     );
     map.insert(
+        "args".into(),
+        context
+            .args
+            .as_ref()
+            .map(json_to_dynamic)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    map.insert(
         "changes".into(),
         context
             .changes
@@ -431,6 +439,7 @@ mod tests {
             action: Some("test".to_string()),
             object: Some(object),
             changes: None,
+            args: None,
             settings: json!({ "locale": "ru-RU" }),
             test_run: false,
         }

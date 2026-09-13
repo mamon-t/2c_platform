@@ -15,7 +15,7 @@ use core_api::idempotency::IdempotencyStore;
 use core_api::routes::ApiState;
 use core_api::{JwtConfig, JwtTokenManager, RpcMessage, router};
 use core_application::auth::AuthService;
-use core_application::command_registry::{CommandMetadata, CommandRegistry};
+use core_application::command_registry::{CommandExecutionCtx, CommandMetadata, CommandRegistry};
 use core_application::permission_manager::PermissionManager;
 use core_application::ports::{AuditRepository, RoleRepository, TokenManager, UserRepository};
 use core_application::seed::seed_system_roles_and_policies;
@@ -166,7 +166,7 @@ async fn setup() -> Env {
         .register_with_metadata(
             "core.sample.secret",
             CommandMetadata::requires("role.manage"),
-            |_: Value| async move { Ok(json!({"secret": true})) },
+            |_: Value, _ctx: CommandExecutionCtx| async move { Ok(json!({"secret": true})) },
         )
         .await;
 
@@ -197,7 +197,7 @@ async fn register_auth_commands(registry: &CommandRegistry, auth: Arc<AuthServic
     registry
         .register_with_metadata("user.login", CommandMetadata::unrestricted(), {
             let auth = auth.clone();
-            move |params: Value| {
+            move |params: Value, _ctx: CommandExecutionCtx| {
                 let auth = auth.clone();
                 async move {
                     let login = params
@@ -225,7 +225,7 @@ async fn register_auth_commands(registry: &CommandRegistry, auth: Arc<AuthServic
     registry
         .register_with_metadata("user.logout", CommandMetadata::unrestricted(), {
             let auth = auth.clone();
-            move |_: Value| {
+            move |_: Value, _ctx: CommandExecutionCtx| {
                 let auth = auth.clone();
                 async move {
                     auth.logout(None, None, None).await?;

@@ -4,11 +4,13 @@ use serde_json::Value;
 use uuid::Uuid;
 
 /// Контекст выполнения скрипта Rhai (ТЗ v3.1 §15): доступен в скрипте как
-/// объект `ctx` с полями `user`, `company`, `entity_type`, `action`, `object`,
-/// `changes`, `settings`. Каналы `db`, `ledger`, `emit`, `notify`, `log`
-/// регистрируются в движке как функции Core API (см. `RhaiScriptEngine`).
+/// объект `ctx` с полями `args`, `user`, `company`, `entity_type`, `action`,
+/// `object`, `changes`, `settings`. Каналы `db`, `ledger`, `emit`, `notify`,
+/// `log` регистрируются в движке как функции Core API (см. `RhaiScriptEngine`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ScriptContext {
+    /// Произвольные параметры вызова команды `script.execute`.
+    pub args: Option<Value>,
     /// Исполнитель команды; `None` для анонимного/системного запуска.
     pub user: Option<ActorSnapshot>,
     pub company_id: Option<Uuid>,

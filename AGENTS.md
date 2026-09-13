@@ -149,11 +149,17 @@ RBAC для анонимов), тесты `phase10a_rpc`/`phase10b_auth_rpc`.
 fuel 10M, лимиты коллекций/вложенности, выполнение на OS-потоке с таймаутом,
 кэш AST), Core API `log_info/log_error/emit_event/emit_transaction/db_query`
 через `await_core_api` (паттерн «spawn на владеющем рантайме + std-канал»),
-`ScriptRepository` + модель `Script`, `ScriptContext`, манифестные скрипты в
-`ModuleManifest`, host-fn `run_script` — теперь реальная (была заглушка 9c),
-команды `script.create/update/list/delete` (capability `scripts`); фикс
+`ScriptRepository` + модель `Script`, `ScriptContext` (поля `args`/`user`/
+`company_id`/`entity_type`/`action`/`object`/`changes`/`settings`/`test_run`),
+манифестные скрипты в `ModuleManifest`, host-fn `run_script` — теперь реальная
+(была заглушка 9c); политика `platform.scripts` (seed, namespaced actions
+`script.manage`/`script.execute`/`script.read`, priority 90, без привязки к
+ролям); `CommandHandler` = `Fn(Value, CommandExecutionCtx)` (актор проброшен
+в команды); `script_runner::execute_script` (валидации: bind к entity_type,
+`is_active`, object-пара); команды `script.create/update/delete` (manage),
+`script.list/get/validate` (read), `script.execute` (execute); фикс
 блокировки воркера в WASM-пути: std `recv_timeout` → `tokio::sync::mpsc` +
-`tokio::time::timeout`. Тесты 113 (unit + hello_wasm/phase9b/phase9d).
+`tokio::time::timeout`. Тесты 210 (`phase13_scripts` +5).
 **Не начинать Фазы 11–12, 14+** (Flutter, оффлайн, учёт, экспорт, уведомления,
 криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
