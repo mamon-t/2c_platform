@@ -9,6 +9,7 @@ use core_domain::module::{ModuleRecord, PluginCallContext};
 use core_domain::permission::PermissionPolicy;
 use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
+use core_domain::script::Script;
 use core_domain::types::{AggregateId, Version};
 use core_domain::wasm_manifest::ModuleManifest;
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
@@ -17,6 +18,8 @@ use std::future::Future;
 use std::pin::Pin;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
+
+use crate::script_context::ScriptContext;
 
 /// Пинованный boxed-футур для dyn-совместимых методов портов.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -548,4 +551,81 @@ pub trait TokenManager: Send + Sync {
     /// Возвращает `DomainError::PermissionDenied`, если токен невалиден, просрочен
     /// или подписан неизвестным ключом.
     fn parse(&self, token: &str) -> Result<ActorSnapshot, DomainError>;
+}
+
+/// Хранилище скриптов Rhai (`scripts`) — Доска для модели `Script`.
+/// События `script.created/updated/deleted` пишутся в Трубу через `events`.
+pub trait ScriptRepository: Send + Sync {
+    /// Создаёт скрипт. Код уникален в рамках компании (`None` — глобальный).
+    fn create<'a>(
+        &'a self,
+        script: &'a Script,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Result<Script, DomainError>>;
+
+    /// Возвращает скрипт по идентификатору.
+    fn get<'a>(&'a self, id: &'a Uuid) -> BoxFuture<'a, Result<Option<Script>, DomainError>>;
+
+    /// Возвращает скрипт по коду (в рамках компании; `company_id == None` — поиск
+    /// по глобальным скриптам). Коллизии в глобальном пространстве исключены
+    /// UNIQUE-индексом на `(code, coalesce(company_id,'global'))`.
+    fn get_by_code<'a>(
+        &'a self,
+        code: &'a str,
+        company_id: Option<&'a Uuid>,
+    ) -> BoxFuture<'a, Result<Option<Script>, DomainError>>;
+
+    /// Перечисляет скрипты. При `company_id == Some` — скрипты компании
+    /// и глобальные; при `None` — только глобальные.
+    fn list<'a>(
+        &'a self,
+        company_id: Option<&'a Uuid>,
+    ) -> BoxFuture<'a, Result<Vec<Script>, DomainError>>;
+
+    /// Полностью заменяет скрипт (OCC по переданной записи не выполняется;
+    /// версия задаётся вызывающей стороной через события).
+    fn update<'a>(
+        &'a self,
+        script: &'a Script,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Result<Script, DomainError>>;
+
+    /// Удаляет скрипт по идентификатору. Отсутствие — не ошибка.
+    fn delete<'a>(
+        &'a self,
+        id: &'a Uuid,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Result<(), DomainError>>;
+
+    /// Удаляет все скрипты модуля (используется при `unregister` модуля).
+    /// Отсутствие скриптов — не ошибка.
+    fn delete_by_module<'a>(
+        &'a self,
+        module_code: &'a str,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Result<(), DomainError>>;
+}
+
+/// Исполнитель скриптов Rhai с песочницей (ТЗ v3.1 §15). Реализация
+/// `RhaiScriptEngine` живёт в `core-infrastructure`; этот порт держит
+/// `core-application` и `core-infrastructure` независимыми от Rhai.
+pub trait ScriptEngine: Send + Sync {
+    /// Выполняет скрипт с заданным контекстом и возвращает результат как JSON.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::ValidationError` при ошибке компиляции/выполнения и
+    /// `DomainError::Storage` при превышении лимита операций или таймаута.
+    fn execute<'a>(
+        &'a self,
+        source: String,
+        context: &'a ScriptContext,
+    ) -> BoxFuture<'a, Result<serde_json::Value, DomainError>>;
+
+    /// Компилирует скрипт без выполнения. Используется командой `script.validate`.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::ValidationError` при синтаксической ошибке.
+    fn validate(&self, source: &str) -> Result<(), DomainError>;
 }

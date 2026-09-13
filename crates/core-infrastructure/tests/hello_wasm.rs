@@ -52,7 +52,17 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
     let events = Arc::new(core_infrastructure::SurrealEventStore::new(db.clone()));
     let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
+    let audit = Arc::new(core_infrastructure::SurrealAuditRepository::new(db.clone()));
     let transactions = core_application::TransactionOrchestrator::new(objects.clone());
+    let script_engine = Arc::new(
+        core_infrastructure::RhaiScriptEngine::new(core_infrastructure::rhai_core_api::CoreApiShared {
+            store: events.clone(),
+            db: db.clone(),
+            audit: audit.clone(),
+            runtime: tokio::runtime::Handle::current(),
+        })
+        .unwrap(),
+    );
     let h = ExtismWasmHost::new(
         db.clone(),
         objects.as_ref().clone(),
@@ -60,6 +70,7 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
         events.as_ref().clone(),
         users.as_ref().clone(),
         transactions,
+        script_engine,
         cache.clone(),
     )
     .unwrap();
@@ -68,6 +79,7 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     metadata.ensure_schema().await.unwrap();
     events.ensure_schema().await.unwrap();
     users.ensure_schema().await.unwrap();
+    audit.ensure_schema().await.unwrap();
     (h, db, cache)
 }
 
@@ -553,7 +565,7 @@ async fn emit_event_requires_capability() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn stub_workflow_and_signature_host_fns_return_spec_envelopes() {
     let (h, _db, _cache) = host().await;
 
@@ -584,9 +596,8 @@ async fn stub_workflow_and_signature_host_fns_return_spec_envelopes() {
     let cms_conv = extract_conv(&text, "cms=");
 
     assert!(
-        script_conv.contains("\"code\":\"SCRIPT_FAILED\"")
-            && script_conv.contains("\"ok\":false"),
-        "run_script должен вернуть SCRIPT_FAILED, получено: {script_conv}"
+        script_conv.contains("\"ok\":true"),
+        "run_script должен успешно выполнить print(1) через Rhai, получено: {script_conv}"
     );
     assert!(
         notify_conv.contains("\"ok\":true") && notify_conv.contains("\"queued\":true"),

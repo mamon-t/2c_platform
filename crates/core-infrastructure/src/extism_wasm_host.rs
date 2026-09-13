@@ -12,8 +12,10 @@ use std::time::Duration;
 
 use chrono::Utc;
 use core_application::ports::{
-    BoxFuture, EventStore, MetadataRepository, ObjectRepository, UserRepository, WasmHost,
+    BoxFuture, EventStore, MetadataRepository, ObjectRepository, ScriptEngine, UserRepository,
+    WasmHost,
 };
+use core_application::script_context::ScriptContext;
 use core_application::TransactionOrchestrator;
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
@@ -77,6 +79,7 @@ struct HostShared {
     events: SurrealEventStore,
     users: SurrealUserRepository,
     transactions: Arc<TransactionOrchestrator>,
+    scripts: Arc<dyn ScriptEngine>,
     runtime: Handle,
 }
 
@@ -109,6 +112,11 @@ impl HostShared {
     /// Клон оркестратора транзакций host-функций `tx_*`.
     fn transactions_module(&self) -> Arc<TransactionOrchestrator> {
         self.transactions.clone()
+    }
+
+    /// Клон движка скриптов для host-функции `run_script`.
+    fn scripts_module(&self) -> Arc<dyn ScriptEngine> {
+        self.scripts.clone()
     }
 }
 
@@ -167,6 +175,7 @@ impl ExtismWasmHost {
         events: SurrealEventStore,
         users: SurrealUserRepository,
         transactions: Arc<TransactionOrchestrator>,
+        scripts: Arc<dyn ScriptEngine>,
         cache_dir: PathBuf,
     ) -> Result<Self, DomainError> {
         let runtime = Handle::try_current()
@@ -180,6 +189,7 @@ impl ExtismWasmHost {
                 events,
                 users,
                 transactions,
+                scripts,
                 runtime,
             }),
             modules: RwLock::new(HashMap::new()),
@@ -799,6 +809,7 @@ impl ExtismWasmHost {
         )
         .with_namespace(NS_HOST));
 
+        let shared = self.shared.clone();
         funcs.push(Function::new(
             "run_script",
             vec![PTR, PTR],
@@ -811,11 +822,52 @@ impl ExtismWasmHost {
                     outputs,
                     "run_script",
                     Some("scripts"),
-                    |_ctx, _args| {
-                        Err(envelope_err(
-                            "SCRIPT_FAILED",
-                            "Rhai engine will be available in Phase 15",
-                        ))
+                    |ctx, args| {
+                        let source = args.first().cloned().unwrap_or_default();
+                        if source.is_empty() {
+                            return Err(envelope_err(
+                                "INVALID_ACTION",
+                                "run_script: пустой исходный код",
+                            ));
+                        }
+                        let ctx_json = args
+                            .get(1)
+                            .cloned()
+                            .unwrap_or_else(|| "{}".to_string());
+                        let parsed = parse_arg(&ctx_json).unwrap_or_else(|_| Value::Null);
+                        let user = ctx.actor.clone();
+                        let company_id = ctx.company_id.parse::<Uuid>().ok();
+                        let settings = ctx.settings.clone();
+                        let entity_type = parsed
+                            .get("entity_type")
+                            .and_then(serde_json::Value::as_str)
+                            .map(String::from);
+                        let action = parsed
+                            .get("action")
+                            .and_then(serde_json::Value::as_str)
+                            .map(String::from);
+                        let object = parsed.get("object").cloned();
+                        let changes = parsed.get("changes").cloned();
+                        let scripts = shared.scripts_module();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "run_script".to_string(),
+                            async move {
+                                let script_ctx = ScriptContext {
+                                    user,
+                                    company_id,
+                                    entity_type,
+                                    action,
+                                    object,
+                                    changes,
+                                    settings,
+                                    test_run: false,
+                                };
+                                let result = scripts.execute(source, &script_ctx).await?;
+                                Ok(envelope_ok(result))
+                            },
+                        )
                     },
                 );
                 Ok(())

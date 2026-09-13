@@ -26,6 +26,7 @@ use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
 use core_infrastructure::surreal_module_repository::SurrealModuleRepository;
 use core_infrastructure::surreal_object_repository::SurrealObjectRepository;
 use core_infrastructure::surreal_permission_policy_repository::SurrealPermissionPolicyRepository;
+use core_infrastructure::surreal_script_repository::SurrealScriptRepository;
 use core_infrastructure::SurrealEventStore;
 
 const HELLO_WASM: &[u8] = include_bytes!("fixtures/hello.wasm");
@@ -71,6 +72,17 @@ async fn setup() -> Env {
     users.ensure_schema().await.unwrap();
 
     let transactions = core_application::TransactionOrchestrator::new(objects.clone());
+    let scripts = Arc::new(SurrealScriptRepository::new(db.clone()));
+    scripts.ensure_schema().await.unwrap();
+    let script_engine = Arc::new(
+        core_infrastructure::RhaiScriptEngine::new(core_infrastructure::rhai_core_api::CoreApiShared {
+            store: store.clone(),
+            db: db.clone(),
+            audit: audit.clone(),
+            runtime: tokio::runtime::Handle::current(),
+        })
+        .unwrap(),
+    );
     let host = Arc::new(
         ExtismWasmHost::new(
             db.clone(),
@@ -79,6 +91,7 @@ async fn setup() -> Env {
             store.as_ref().clone(),
             users.as_ref().clone(),
             transactions,
+            script_engine,
             temp_cache(),
         )
         .unwrap(),
@@ -92,6 +105,7 @@ async fn setup() -> Env {
         app.clone(),
         policies,
         metadata,
+        scripts,
         audit,
         temp_cache(),
     ));

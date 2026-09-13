@@ -8,7 +8,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use core_application::command_registry::CommandMetadata;
 use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
-    RoleRepository, UserRepository,
+    RoleRepository, ScriptRepository, UserRepository,
 };
 use core_application::seed::seed_system_roles_and_policies;
 use core_application::auth::AuthService;
@@ -25,13 +25,14 @@ use core_domain::metadata::{
 use core_domain::object::{Object, ObjectKind};
 use core_domain::password::hash_password;
 use core_domain::role::Role;
+use core_domain::script::{Script, ScriptType};
 use core_domain::user::{
     ContactChannelType, ContactPurpose, Person, User, UserCompanyProfile, UserContact, UserStatus,
 };
 use core_infrastructure::{
     SurrealAuditRepository, SurrealCompanyRepository, SurrealMetadataRepository,
     SurrealObjectRepository, SurrealPermissionPolicyRepository, SurrealRoleRepository,
-    SurrealUserRepository,
+    SurrealScriptRepository, SurrealUserRepository,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -1508,4 +1509,198 @@ pub async fn register_phase10_commands(
             }
         })
         .await;
+}
+
+/// Команды управления скриптами Rhai Фазы 13d: `script.create/update/list/delete`.
+/// Все команды требуют права `script.manage` (deny-by-default RBAC, префиксные команды).
+pub async fn register_phase13_commands(
+    registry: &CommandRegistry,
+    scripts: Arc<SurrealScriptRepository>,
+) {
+    registry
+        .register_with_metadata("script.create", CommandMetadata::requires("script.manage"), {
+            let scripts = scripts.clone();
+            move |params: Value| {
+                let scripts = scripts.clone();
+                async move {
+                    let code = require(&params, "code")?;
+                    let name = require(&params, "name")?;
+                    let source = require(&params, "source")?;
+                    if code.is_empty() || source.is_empty() {
+                        return Err(DomainError::ValidationError(
+                            "script.create: code и source не могут быть пустыми".to_string(),
+                        ));
+                    }
+                    let script_type = parse_script_type(&params)?;
+                    let company_id = params
+                        .get("company_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| {
+                            Uuid::parse_str(s).map_err(|e| {
+                                DomainError::ValidationError(format!("некорректный 'company_id': {e}"))
+                            })
+                        })
+                        .transpose()?;
+                    if scripts
+                        .get_by_code(&code, company_id.as_ref())
+                        .await?
+                        .is_some()
+                    {
+                        return Err(DomainError::ValidationError(format!(
+                            "скрипт с кодом '{code}' уже существует"
+                        )));
+                    }
+                    let entity_type = params
+                        .get("entity_type")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let is_active = params
+                        .get("is_active")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let now = Utc::now();
+                    let record = Script {
+                        id: Uuid::new_v4(),
+                        code,
+                        name,
+                        script_type,
+                        source,
+                        company_id,
+                        module_code: None,
+                        entity_type,
+                        is_active,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    let event = script_event(&record, "script.created");
+                    let created = scripts.create(&record, &[event]).await?;
+                    encode(&created)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.update", CommandMetadata::requires("script.manage"), {
+            let scripts = scripts.clone();
+            move |params: Value| {
+                let scripts = scripts.clone();
+                async move {
+                    let mut record = resolve_script(&scripts, &params).await?;
+                    if let Some(name) = params.get("name").and_then(|v| v.as_str()) {
+                        record.name = name.to_string();
+                    }
+                    if let Some(source) = params.get("source").and_then(|v| v.as_str()) {
+                        if source.is_empty() {
+                            return Err(DomainError::ValidationError(
+                                "script.update: source не может быть пустым".to_string(),
+                            ));
+                        }
+                        record.source = source.to_string();
+                    }
+                    if let Some(raw) = params.get("script_type").and_then(|v| v.as_str()) {
+                        record.script_type =
+                            ScriptType::try_from(raw).map_err(DomainError::ValidationError)?;
+                    }
+                    if let Some(v) = params.get("entity_type") {
+                        record.entity_type = v.as_str().map(str::to_string);
+                    }
+                    if let Some(v) = params.get("is_active").and_then(|v| v.as_bool()) {
+                        record.is_active = v;
+                    }
+                    record.updated_at = Utc::now();
+                    let event = script_event(&record, "script.updated");
+                    let updated = scripts.update(&record, &[event]).await?;
+                    encode(&updated)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.list", CommandMetadata::requires("script.manage"), {
+            let scripts = scripts.clone();
+            move |params: Value| {
+                let scripts = scripts.clone();
+                async move {
+                    let company_id = params
+                        .get("company_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| {
+                            Uuid::parse_str(s).map_err(|e| {
+                                DomainError::ValidationError(format!("некорректный 'company_id': {e}"))
+                            })
+                        })
+                        .transpose()?;
+                    let records = scripts.list(company_id.as_ref()).await?;
+                    let rows: Result<Vec<Value>, DomainError> = records.iter().map(encode).collect();
+                    Ok(Value::Array(rows?))
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.delete", CommandMetadata::requires("script.manage"), {
+            let scripts = scripts.clone();
+            move |params: Value| {
+                let scripts = scripts.clone();
+                async move {
+                    let record = resolve_script(&scripts, &params).await?;
+                    let event = script_event(&record, "script.deleted");
+                    scripts.delete(&record.id, &[event]).await?;
+                    Ok(json!({ "deleted": record.id }))
+                }
+            }
+        })
+        .await;
+}
+
+/// Разрешает скрипт по `id` либо по `code` (+ необязательный `company_id`).
+async fn resolve_script(
+    scripts: &SurrealScriptRepository,
+    params: &Value,
+) -> Result<Script, DomainError> {
+    let company_id = params
+        .get("company_id")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            Uuid::parse_str(s).map_err(|e| {
+                DomainError::ValidationError(format!("некорректный 'company_id': {e}"))
+            })
+        })
+        .transpose()?;
+    if let Some(id_str) = params.get("id").and_then(|v| v.as_str()) {
+        let id = Uuid::parse_str(id_str)
+            .map_err(|e| DomainError::ValidationError(format!("некорректный 'id': {e}")))?;
+        return scripts
+            .get(&id)
+            .await?
+            .ok_or_else(|| DomainError::NotFound(format!("скрипт с id '{id_str}' не найден")));
+    }
+    let code = require(params, "code")?;
+    scripts
+        .get_by_code(&code, company_id.as_ref())
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("скрипт с кодом '{code}' не найден")))
+}
+
+/// Парсит тип скрипта из параметров команды; по умолчанию — `formula`.
+fn parse_script_type(params: &Value) -> Result<ScriptType, DomainError> {
+    match params.get("script_type").and_then(|v| v.as_str()) {
+        Some(raw) => ScriptType::try_from(raw).map_err(DomainError::ValidationError),
+        None => Ok(ScriptType::Formula),
+    }
+}
+
+/// Событие `script.*` для Трубы от системного исполнителя.
+fn script_event(script: &Script, event_type: &str) -> Event {
+    let company_id = script.company_id.map(|u| u.to_string()).unwrap_or_default();
+    system_event(
+        StreamType::Script,
+        script.id.to_string(),
+        event_type,
+        &company_id,
+        serde_json::to_value(script).unwrap_or_default(),
+    )
 }

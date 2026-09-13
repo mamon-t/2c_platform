@@ -87,7 +87,14 @@ pub fn get_info() -> FnResult<String> {
             "fields": [{ "code": "text", "name": "Текст", "kind": "string", "required": true }]
         }],
         "print_templates": [],
-        "scripts": [],
+        "scripts": [{
+            "code": "hello.double",
+            "name": "Удвоить amount",
+            "script_type": "formula",
+            "source": "ctx.object.amount * 2",
+            "entity_type": "greeting",
+            "description": "Демонстрационный скрипт-формула: удваивает ctx.object.amount"
+        }],
         "metadata_version": 1,
         "handles_documents": [],
         "navigation": [],
@@ -173,11 +180,13 @@ pub fn events_probe() -> FnResult<String> {
     Ok(conv)
 }
 
-/// Проба заглушки `run_script` (capability `scripts`): всегда возвращает
-/// ошибку `SCRIPT_FAILED` (движок Rhai появится в Фазе 15).
+/// Проба host-функции `run_script` (capability `scripts`): выполняет
+/// переданный источник через Rhai-движок с демонстрационным контекстом
+/// `{object: {amount: 210}}` (позволяет проверить скрипт `hello.double`).
 #[extism_pdk::plugin_fn]
 pub fn run_script(source: String) -> FnResult<String> {
-    let conv = unsafe { host::run_script(source, "{}".to_string())? };
+    let ctx = "{\"object\":{\"amount\":210}}".to_string();
+    let conv = unsafe { host::run_script(source, ctx)? };
     Ok(conv)
 }
 
@@ -186,7 +195,7 @@ pub fn run_script(source: String) -> FnResult<String> {
 /// для тестового разбора.
 #[extism_pdk::plugin_fn]
 pub fn stubs_probe() -> FnResult<String> {
-    let script_conv = unsafe { host::run_script("print(1);".to_string(), "{}".to_string())? };
+    let script_conv = unsafe { host::run_script("log_info(\"hello-run-script\");".to_string(), "{}".to_string())? };
     let notify_conv = unsafe {
         host::notify_user(
             "00000000-0000-0000-0000-000000000001".to_string(),

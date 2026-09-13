@@ -18,6 +18,7 @@ pub enum StreamType {
     Role,
     Module,
     Metadata,
+    Script,
 }
 
 impl StreamType {
@@ -35,6 +36,7 @@ impl StreamType {
             StreamType::Role => "role",
             StreamType::Module => "module",
             StreamType::Metadata => "metadata",
+            StreamType::Script => "script",
         }
     }
 }
@@ -54,6 +56,7 @@ impl TryFrom<&str> for StreamType {
             "role" => Ok(StreamType::Role),
             "module" => Ok(StreamType::Module),
             "metadata" => Ok(StreamType::Metadata),
+            "script" => Ok(StreamType::Script),
             _ => Err(()),
         }
     }
@@ -76,6 +79,7 @@ mod tests {
             StreamType::Role,
             StreamType::Module,
             StreamType::Metadata,
+            StreamType::Script,
         ] {
             let s = st.as_str();
             assert_eq!(StreamType::try_from(s), Ok(st), "stream: {s}");

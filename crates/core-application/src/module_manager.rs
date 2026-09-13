@@ -12,6 +12,7 @@ use core_domain::module::{
     CompanyModulePayload, ModuleLifecyclePayload, ModuleRecord, ModuleState, PluginCallContext,
 };
 use core_domain::permission::PermissionPolicy;
+use core_domain::script::Script;
 use core_domain::wasm_manifest::{ManifestPermission, ModuleManifest};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -24,7 +25,7 @@ use crate::app_registry::AppRegistry;
 use crate::command_registry::CommandMetadata;
 use crate::ports::{
     AuditRepository, EntitySchema, MetadataRepository, ModuleRepository, PermissionPolicyRepository,
-    WasmHost,
+    ScriptRepository, WasmHost,
 };
 
 /// Итог предзагрузки при старте сервера: сколько модулей обработано, для
@@ -48,6 +49,7 @@ pub struct ModuleManager {
     app: Arc<AppRegistry>,
     policies: Arc<dyn PermissionPolicyRepository>,
     metadata: Arc<dyn MetadataRepository>,
+    scripts: Arc<dyn ScriptRepository>,
     audit: Arc<dyn AuditRepository>,
     cache_dir: PathBuf,
 }
@@ -59,6 +61,7 @@ impl ModuleManager {
         app: Arc<AppRegistry>,
         policies: Arc<dyn PermissionPolicyRepository>,
         metadata: Arc<dyn MetadataRepository>,
+        scripts: Arc<dyn ScriptRepository>,
         audit: Arc<dyn AuditRepository>,
         cache_dir: PathBuf,
     ) -> Self {
@@ -68,6 +71,7 @@ impl ModuleManager {
             app,
             policies,
             metadata,
+            scripts,
             audit,
             cache_dir,
         }
@@ -99,7 +103,33 @@ impl ModuleManager {
             self.app.print_templates.ensure(&resource.code).await;
         }
         for script in &manifest.scripts {
-            self.app.scripts.ensure(&script.code).await;
+            let company_uuid = Uuid::parse_str(company_id).ok();
+            let exists = match self
+                .scripts
+                .get_by_code(&script.code, company_uuid.as_ref())
+                .await
+            {
+                Ok(existing) => existing.is_some(),
+                Err(_) => false,
+            };
+            if exists {
+                continue;
+            }
+            let record = Script {
+                id: Uuid::new_v4(),
+                code: script.code.clone(),
+                name: script.name.clone(),
+                script_type: script.script_type.clone(),
+                source: script.source.clone(),
+                entity_type: script.entity_type.clone(),
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                company_id: company_uuid,
+                module_code: Some(manifest.code.clone()),
+            };
+            let event = script_event(&record, "script.created");
+            self.scripts.create(&record, &[event]).await?;
         }
 
         self.register_commands(manifest).await?;
@@ -226,6 +256,7 @@ impl ModuleManager {
     /// четыре реестра кодов очищаются. Метаданные и политики (Доска и Труба)
     /// не удаляются — при повторной установке ensure-семантика восстановит их.
     pub async fn unregister(&self, module_code: &str) -> Result<(), DomainError> {
+        self.scripts.delete_by_module(module_code, &[]).await?;
         self.app.unregister_module(module_code).await
     }
 
@@ -651,6 +682,23 @@ fn schema_event(schema: &EntitySchema, event_type: &str) -> Event {
         payload: serde_json::to_value(schema).unwrap_or_else(|_| json!({})),
         metadata: core_domain::event::ActorSnapshot::system(),
         company_id: schema.entity_type.company_id.clone(),
+        correlation_id: Uuid::new_v4().to_string(),
+        causation_id: None,
+        occurred_at: chrono::Utc::now(),
+    }
+}
+
+/// Событие жизненного цикла скрипта (created) для Трубы.
+fn script_event(script: &Script, event_type: &str) -> Event {
+    Event {
+        id: Uuid::new_v4(),
+        stream_type: StreamType::Script,
+        stream_id: script.id.to_string(),
+        event_type: event_type.to_string(),
+        version: 0,
+        payload: serde_json::to_value(script).unwrap_or_else(|_| json!({})),
+        metadata: core_domain::event::ActorSnapshot::system(),
+        company_id: script.company_id.map(|c| c.to_string()).unwrap_or_default(),
         correlation_id: Uuid::new_v4().to_string(),
         causation_id: None,
         occurred_at: chrono::Utc::now(),

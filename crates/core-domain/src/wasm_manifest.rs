@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use crate::error::DomainError;
 use crate::object::ObjectKind;
 use crate::permission::{PermissionScopeType, RecordAccessLevel};
+use crate::script::ScriptType;
 
 /// Capabilities, известные хосту (Приложение №5 ТЗ v3.0). Неизвестная
 /// capability в манифесте приводит к отказу установки модуля.
@@ -77,7 +78,7 @@ pub struct ModuleManifest {
     pub print_templates: Vec<ManifestResource>,
     /// Скрипты Rhai.
     #[serde(default)]
-    pub scripts: Vec<ManifestResource>,
+    pub scripts: Vec<ManifestScript>,
     /// Версия метаданных модуля, влияет на ensure-обновление ресурсов.
     #[serde(default)]
     pub metadata_version: u32,
@@ -160,13 +161,34 @@ pub struct ManifestField {
     pub required: bool,
 }
 
-/// Ресурс модуля (печатная форма или скрипт).
+/// Ресурс модуля (печатная форма).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestResource {
     pub code: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Скрипт Rhai, декларативно поставляемый модулем. Исходный код скрипта —
+/// неотъемлемая часть манифеста: при установке модуля хост сохраняет скрипт
+/// в `ScriptRepository` по коду `module_code + "." + code` (Приложение №2 ТЗ v3.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManifestScript {
+    pub code: String,
+    #[serde(default)]
+    pub name: String,
+    /// Тип скрипта (formula/validator/before_action/after_action/report/event_handler).
+    #[serde(default)]
+    pub script_type: ScriptType,
+    /// Исходный код на Rhai.
+    pub source: String,
+    /// Привязка к типу сущности (для formula/validator/actions).
+    #[serde(default)]
+    pub entity_type: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -292,6 +314,27 @@ impl ModuleManifest {
             })?;
         }
 
+        let mut script_codes = HashSet::new();
+        for script in &self.scripts {
+            if script.code.trim().is_empty() {
+                return Err(DomainError::ValidationError(
+                    "манифест модуля: скрипт с пустым code".to_string(),
+                ));
+            }
+            if script.source.trim().is_empty() {
+                return Err(DomainError::ValidationError(format!(
+                    "манифест модуля: скрипт {} с пустым исходным кодом",
+                    script.code
+                )));
+            }
+            if !script_codes.insert(script.code.as_str()) {
+                return Err(DomainError::ValidationError(format!(
+                    "манифест модуля: дубликат кода скрипта: {}",
+                    script.code
+                )));
+            }
+        }
+
         Ok(())
     }
 }
@@ -393,6 +436,58 @@ mod tests {
             required: true,
             description: None,
         }];
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn parses_manifest_script_with_source() {
+        let m: ModuleManifest = serde_json::from_value(serde_json::json!({
+            "code": "hello",
+            "version": "1.0.0",
+            "display_name": "Привет",
+            "api_version": "2.0",
+            "scripts": [{
+                "code": "double",
+                "name": "Удвоить",
+                "script_type": "formula",
+                "source": "ctx.object.amount * 2",
+                "entity_type": "greeting"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(m.scripts.len(), 1);
+        let s = &m.scripts[0];
+        assert_eq!(s.code, "double");
+        assert_eq!(s.script_type, crate::script::ScriptType::Formula);
+        assert_eq!(s.source, "ctx.object.amount * 2");
+        assert_eq!(s.entity_type.as_deref(), Some("greeting"));
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_script_codes_and_empty_source() {
+        let mut m = base_manifest();
+        m.scripts = vec![
+            ManifestScript {
+                code: "s1".to_string(),
+                name: "A".to_string(),
+                script_type: ScriptType::Formula,
+                source: "1+1".to_string(),
+                entity_type: None,
+                description: None,
+            },
+            ManifestScript {
+                code: "s1".to_string(),
+                name: "B".to_string(),
+                script_type: ScriptType::Validator,
+                source: "2+2".to_string(),
+                entity_type: None,
+                description: None,
+            },
+        ];
+        assert!(m.validate().is_err());
+        m.scripts[1].code = "s2".to_string();
+        m.scripts[1].source = "".to_string();
         assert!(m.validate().is_err());
     }
 }

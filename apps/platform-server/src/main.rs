@@ -22,7 +22,8 @@ use core_infrastructure::extism_wasm_host::{ExtismWasmHost, HostCallCtx};
 use core_infrastructure::{
     connect_db, SurrealAuditRepository, SurrealCompanyRepository, SurrealEventStore,
     SurrealMetadataRepository, SurrealModuleRepository, SurrealObjectRepository,
-    SurrealPermissionPolicyRepository, SurrealRoleRepository, SurrealUserRepository,
+    SurrealPermissionPolicyRepository, SurrealRoleRepository, SurrealScriptRepository,
+    SurrealUserRepository,
 };
 use core_api::{JwtConfig, JwtTokenManager};
 use tokio::net::TcpListener;
@@ -83,6 +84,11 @@ async fn main() -> Result<()> {
         .ensure_schema()
         .await
         .context("не удалось создать схему permission_policies")?;
+    let scripts = Arc::new(SurrealScriptRepository::new(db.clone()));
+    scripts
+        .ensure_schema()
+        .await
+        .context("не удалось создать схему scripts")?;
 
     let cache_dir: PathBuf = std::env::var("MODULE_CACHE_DIR").map(PathBuf::from).unwrap_or_else(
         |_| {
@@ -91,8 +97,20 @@ async fn main() -> Result<()> {
         },
     );
     let tx_orchestrator = core_application::TransactionOrchestrator::new(objects.clone());
+    // Фаза 13: скриптовый движок Rhai (песочница + Core API через shared-зависимости).
+    let script_engine = Arc::new(
+        core_infrastructure::RhaiScriptEngine::new(
+            core_infrastructure::rhai_core_api::CoreApiShared {
+                store: store.clone(),
+                db: db.clone(),
+                audit: audit.clone(),
+                runtime: tokio::runtime::Handle::current(),
+            },
+        )
+        .context("не удалось создать скриптовый движок Rhai")?,
+    );
     let host = Arc::new(
-        ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), store.as_ref().clone(), users.as_ref().clone(), tx_orchestrator, cache_dir.clone()).context("не удалось создать WASM-хост")?,
+        ExtismWasmHost::new(db.clone(), objects.as_ref().clone(), metadata.as_ref().clone(), store.as_ref().clone(), users.as_ref().clone(), tx_orchestrator, script_engine.clone(), cache_dir.clone()).context("не удалось создать WASM-хост")?,
     );
     host.ensure_schema()
         .await
@@ -125,10 +143,12 @@ async fn main() -> Result<()> {
         app_registry.clone(),
         policies.clone(),
         metadata.clone(),
+        scripts.clone(),
         audit.clone(),
         cache_dir.clone(),
     ));
     commands::register_phase9_module_commands(&registry, module_manager.clone(), companies.clone()).await;
+    commands::register_phase13_commands(&registry, scripts.clone()).await;
 
     // Предзагрузка установленных модулей из кэша (ТЗ v3.1, preload_company_modules):
     // сбой по отдельным модулям не останавливает сервер.

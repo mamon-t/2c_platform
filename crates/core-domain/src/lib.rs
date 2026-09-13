@@ -10,6 +10,7 @@ pub mod object;
 pub mod password;
 pub mod permission;
 pub mod role;
+pub mod script;
 pub mod types;
 pub mod user;
 pub mod wasm_manifest;
@@ -32,6 +33,7 @@ pub use password::{hash_password, verify_password};
 pub use object::{Object, ObjectKind, ObjectSnapshot};
 pub use permission::{PermissionPolicy, PermissionScopeType, RecordAccessLevel};
 pub use role::Role;
+pub use script::{Script, ScriptType};
 pub use types::{AggregateId, Version};
 pub use user::{
     ContactChannelType, ContactPurpose, Person, User, UserCertificate, UserCompanyProfile,
