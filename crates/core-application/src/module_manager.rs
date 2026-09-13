@@ -119,7 +119,7 @@ impl ModuleManager {
                 id: Uuid::new_v4(),
                 code: script.code.clone(),
                 name: script.name.clone(),
-                script_type: script.script_type.clone(),
+                script_type: script.script_type,
                 source: script.source.clone(),
                 entity_type: script.entity_type.clone(),
                 is_active: true,

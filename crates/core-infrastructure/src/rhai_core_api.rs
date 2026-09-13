@@ -156,11 +156,9 @@ pub fn register_core_api(engine: &mut Engine, shared: CoreApiShared) {
                     .query(sql)
                     .await
                     .map_err(|e| DomainError::Storage(e.to_string()))?;
-                Ok::<_, DomainError>(
-                    response
-                        .take(0)
-                        .map_err(|e| DomainError::Storage(e.to_string()))?,
-                )
+                response
+                    .take(0)
+                    .map_err(|e| DomainError::Storage(e.to_string()))
             }) {
                 Ok(Ok(rows)) => rows,
                 Ok(Err(e)) | Err(e) => {

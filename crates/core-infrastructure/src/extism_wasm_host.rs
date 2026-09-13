@@ -834,7 +834,7 @@ impl ExtismWasmHost {
                             .get(1)
                             .cloned()
                             .unwrap_or_else(|| "{}".to_string());
-                        let parsed = parse_arg(&ctx_json).unwrap_or_else(|_| Value::Null);
+                        let parsed = parse_arg(&ctx_json).unwrap_or(Value::Null);
                         let user = ctx.actor.clone();
                         let company_id = ctx.company_id.parse::<Uuid>().ok();
                         let settings = ctx.settings.clone();
