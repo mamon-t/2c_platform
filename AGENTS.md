@@ -121,7 +121,7 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–10 (10a + 10b + 10c) и 13. Фазы 1–8:
+Реализовано: Фазы 1–10 (10a + 10b + 10c), 13 и 14. Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
 `Фаза 3` — метаданные (entity_types, fields, states, transitions, forms, relations, actions);
@@ -160,6 +160,22 @@ fuel 10M, лимиты коллекций/вложенности, выполне
 `script.list/get/validate` (read), `script.execute` (execute); фикс
 блокировки воркера в WASM-пути: std `recv_timeout` → `tokio::sync::mpsc` +
 `tokio::time::timeout`. Тесты 210 (`phase13_scripts` +5).
+Фаза 14 (модуль управленческого учёта, ТЗ §14): платформенная поддержка —
+манифестные команды с `function` (WASM-экспорт подчёркиванием, registry-имя
+`plugin.{code}.{command_code}` с точками, контракт `{company_id, input}` →
+`{output}`), `ManifestField.options` (enum-опции в декларативных схемах),
+host-fn `get_entity_type_by_code` (cap `metadata.read`), op `object.create`
+в `TransactionOrchestrator` (атомарный post+insert одной пачкой через
+`update_batch` с insert-маркером `version == 0`), конструктор
+`TransactionOrchestrator::new(objects, metadata)`; модуль `plugin.accounting`
+(`examples/accounting_plugin`, вне workspace): 13 команд (account.*, period.*,
+entry.*, doc.post, balance.trial/sheet), 3 схемы (account/accounting_period/
+ledger_entry, поля enum-с options, lines[] как Table), 3 permissions
+accounting.manage/read/post, capability `transactions`; проводки только
+`debit == credit`, сторно — обратные записи, учётные периоды с open/close;
+фикстура `accounting.wasm`, интеграционные тесты `phase14_accounting` (12,
+полный цикл doc→post→entries→trial balance), всего тестов 223; live-цикл
+/rpc + Bearer JWT (account.create → period.open → entry.post → balance.trial).
 **Не начинать Фазы 11–12, 14+** (Flutter, оффлайн, учёт, экспорт, уведомления,
 криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
