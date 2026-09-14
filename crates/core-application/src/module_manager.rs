@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::app_registry::AppRegistry;
 use crate::command_registry::{CommandExecutionCtx, CommandMetadata};
+use crate::permission_manager::PermissionManager;
 use crate::ports::{
     AuditRepository, EntitySchema, MetadataRepository, ModuleRepository, PermissionPolicyRepository,
     ScriptRepository, WasmHost,
@@ -270,6 +271,91 @@ impl ModuleManager {
     /// Доступ к хранилищу модулей для команд `module.*` (списки, детализация).
     pub fn modules(&self) -> Arc<dyn ModuleRepository> {
         self.modules.clone()
+    }
+
+    /// Собирает навигационно-безопасный срез включённых для компании модулей
+    /// (подфаза 11b-prep): для каждого модуля из `list_enabled_for_company`
+    /// проверяется, доступна ли актору хотя бы одна команда по её
+    /// `required_permission` (политика `PermissionManager`); если нет — модуль
+    /// исключается из ответа. В срез попадают только `code`, `display_name`,
+    /// `version` и навигация из манифеста (`entity_type`, `code`, `label`).
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::ValidationError`, если актор не аутентифицирован
+    /// или его компания не совпадает с переданной; `DomainError::Storage` при
+    /// сбое хранилища.
+    pub async fn get_navigation(
+        &self,
+        company_id: Uuid,
+        actor: Option<ActorSnapshot>,
+        permissions: &PermissionManager,
+    ) -> Result<Value, DomainError> {
+        let actor = actor.ok_or_else(|| {
+            DomainError::ValidationError(
+                "команда доступна только аутентифицированному пользователю".to_string(),
+            )
+        })?;
+        let user_id = actor.user_id.ok_or_else(|| {
+            DomainError::ValidationError(
+                "команда доступна только аутентифицированному пользователю".to_string(),
+            )
+        })?;
+        let actor_company_id = actor.company_id.ok_or_else(|| {
+            DomainError::ValidationError("команда доступна только пользователю с компанией".to_string())
+        })?;
+        if actor_company_id != company_id {
+            return Err(DomainError::ValidationError(
+                "компания в команде не совпадает с компанией актора".to_string(),
+            ));
+        }
+
+        let records = self
+            .modules
+            .list_enabled_for_company(&company_id.to_string())
+            .await?;
+
+        let mut modules = Vec::new();
+        for record in records {
+            let manifest = record.manifest;
+            let mut accessible = false;
+            for command in &manifest.commands {
+                let required = command
+                    .required_permission
+                    .as_deref()
+                    .unwrap_or("module.execute");
+                if permissions
+                    .check(&user_id, &actor_company_id, Some(&manifest.code), None, required)
+                    .await?
+                {
+                    accessible = true;
+                    break;
+                }
+            }
+            if !accessible {
+                continue;
+            }
+
+            let navigation = manifest
+                .navigation
+                .iter()
+                .map(|item| {
+                    json!({
+                        "code": item.code,
+                        "label": item.title,
+                        "entity_type": item.entity_type,
+                    })
+                })
+                .collect::<Vec<_>>();
+            modules.push(json!({
+                "code": manifest.code,
+                "display_name": manifest.display_name,
+                "version": manifest.version,
+                "navigation": navigation,
+            }));
+        }
+
+        Ok(json!({ "modules": modules }))
     }
 
     /// Устанавливает WASM-модуль: загружает в хост для чтения манифеста,

@@ -212,6 +212,9 @@ pub struct ManifestNavItem {
     pub icon: Option<String>,
     #[serde(default)]
     pub route: Option<String>,
+    /// Тип сущности, открываемый пунктом (для построения роутов SDUI-клиента).
+    #[serde(default)]
+    pub entity_type: Option<String>,
 }
 
 /// Спецификация зависимости от другого модуля (Приложение №3 ТЗ v3.0).

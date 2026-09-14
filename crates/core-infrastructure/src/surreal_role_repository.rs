@@ -144,6 +144,52 @@ impl RoleRepository for SurrealRoleRepository {
         })
     }
 
+    fn update(&self, role: &Role, events: &[Event]) -> BoxFuture<'_, Result<(), DomainError>> {
+        let db = self.db.clone();
+        let role = role.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            with_transaction(&db, |txn| {
+                let role = role.clone();
+                let events = events.clone();
+                async move {
+                    let outcome: Result<(), DomainError> = async {
+                        let mut response = txn
+                            .query("SELECT 1 FROM roles WHERE record::id(id) = $id LIMIT 1")
+                            .bind(("id", role.id.to_string()))
+                            .await
+                            .map_err(|e| DomainError::Storage(format!("role check id: {e}")))?;
+                        let existing: Option<Value> = response
+                            .take(0)
+                            .map_err(|e| DomainError::Storage(format!("role check id take: {e}")))?;
+                        if existing.is_none() {
+                            return Err(DomainError::NotFound(format!(
+                                "Роль {} не найдена",
+                                role.id
+                            )));
+                        }
+
+                        let mut events = events.clone();
+                        assign_versions(&txn, &mut events).await?;
+                        write_events(&txn, &events).await?;
+
+                        let value = serde_json::to_value(&role)
+                            .map_err(|e| DomainError::Storage(format!("role encode: {e}")))?;
+                        let _: Option<surrealdb::types::Value> = txn
+                            .upsert(("roles", role.id.to_string()))
+                            .content(value)
+                            .await
+                            .map_err(|e| DomainError::Storage(format!("role write: {e}")))?;
+                        Ok(())
+                    }
+                    .await;
+                    (txn, outcome)
+                }
+            })
+            .await
+        })
+    }
+
     fn list(&self) -> BoxFuture<'_, Result<Vec<Role>, DomainError>> {
         let db = self.db.clone();
         Box::pin(async move {
@@ -396,6 +442,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(codes, vec!["test.policy".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn update_appends_policies_and_writes_event() {
+        let db = mem_db().await;
+        let store = crate::SurrealEventStore::new(db.clone());
+        store.ensure_schema().await.unwrap();
+        let repo = SurrealRoleRepository::new(db);
+        repo.ensure_schema().await.unwrap();
+
+        let company_id = Uuid::new_v4();
+        let mut role = sample(company_id, "staff", "Сотрудник");
+        repo.create(&role, &[empty_event(&role.id.to_string(), company_id)])
+            .await
+            .unwrap();
+
+        role.permission_policy_codes = vec!["staff.objects".to_string(), "platform.modules".to_string()];
+        repo.update(&role, &[empty_event(&role.id.to_string(), company_id)])
+            .await
+            .unwrap();
+
+        let got = repo.get(&role.id).await.unwrap();
+        assert_eq!(
+            got.permission_policy_codes,
+            vec!["staff.objects".to_string(), "platform.modules".to_string()]
+        );
+
+        let stream = store
+            .read_stream(StreamType::Role, &role.id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(stream.len(), 2);
+        assert_eq!(stream[1].event_type, "role.created");
+
+        let missing = repo.get(&Uuid::new_v4()).await;
+        assert!(matches!(missing, Err(DomainError::NotFound(_))));
     }
 
     #[tokio::test]

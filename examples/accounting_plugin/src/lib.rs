@@ -202,7 +202,11 @@ pub fn get_info() -> FnResult<String> {
         "scripts": [],
         "metadata_version": 1,
         "handles_documents": [],
-        "navigation": [],
+        "navigation": [
+            { "code": "accounts", "title": "План счетов", "entity_type": "account" },
+            { "code": "periods", "title": "Учётные периоды", "entity_type": "accounting_period" },
+            { "code": "entries", "title": "Журнал проводок", "entity_type": "ledger_entry" }
+        ],
         "dependencies": []
     }"#;
     Ok(manifest.to_string())

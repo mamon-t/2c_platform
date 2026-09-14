@@ -344,6 +344,13 @@ pub trait RoleRepository: Send + Sync {
     /// Получает роль по коду в рамках компании; используется при ensure-сидинге.
     fn get_by_code(&self, company_id: &Uuid, code: &str) -> BoxFuture<'_, Result<Role, DomainError>>;
 
+    /// Обновляет роль и добавляет событие в одной транзакции.
+    ///
+    /// # Ошибки
+    ///
+    /// Возвращает `DomainError::NotFound`, если роль отсутствует.
+    fn update(&self, role: &Role, events: &[Event]) -> BoxFuture<'_, Result<(), DomainError>>;
+
     /// Перечисляет все роли, упорядоченные по `code`.
     fn list(&self) -> BoxFuture<'_, Result<Vec<Role>, DomainError>>;
 

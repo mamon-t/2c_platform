@@ -5,14 +5,15 @@
 //! от системного исполнителя, пока не появится аутентификация.
 
 use chrono::{DateTime, NaiveDate, Utc};
+use core_application::auth::AuthService;
 use core_application::command_registry::{CommandExecutionCtx, CommandMetadata};
+use core_application::permission_manager::PermissionManager;
 use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
     RoleRepository, ScriptEngine, ScriptRepository, UserRepository,
 };
 use core_application::script_runner::execute_script;
 use core_application::seed::seed_system_roles_and_policies;
-use core_application::auth::AuthService;
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
 use core_domain::audit::{AuditEntry, AuditFilter, AuditResult, AuditTarget};
@@ -1157,22 +1158,19 @@ pub async fn register_phase5_commands(
                             .list()
                             .await?;
                         let mut seeded = 0usize;
+                        let mut policies_added = 0usize;
                         for company in &companies_list {
-                            if roles
-                                .get_by_code(&company.id, "admin")
-                                .await
-                                .map(|_| false)
-                                .unwrap_or(true)
-                            {
-                                seed_system_roles_and_policies(
-                                    &company.id,
-                                    roles.as_ref(),
-                                    policies.as_ref(),
-                                    audit.as_ref(),
-                                )
-                                .await?;
+                            if roles.get_by_code(&company.id, "admin").await.is_err() {
                                 seeded += 1;
                             }
+                            let summary = seed_system_roles_and_policies(
+                                &company.id,
+                                roles.as_ref(),
+                                policies.as_ref(),
+                                audit.as_ref(),
+                            )
+                            .await?;
+                            policies_added += summary.policies_added;
                         }
                         let entry = AuditEntry {
                             id: Uuid::new_v4(),
@@ -1183,6 +1181,7 @@ pub async fn register_phase5_commands(
                             details: Some(json!({
                                 "companies_total": companies_list.len(),
                                 "seeded": seeded,
+                                "policies_added": policies_added,
                             })),
                             ip_address: None,
                             user_agent: None,
@@ -1193,6 +1192,7 @@ pub async fn register_phase5_commands(
                         Ok(json!({
                             "companies_total": companies_list.len(),
                             "seeded": seeded,
+                            "policies_added": policies_added,
                         }))
                     }
                 }
@@ -1362,12 +1362,14 @@ fn parse_optional_date(value: &Value, key: &str) -> Result<Option<NaiveDate>, Do
     }
 }
 /// Регистрирует команды управления WASM-модулями (подфаза 9b):
-/// `module.install/uninstall/enable/disable/list/info`. Все команды требуют
-/// глобального права `module.manage` (deny-by-default RBAC, префиксные команды).
+/// `module.install/uninstall/enable/disable/list/info` — требуют глобального
+/// права `module.manage`; `module.navigation` (подфаза 11b-prep) — требует
+/// `module.read` (политика `platform.modules`, доступна `staff`/`guest`).
 pub async fn register_phase9_module_commands(
     registry: &CommandRegistry,
     manager: Arc<ModuleManager>,
     companies: Arc<SurrealCompanyRepository>,
+    permissions: Arc<PermissionManager>,
 ) {
     registry
         .register_with_metadata("module.install", CommandMetadata::requires("module.manage"), {
@@ -1472,6 +1474,37 @@ pub async fn register_phase9_module_commands(
                     let code = require(&params, "code")?;
                     let record = modules.get(&code).await?;
                     encode(&record)
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("module.navigation", CommandMetadata::requires("module.read"), {
+            let manager = manager.clone();
+            let permissions = permissions.clone();
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let manager = manager.clone();
+                let permissions = permissions.clone();
+                async move {
+                    let company_id = ctx
+                        .actor
+                        .as_ref()
+                        .and_then(|a| a.company_id)
+                        .or_else(|| {
+                            params
+                                .get("company_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|c| Uuid::parse_str(c).ok())
+                        })
+                        .ok_or_else(|| {
+                            DomainError::ValidationError(
+                                "команда доступна только пользователю с компанией".to_string(),
+                            )
+                        })?;
+                    manager
+                        .get_navigation(company_id, ctx.actor, &permissions)
+                        .await
                 }
             }
         })

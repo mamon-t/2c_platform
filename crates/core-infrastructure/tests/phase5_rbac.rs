@@ -225,7 +225,10 @@ async fn seed_is_idempotent_and_creates_system_roles_and_policies() {
         vec!["platform.full".to_string()]
     );
     let guest = role_repo.get_by_code(&company_id, "guest").await.unwrap();
-    assert_eq!(guest.permission_policy_codes, vec!["guest.objects".to_string()]);
+    assert_eq!(
+        guest.permission_policy_codes,
+        vec!["guest.objects".to_string(), "platform.modules".to_string()]
+    );
 
     let admin_policy = policy_repo.get_by_code("platform.full").await.unwrap();
     assert!(admin_policy.is_system);

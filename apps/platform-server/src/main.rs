@@ -133,6 +133,11 @@ async fn main() -> Result<()> {
     )
     .await;
 
+    // PermissionManager строится до регистрации команд модулей (подфаза 11b-prep):
+    // `module.navigation` фильтрует модули по правам актора через этот же менеджер,
+    // позже он же подключается к пайплайну через `attach_pipeline`.
+    let permissions = Arc::new(PermissionManager::new(roles.clone(), policies.clone()));
+
     let modules = Arc::new(SurrealModuleRepository::new(db.clone()));
     modules
         .ensure_schema()
@@ -148,7 +153,13 @@ async fn main() -> Result<()> {
         audit.clone(),
         cache_dir.clone(),
     ));
-    commands::register_phase9_module_commands(&registry, module_manager.clone(), companies.clone()).await;
+    commands::register_phase9_module_commands(
+        &registry,
+        module_manager.clone(),
+        companies.clone(),
+        permissions.clone(),
+    )
+    .await;
     commands::register_phase13_commands(&registry, scripts.clone(), script_engine.clone() as Arc<dyn ScriptEngine>).await;
 
     // Предзагрузка установленных модулей из кэша (ТЗ v3.1, preload_company_modules):
@@ -180,7 +191,6 @@ async fn main() -> Result<()> {
     // Фаза 10c: WebSocket (ServerPush) — хаб уведомлений и отладочный эндпоинт.
     let pushes = core_api::PushHub::new();
 
-    let permissions = Arc::new(PermissionManager::new(roles, policies));
     registry.attach_pipeline(audit, permissions).await;
     info!("Зарегистрировано команд ({}):", registry.list().await.len());
 
