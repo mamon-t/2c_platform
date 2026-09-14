@@ -6,6 +6,7 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use core_application::auth::AuthService;
+use core_application::bootstrap::BootstrapParams;
 use core_application::command_registry::{CommandExecutionCtx, CommandMetadata};
 use core_application::permission_manager::PermissionManager;
 use core_application::ports::{
@@ -1194,6 +1195,59 @@ pub async fn register_phase5_commands(
                             "seeded": seeded,
                             "policies_added": policies_added,
                         }))
+                    }
+                }
+            },
+        )
+        .await;
+}
+
+/// Регистрирует команду `system.bootstrap`: однократная инициализация
+/// платформы (первая компания, суперадмин, системные роли/политики).
+/// Требует `system.bootstrap` — политики с таким действием нет, поэтому команда
+/// доступна только системному исполнителю через `POST /debug/command` (или
+/// прямому вызову из `main`); аноним и аутентифицированные пользователи
+/// получают `PERMISSION_ERROR`.
+pub async fn register_bootstrap_command(
+    registry: &CommandRegistry,
+    companies: Arc<SurrealCompanyRepository>,
+    users: Arc<SurrealUserRepository>,
+    roles: Arc<SurrealRoleRepository>,
+    policies: Arc<SurrealPermissionPolicyRepository>,
+    audit: Arc<SurrealAuditRepository>,
+) {
+    registry
+        .register_with_metadata(
+            "system.bootstrap",
+            CommandMetadata::requires("system.bootstrap"),
+            {
+                let companies = companies.clone();
+                let users = users.clone();
+                let roles = roles.clone();
+                let policies = policies.clone();
+                let audit = audit.clone();
+                move |params: Value, _ctx: CommandExecutionCtx| {
+                    let companies = companies.clone();
+                    let users = users.clone();
+                    let roles = roles.clone();
+                    let policies = policies.clone();
+                    let audit = audit.clone();
+                    async move {
+                        let params: BootstrapParams = serde_json::from_value(params).map_err(|e| {
+                            DomainError::ValidationError(format!(
+                                "system.bootstrap параметры: {e}"
+                            ))
+                        })?;
+                        let result = core_application::bootstrap_platform(
+                            params,
+                            companies.as_ref(),
+                            users.as_ref(),
+                            roles.as_ref(),
+                            policies.as_ref(),
+                            audit.as_ref(),
+                        )
+                        .await?;
+                        encode(&result)
                     }
                 }
             },

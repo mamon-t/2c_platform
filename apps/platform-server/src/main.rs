@@ -13,7 +13,7 @@ use axum::{
 use core_application::auth::AuthService;
 use core_application::command_registry::CommandExecutionCtx;
 use core_application::permission_manager::PermissionManager;
-use core_application::ports::{EventStore, ScriptEngine, TokenManager, WasmHost};
+use core_application::ports::{CompanyRepository, EventStore, ScriptEngine, TokenManager, WasmHost};
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
 use core_domain::error::DomainError;
@@ -133,6 +133,16 @@ async fn main() -> Result<()> {
     )
     .await;
 
+    commands::register_bootstrap_command(
+        &registry,
+        companies.clone(),
+        users.clone(),
+        roles.clone(),
+        policies.clone(),
+        audit.clone(),
+    )
+    .await;
+
     // PermissionManager строится до регистрации команд модулей (подфаза 11b-prep):
     // `module.navigation` фильтрует модули по правам актора через этот же менеджер,
     // позже он же подключается к пайплайну через `attach_pipeline`.
@@ -193,6 +203,20 @@ async fn main() -> Result<()> {
 
     registry.attach_pipeline(audit, permissions).await;
     info!("Зарегистрировано команд ({}):", registry.list().await.len());
+
+    // Подсказка администратору: платформа ещё не инициализирована.
+    // Бутстрап выполняется явно через `system.bootstrap` (POST /debug/command).
+    match companies.list().await {
+        Ok(list) if list.is_empty() => {
+            let hint = concat!(
+                "Платформа не инициализирована. Вызовите: POST /debug/command ",
+                r#"{"name":"system.bootstrap","params":{"company_code":"acme","company_name":"Acme","admin_login":"root","admin_password":"secret"}}"#
+            );
+            warn!("{hint}");
+        }
+        Ok(_) => {}
+        Err(e) => warn!("Проверка инициализации платформы не выполнена: {e}"),
+    }
 
     let state = AppState {
         store,

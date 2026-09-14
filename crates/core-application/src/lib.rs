@@ -1,5 +1,6 @@
 pub mod app_registry;
 pub mod auth;
+pub mod bootstrap;
 pub mod command_registry;
 pub mod module_manager;
 pub mod permission_manager;
@@ -12,6 +13,7 @@ pub mod transaction_orchestrator;
 
 pub use app_registry::AppRegistry;
 pub use auth::AuthService;
+pub use bootstrap::{bootstrap_platform, BootstrapParams, BootstrapResult};
 pub use command_registry::{CommandExecutionCtx, CommandMetadata, CommandRegistry};
 pub use module_manager::ModuleManager;
 pub use permission_manager::PermissionManager;
