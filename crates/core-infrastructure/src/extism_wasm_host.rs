@@ -168,6 +168,9 @@ impl ExtismWasmHost {
     /// # Errors
     ///
     /// Возвращает `DomainError::Storage`, если хост создан вне tokio-runtime.
+    // DI-конструктор: параметры — порты инфраструктуры; без сведения в контекст
+    // (исключён drive-by рефакторинг).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: Surreal<Any>,
         objects: SurrealObjectRepository,

@@ -55,6 +55,9 @@ pub struct ModuleManager {
 }
 
 impl ModuleManager {
+    // DI-конструктор: параметры — порты приложения; сведение в контекст
+    // потребовало бы доп. типа и не дало бы выигрыша.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         host: Arc<dyn WasmHost>,
         modules: Arc<dyn ModuleRepository>,
