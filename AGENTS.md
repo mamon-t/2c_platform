@@ -36,7 +36,8 @@ Toolchain закреплён в `rust-toolchain.toml` (channel 1.96.0, комп�
 | `crates/core-domain/src/{event,company,user,role,permission,audit,metadata,object,wasm_manifest,module,aggregate,error,types,password}.rs` | Модели и типы домена, 10 `StreamType`'ов, `DomainError`, `Version` (u64), Argon2id `hash_password`/`verify_password` |
 | `crates/core-application/src/ports.rs` | Порты: EventStore, все `*Repository` (+`ModuleRepository`), WasmHost, EntitySchema |
 | `crates/core-application/src/command_registry.rs` | CommandRegistry (префиксные команды) + `CommandExecutionPipeline` (аудит + RBAC перед каждой командой) |
-| `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик, ensure-регистры |
+| `crates/core-application/src/permission_manager.rs`, `seed.rs`, `registry.rs`, `app_registry.rs` | Deny-by-default RBAC, сид системных ролей/политик (4 роли/6 политик, `SeedSummary`, дополнение существующих ролей), ensure-регистры |
+| `crates/core-application/src/bootstrap.rs` | `system.bootstrap`: `bootstrap_platform` — однократная инициализация платформы (компания → суперадмин Argon2id → сид → привязка роли + primary-профиль → аудит); доступна только системному актору (`requires("system.bootstrap")`) |
 | `crates/core-application/src/auth.rs` | `AuthService` (10b): `login`/`logout`, аудит `user.login`/`user.login_failed`/`user.logout`, блокировка ≥5 попыток на 15 мин, `TokenManager`-порт |
 | `crates/core-application/src/module_manager.rs` | `ModuleManager` (9b): install/uninstall/enable/disable + декларативная регистрация манифеста (политики, схемы, команды `plugin.*`) |
 | `crates/core-application/src/transaction_orchestrator.rs` | `TransactionOrchestrator` (9e): begin/add_op/commit транзакций модулей, `$ref`-связывание, идемпотентность по business_key, GC (TTL 5 мин) |
@@ -128,7 +129,9 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–10 (10a + 10b + 10c), 13 и 14. Фазы 1–8:
+Реализовано: Фазы 1–10 (10a + 10b + 10c), 13 и 14, доработка перед 11б
+(SDUI-навигация: `module.navigation`/`platform.modules`, `RoleRepository::update`,
+`ManifestNavItem.entity_type`) и `system.bootstrap`. Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
 `Фаза 3` — метаданные (entity_types, fields, states, transitions, forms, relations, actions);
@@ -183,7 +186,23 @@ accounting.manage/read/post, capability `transactions`; проводки тол�
 фикстура `accounting.wasm`, интеграционные тесты `phase14_accounting` (12,
 полный цикл doc→post→entries→trial balance), всего тестов 223; live-цикл
 /rpc + Bearer JWT (account.create → period.open → entry.post → balance.trial).
-**Не начинать Фазы 11–12, 14+** (Flutter, оффлайн, учёт, экспорт, уведомления,
+Доработка перед 11б (SDUI-навигация): системная политика `platform.modules`
+(`module.read`, ByCompany, priority 40, привязка staff/guest); `seed_system_roles_and_policies`
+→ `SeedSummary{roles_created, policies_added}` + дополнение существующих ролей;
+`RoleRepository::update` (+ `role.updated`); `ManifestNavItem.entity_type`;
+`ModuleManager::get_navigation` (срез {code, display_name, version, navigation[]},
+фильтр по доступным командам актора); команда `module.navigation` (`module.read`);
+`system.migrate_permissions` → сид ВСЕХ компаний `{companies_total, seeded, policies_added}`;
+тесты `phase11_navigation` (8).
+**system.bootstrap** (однократная инициализация платформы): `core-application/bootstrap.rs`
+`bootstrap_platform` — компания → суперадмин Argon2id → сид → привязка роли +
+primary-профиль → аудит `system.bootstrap` (деталей {company_code, admin_login,
+roles_created, policies_seeded}); идемпотентность: код-коллизия → «Компания {code}
+уже существует», непустая БД → «Платформа уже инициализирована»; команда
+доступна только системному актору (`requires("system.bootstrap")`, `POST /debug/command`);
+warn при старте если компаний нет; тесты `phase_bootstrap` (6).
+Всего тестов 251.
+**Не начинать Фазы 11–12, 15+** (Flutter, оффлайн, учёт, экспорт, уведомления,
 криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
 
