@@ -161,10 +161,6 @@ async fn cmd_err(env: &Env, name: &str, input: Value) -> Value {
     v["error"].clone()
 }
 
-fn approx(a: f64, b: f64) -> bool {
-    (a - b).abs() < 0.001
-}
-
 /// Открывает период и создаёт три типовых счёта. Возвращает id периода.
 async fn seed_financials(env: &Env) -> String {
     cmd(env, "plugin.accounting.account.create", json!({
@@ -538,9 +534,9 @@ async fn entry_reverse_storno_balances_to_zero() {
     }))
     .await;
     let row10 = trial["rows"].as_array().unwrap().iter().find(|r| r["account"] == "10.01").unwrap();
-    assert!(approx(row10["balance"].as_f64().unwrap_or(0.0), 0.0));
+    assert_eq!(row10["balance"].as_i64(), Some(0));
     let row90 = trial["rows"].as_array().unwrap().iter().find(|r| r["account"] == "90.01").unwrap();
-    assert!(approx(row90["balance"].as_f64().unwrap_or(0.0), 0.0));
+    assert_eq!(row90["balance"].as_i64(), Some(0));
 }
 
 #[tokio::test]
@@ -703,17 +699,17 @@ async fn balance_trial_reports_turnovers_and_totals() {
     assert_eq!(trial["rows"].as_array().unwrap().len(), 3);
 
     let row10 = trial["rows"].as_array().unwrap().iter().find(|r| r["account"] == "10.01").unwrap();
-    assert!(approx(row10["debit"].as_f64().unwrap(), 8000.0));
-    assert!(approx(row10["credit"].as_f64().unwrap(), 0.0));
-    assert!(approx(row10["balance"].as_f64().unwrap(), 8000.0));
+    assert_eq!(row10["debit"].as_i64(), Some(8000));
+    assert_eq!(row10["credit"].as_i64(), Some(0));
+    assert_eq!(row10["balance"].as_i64(), Some(8000));
 
     let row80 = trial["rows"].as_array().unwrap().iter().find(|r| r["account"] == "80.01").unwrap();
-    assert!(approx(row80["credit"].as_f64().unwrap(), 5000.0));
-    assert!(approx(row80["balance"].as_f64().unwrap(), -5000.0));
+    assert_eq!(row80["credit"].as_i64(), Some(5000));
+    assert_eq!(row80["balance"].as_i64(), Some(-5000));
 
     // Итоги: дебетовые и кредитовые обороты сходятся.
-    assert!(approx(trial["totals"]["debit"].as_f64().unwrap(), 8000.0));
-    assert!(approx(trial["totals"]["credit"].as_f64().unwrap(), 8000.0));
+    assert_eq!(trial["totals"]["debit"].as_i64(), Some(8000));
+    assert_eq!(trial["totals"]["credit"].as_i64(), Some(8000));
 
     // Вне диапазона — пусто.
     let empty = cmd(&env, "plugin.accounting.balance.trial", json!({
@@ -750,15 +746,15 @@ async fn balance_sheet_groups_by_section() {
     assert_eq!(sheet["assets"]["rows"].as_array().unwrap().len(), 1);
     let a = &sheet["assets"]["rows"][0];
     assert_eq!(a["account"], "10.01");
-    assert!(approx(a["amount"].as_f64().unwrap(), 8000.0));
-    assert!(approx(sheet["assets"]["total"].as_f64().unwrap(), 8000.0));
+    assert_eq!(a["amount"].as_i64(), Some(8000));
+    assert_eq!(sheet["assets"]["total"].as_i64(), Some(8000));
 
     assert_eq!(sheet["liabilities"]["rows"].as_array().unwrap().len(), 0);
-    assert!(approx(sheet["liabilities"]["total"].as_f64().unwrap(), 0.0));
+    assert_eq!(sheet["liabilities"]["total"].as_i64(), Some(0));
 
     assert_eq!(sheet["equity"]["rows"].as_array().unwrap().len(), 1);
     let e = &sheet["equity"]["rows"][0];
     assert_eq!(e["account"], "80.01");
-    assert!(approx(e["amount"].as_f64().unwrap(), 5000.0));
-    assert!(approx(sheet["equity"]["total"].as_f64().unwrap(), 5000.0));
+    assert_eq!(e["amount"].as_i64(), Some(5000));
+    assert_eq!(sheet["equity"]["total"].as_i64(), Some(5000));
 }

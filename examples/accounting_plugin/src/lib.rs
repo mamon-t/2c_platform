@@ -41,9 +41,6 @@ const ACCOUNT_TYPES: &[&str] = &[
     "off_balance",
 ];
 
-/// Допустимая погрешность сверки дебета и кредита в проводке.
-const BALANCE_EPS: f64 = 0.001;
-
 /// Манифест модуля v2 (раздел 9 ТЗ). Имена WASM-экспортов команд заданы
 /// полем `function` (подчёркиванием), registry-имена команд — манифест-кодом
 /// с точками (`plugin.accounting.<code>`).
@@ -339,8 +336,8 @@ fn validate_entry_lines(ctx: &Ctx, req: &Value) -> Result<(), String> {
     if lines.is_empty() {
         return Err("проводка должна содержать хотя бы одну строку".to_string());
     }
-    let mut debit_total = 0.0;
-    let mut credit_total = 0.0;
+    let mut debit_total: i64 = 0;
+    let mut credit_total: i64 = 0;
     for (i, line) in lines.iter().enumerate() {
         let code = line["account"]
             .as_str()
@@ -354,20 +351,25 @@ fn validate_entry_lines(ctx: &Ctx, req: &Value) -> Result<(), String> {
         if !is_active {
             return Err(format!("счёт '{code}' деактивирован"));
         }
-        let debit = line["debit"].as_f64().unwrap_or(0.0);
-        let credit = line["credit"].as_f64().unwrap_or(0.0);
-        if debit < 0.0 || credit < 0.0 {
+        // Суммы — целые копейки; плавающая точка для денег недопустима.
+        let debit = line["debit"]
+            .as_i64()
+            .ok_or_else(|| format!("строка {i}: сумма указывается в копейках (целое число)"))?;
+        let credit = line["credit"]
+            .as_i64()
+            .ok_or_else(|| format!("строка {i}: сумма указывается в копейках (целое число)"))?;
+        if debit < 0 || credit < 0 {
             return Err(format!("строка {i}: отрицательные суммы недопустимы"));
         }
         debit_total += debit;
         credit_total += credit;
     }
-    if (debit_total - credit_total).abs() > BALANCE_EPS {
+    if debit_total != credit_total {
         return Err(format!(
             "суммы дебета ({debit_total}) и кредита ({credit_total}) не сходятся"
         ));
     }
-    if debit_total <= 0.0 {
+    if debit_total <= 0 {
         return Err("сумма проводки должна быть положительной".to_string());
     }
     Ok(())
@@ -618,7 +620,7 @@ fn entry_list_impl(req: Value) -> Result<Value, String> {
             }
         }
         if let Some(acc) = account {
-            let has = data["lines"].as_array().map_or(false, |ls| {
+            let has = data["lines"].as_array().is_some_and(|ls| {
                 ls.iter().any(|l| l["account"].as_str() == Some(acc))
             });
             if !has {
@@ -774,8 +776,8 @@ fn balance_trial_impl(req: Value) -> Result<Value, String> {
     let date_to = req["date_to"].as_str();
     let entry_type_id = entity_type_id("ledger_entry")?;
     let entries = list_type(&entry_type_id, 500)?;
-    let mut debit_by_account: BTreeMap<String, f64> = BTreeMap::new();
-    let mut credit_by_account: BTreeMap<String, f64> = BTreeMap::new();
+    let mut debit_by_account: BTreeMap<String, i64> = BTreeMap::new();
+    let mut credit_by_account: BTreeMap<String, i64> = BTreeMap::new();
     for entry in &entries {
         if !matches!(entry["data"]["status"].as_str(), Some("posted") | Some("reversed")) {
             continue;
@@ -797,10 +799,11 @@ fn balance_trial_impl(req: Value) -> Result<Value, String> {
                 if code.is_empty() {
                     continue;
                 }
-                let debit = line["debit"].as_f64().unwrap_or(0.0);
-                let credit = line["credit"].as_f64().unwrap_or(0.0);
-                *debit_by_account.entry(code.to_string()).or_insert(0.0) += debit;
-                *credit_by_account.entry(code.to_string()).or_insert(0.0) += credit;
+                // Цепочка целочисленных копеек; плавающая точка недопустима.
+                let debit = line["debit"].as_i64().unwrap_or(0);
+                let credit = line["credit"].as_i64().unwrap_or(0);
+                *debit_by_account.entry(code.to_string()).or_insert(0) += debit;
+                *credit_by_account.entry(code.to_string()).or_insert(0) += credit;
             }
         }
     }
@@ -809,11 +812,11 @@ fn balance_trial_impl(req: Value) -> Result<Value, String> {
         .chain(credit_by_account.keys())
         .collect();
     let mut rows = Vec::new();
-    let mut total_debit = 0.0;
-    let mut total_credit = 0.0;
+    let mut total_debit: i64 = 0;
+    let mut total_credit: i64 = 0;
     for code in &codes {
-        let debit = debit_by_account.get(*code).copied().unwrap_or(0.0);
-        let credit = credit_by_account.get(*code).copied().unwrap_or(0.0);
+        let debit = debit_by_account.get(*code).copied().unwrap_or(0);
+        let credit = credit_by_account.get(*code).copied().unwrap_or(0);
         total_debit += debit;
         total_credit += credit;
         rows.push(json!({
@@ -836,7 +839,7 @@ fn balance_sheet_impl(_req: Value) -> Result<Value, String> {
     let ctx = ctx()?;
     let entry_type_id = entity_type_id("ledger_entry")?;
     let entries = list_type(&entry_type_id, 500)?;
-    let mut balance_by_account: BTreeMap<String, f64> = BTreeMap::new();
+    let mut balance_by_account: BTreeMap<String, i64> = BTreeMap::new();
     for entry in &entries {
         if !matches!(entry["data"]["status"].as_str(), Some("posted") | Some("reversed")) {
             continue;
@@ -847,28 +850,29 @@ fn balance_sheet_impl(_req: Value) -> Result<Value, String> {
                 if code.is_empty() {
                     continue;
                 }
-                let debit = line["debit"].as_f64().unwrap_or(0.0);
-                let credit = line["credit"].as_f64().unwrap_or(0.0);
-                *balance_by_account.entry(code.to_string()).or_insert(0.0) += debit - credit;
+                // Сальдо — целые копейки; плавающая точка недопустима.
+                let debit = line["debit"].as_i64().unwrap_or(0);
+                let credit = line["credit"].as_i64().unwrap_or(0);
+                *balance_by_account.entry(code.to_string()).or_insert(0) += debit - credit;
             }
         }
     }
     let mut assets = Vec::new();
     let mut liabilities = Vec::new();
     let mut equity = Vec::new();
-    let mut total_assets = 0.0;
-    let mut total_liabilities = 0.0;
-    let mut total_equity = 0.0;
+    let mut total_assets: i64 = 0;
+    let mut total_liabilities: i64 = 0;
+    let mut total_equity: i64 = 0;
     for account in &ctx.accounts {
         let code = account["data"]["code"].as_str().unwrap_or_default();
         let account_type = account["data"]["account_type"].as_str().unwrap_or_default();
-        let balance = balance_by_account.get(code).copied().unwrap_or(0.0);
+        let balance = balance_by_account.get(code).copied().unwrap_or(0);
         let amount = if matches!(account_type, "asset") {
             balance
         } else {
             -balance
         };
-        if amount.abs() < BALANCE_EPS {
+        if amount == 0 {
             continue;
         }
         let row = json!({ "account": code, "amount": amount });
