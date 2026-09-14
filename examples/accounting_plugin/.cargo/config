@@ -1,0 +1,6 @@
+# Обёртка линкера для wasm32-unknown-unknown.
+# Глобальный ~/.cargo/config добавляет `-fuse-ld=lld` (восстановимый), который
+# rust-lld для wasm-цели не понимает. Обёртка отбрасывает `-fuse-ld=*` и
+# вызывает настоящий rust-lld из sysroot.
+[target.wasm32-unknown-unknown]
+linker = ".cargo/lld-wrapper.sh"
