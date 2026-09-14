@@ -538,11 +538,11 @@ mod tests {
     }
 
     /// Памятный репозиторий метаданных для тестов оркестратора: хранит
-    /// схемы по коду типа сущности и покрывает только пути, реально
+    /// схемы по ключу `(company_id, code)` и покрывает только пути, реально
     /// используемые `TransactionOrchestrator` (`get_entity_type_by_code`,
     /// `get_schema`). Остальные методы — заглушки на `NotFound`.
     struct MemMetadataRepo {
-        schemas: RwLock<HashMap<String, EntitySchema>>,
+        schemas: RwLock<HashMap<(String, String), EntitySchema>>,
     }
 
     impl MemMetadataRepo {
@@ -553,8 +553,8 @@ mod tests {
         }
 
         async fn seed(&self, schema: EntitySchema) {
-            let code = schema.entity_type.code.clone();
-            self.schemas.write().await.insert(code, schema);
+            let key = (schema.entity_type.company_id.clone(), schema.entity_type.code.clone());
+            self.schemas.write().await.insert(key, schema);
         }
     }
 
@@ -568,10 +568,10 @@ mod tests {
             schema: &EntitySchema,
             _events: &[Event],
         ) -> BoxFuture<'_, Result<(), DomainError>> {
-            let code = schema.entity_type.code.clone();
+            let key = (schema.entity_type.company_id.clone(), schema.entity_type.code.clone());
             let schema = schema.clone();
             Box::pin(async move {
-                self.schemas.write().await.insert(code, schema);
+                self.schemas.write().await.insert(key, schema);
                 Ok(())
             })
         }
@@ -580,16 +580,17 @@ mod tests {
         }
         fn get_entity_type_by_code(
             &self,
-            _company_id: &str,
+            company_id: &str,
             code: &str,
         ) -> BoxFuture<'_, Result<EntityType, DomainError>> {
-            let code = code.to_string();
+            let key = (company_id.to_string(), code.to_string());
+            let not_found = DomainError::NotFound(format!("EntityType '{code}'"));
             Box::pin(async move {
                 let schemas = self.schemas.read().await;
                 schemas
-                    .get(&code)
+                    .get(&key)
                     .map(|s| s.entity_type.clone())
-                    .ok_or_else(|| DomainError::NotFound(format!("EntityType '{code}'")))
+                    .ok_or(not_found)
             })
         }
         fn list_entity_types(&self) -> BoxFuture<'_, Result<Vec<EntityType>, DomainError>> {
@@ -610,25 +611,26 @@ mod tests {
             schema: &EntitySchema,
             _events: &[Event],
         ) -> BoxFuture<'_, Result<(), DomainError>> {
-            let code = schema.entity_type.code.clone();
+            let key = (schema.entity_type.company_id.clone(), schema.entity_type.code.clone());
             let schema = schema.clone();
             Box::pin(async move {
-                self.schemas.write().await.insert(code, schema);
+                self.schemas.write().await.insert(key, schema);
                 Ok(())
             })
         }
         fn get_schema(
             &self,
-            _company_id: &str,
+            company_id: &str,
             entity_type: &str,
         ) -> BoxFuture<'_, Result<EntitySchema, DomainError>> {
-            let entity_type = entity_type.to_string();
+            let key = (company_id.to_string(), entity_type.to_string());
+            let not_found = DomainError::NotFound(format!("Schema '{entity_type}'"));
             Box::pin(async move {
                 let schemas = self.schemas.read().await;
                 schemas
-                    .get(&entity_type)
+                    .get(&key)
                     .cloned()
-                    .ok_or_else(|| DomainError::NotFound(format!("Schema '{entity_type}'")))
+                    .ok_or(not_found)
             })
         }
     }
@@ -1057,7 +1059,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let _ = orch.commit(handle).await.unwrap();
+        orch.commit(handle).await.unwrap();
 
         let stored = repo.all().await;
         assert_eq!(stored.len(), 1, "пачка должна вставить ровно один объект");
@@ -1069,4 +1071,104 @@ mod tests {
         assert_eq!(obj.data.get("code").and_then(Value::as_str), Some("10.01"));
         assert_eq!(obj.data.get("name").and_then(Value::as_str), Some("Касса"));
     }
+
+    /// Сеет схему типа сущности "account" (обязательное поле "code",
+    /// initial-стадия "active") за указанную компанию.
+    async fn seed_account_schema(metadata: &Arc<MemMetadataRepo>, company_id: &str) {
+        let now = Utc::now();
+        metadata
+            .seed(EntitySchema {
+                entity_type: EntityType {
+                    id: Uuid::new_v4(),
+                    code: "account".to_string(),
+                    name: "Счёт".to_string(),
+                    kind: ObjectKind::Catalog,
+                    company_id: company_id.to_string(),
+                    metadata_version: 1,
+                    is_system: false,
+                    created_at: now,
+                    updated_at: now,
+                },
+                fields: vec![EntityField {
+                    id: Uuid::new_v4(),
+                    entity_type: "account".to_string(),
+                    code: "code".to_string(),
+                    label: "Код".to_string(),
+                    data_type: FieldType::String,
+                    required: true,
+                    is_unique: false,
+                    is_indexed: true,
+                    options: json!({}),
+                    is_system: false,
+                    order: 1,
+                }],
+                states: vec![EntityState {
+                    id: Uuid::new_v4(),
+                    entity_type: "account".to_string(),
+                    code: "active".to_string(),
+                    label: "Активен".to_string(),
+                    color: None,
+                    is_initial: true,
+                    is_final: false,
+                }],
+                transitions: vec![],
+                forms: vec![],
+                actions: vec![],
+                relations: vec![],
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn object_create_invalid_data_rejected_and_batch_rolled_back() {
+        let repo = MemObjectRepo::new();
+        let metadata = mem_metadata();
+        seed_account_schema(&metadata, "c1").await;
+        let orch = TransactionOrchestrator::new(repo.clone(), metadata);
+
+        let (handle, _) = orch.begin("bk-9", "c1", None).await.unwrap();
+        let _ = orch
+            .add_op(
+                handle,
+                "object.create",
+                json!({"entity_type": "account", "data": {"name": "Касса"}}),
+            )
+            .await
+            .unwrap();
+        let err = orch.commit(handle).await.unwrap_err();
+        assert!(
+            matches!(err, DomainError::ValidationError(_)),
+            "ожидали ValidationError за отсутствие обязательного поля, получено: {err:?}"
+        );
+
+        let stored = repo.all().await;
+        assert!(stored.is_empty(), "пачка должна откатиться: {stored:?}");
+    }
+
+    #[tokio::test]
+    async fn object_create_foreign_entity_type_rejected() {
+        let repo = MemObjectRepo::new();
+        let metadata = mem_metadata();
+        // Тип сущности принадлежит другой компании, а транзакция идёт за "c1".
+        seed_account_schema(&metadata, "c2").await;
+        let orch = TransactionOrchestrator::new(repo.clone(), metadata);
+
+        let (handle, _) = orch.begin("bk-10", "c1", None).await.unwrap();
+        let _ = orch
+            .add_op(
+                handle,
+                "object.create",
+                json!({"entity_type": "account", "data": {"code": "10.01", "name": "Касса"}}),
+            )
+            .await
+            .unwrap();
+        let err = orch.commit(handle).await.unwrap_err();
+        assert!(
+            matches!(err, DomainError::NotFound(_)),
+            "ожидали NotFound за тип сущности чужой компании, получено: {err:?}"
+        );
+
+        let stored = repo.all().await;
+assert!(stored.is_empty(), "пачка должна откатиться: {stored:?}");
+}
 }
