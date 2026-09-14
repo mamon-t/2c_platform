@@ -113,11 +113,20 @@ fn validate_value(field: &EntityField, value: &serde_json::Value) -> Result<(), 
             .as_i64()
             .map(|_| ())
             .ok_or_else(|| "ожидается целое число".to_string()),
-        FieldType::Money => value
-            .as_f64()
-            .or_else(|| value.as_i64().map(|v| v as f64))
-            .map(|_| ())
-            .ok_or_else(|| "ожидается число".to_string()),
+        FieldType::Money => {
+            // Денежные суммы хранятся целыми копейками; дробные представления
+            // (число с плавающей точкой, строка с разделителем) отклоняются.
+            let is_money = match value {
+                serde_json::Value::Number(n) => n.is_i64() || n.is_u64(),
+                serde_json::Value::String(s) => s.trim().parse::<i128>().is_ok(),
+                _ => false,
+            };
+            if is_money {
+                Ok(())
+            } else {
+                Err("сумма указывается в копейках (целое число)".to_string())
+            }
+        }
         FieldType::Date => {
             let raw = value
                 .as_str()
@@ -305,6 +314,29 @@ mod tests {
         obj.data = json!({ "customer": "not-a-uuid" });
         let err = obj.validate(&fields, &states()).unwrap_err();
         assert!(matches!(err, DomainError::ValidationError(_)));
+    }
+
+    #[test]
+    fn money_accepts_only_integer_kopecks() {
+        let fields = vec![field("sum", FieldType::Money, true, json!({}))];
+
+        let mut obj = base_object();
+        obj.data = json!({ "sum": 12345 });
+        obj.validate(&fields, &states()).unwrap();
+
+        obj.data = json!({ "sum": "12345" });
+        obj.validate(&fields, &states()).unwrap();
+
+        for bad in [
+            json!({ "sum": 123.45 }),
+            json!({ "sum": "123.45" }),
+            json!({ "sum": "abc" }),
+            json!({ "sum": true }),
+        ] {
+            obj.data = bad;
+            let err = obj.validate(&fields, &states()).unwrap_err();
+            assert!(matches!(err, DomainError::ValidationError(_)));
+        }
     }
 
     #[test]

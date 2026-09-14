@@ -6,6 +6,7 @@ pub mod error;
 pub mod event;
 pub mod metadata;
 pub mod module;
+pub mod money;
 pub mod object;
 pub mod password;
 pub mod permission;
@@ -25,6 +26,7 @@ pub use metadata::{
     EntityAction, EntityField, EntityForm, EntityKind, EntityRelation, EntityState, EntityTransition,
     EntityType, FieldType, OnDelete, RelationKind,
 };
+pub use money::Money;
 pub use module::{
     CompanyModule, CompanyModulePayload, ModuleLifecyclePayload, ModuleRecord, ModuleState,
     PluginCallContext,
