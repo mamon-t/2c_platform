@@ -753,6 +753,52 @@ impl ExtismWasmHost {
 
         let shared = self.shared.clone();
         funcs.push(Function::new(
+            "get_entity_type_by_code",
+            vec![PTR],
+            vec![PTR],
+            UserData::new(()),
+            move |plugin, inputs, outputs, _ud| {
+                host_fn_dispatch(
+                    plugin,
+                    inputs,
+                    outputs,
+                    "get_entity_type_by_code",
+                    Some("metadata.read"),
+                    |ctx, args| {
+                        let code = args.first().cloned().unwrap_or_default();
+                        if code.is_empty() {
+                            return Err(envelope_err(
+                                "INVALID_ACTION",
+                                "get_entity_type_by_code: пустой code",
+                            ));
+                        }
+                        let metadata = shared.metadata_module();
+                        let company_id = ctx.company_id.clone();
+                        block_on_db(
+                            &shared,
+                            ctx,
+                            "get_entity_type_by_code".to_string(),
+                            async move {
+                                let entity_type = metadata
+                                    .get_entity_type_by_code(&company_id, &code)
+                                    .await?;
+                                Ok(envelope_ok(json!({
+                                    "id": entity_type.id,
+                                    "code": entity_type.code,
+                                    "name": entity_type.name,
+                                    "kind": entity_type.kind,
+                                })))
+                            },
+                        )
+                    },
+                );
+                Ok(())
+            },
+        )
+        .with_namespace(NS_HOST));
+
+        let shared = self.shared.clone();
+        funcs.push(Function::new(
             "emit_event",
             vec![PTR, PTR, PTR],
             vec![PTR],

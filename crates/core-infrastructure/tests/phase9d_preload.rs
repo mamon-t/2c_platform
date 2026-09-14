@@ -71,7 +71,7 @@ async fn setup() -> Env {
     let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
     users.ensure_schema().await.unwrap();
 
-    let transactions = core_application::TransactionOrchestrator::new(objects.clone());
+    let transactions = core_application::TransactionOrchestrator::new(objects.clone(), metadata.clone());
     let scripts = Arc::new(SurrealScriptRepository::new(db.clone()));
     scripts.ensure_schema().await.unwrap();
     let script_engine = Arc::new(

@@ -285,10 +285,19 @@ impl ObjectRepository for SurrealObjectRepository {
                     let mut stored_objects = Vec::with_capacity(ops.len());
                     let mut all_events = Vec::new();
                     for (obj, events) in &ops {
-                        let current = load_object(&txn, &obj.id).await?;
-                        current_version_checked(&current, obj.version)?;
+                        // Вставка новой записи: объект отсутствует (NotFound) и
+                        // помечен маркером версии 0 (операция orchestrator
+                        // `object.create`). Иначе — обычное обновление с OCC.
+                        let current = match load_object(&txn, &obj.id).await {
+                            Ok(current) => {
+                                current_version_checked(&current, obj.version)?;
+                                Some(current)
+                            }
+                            Err(DomainError::NotFound(_)) if obj.version == 0 => None,
+                            Err(e) => return Err(e),
+                        };
                         let mut stored = obj.clone();
-                        stored.version = current.version + 1;
+                        stored.version = current.as_ref().map(|c| c.version + 1).unwrap_or(1);
                         write_object(&txn, &stored).await?;
                         write_snapshot(&txn, &stored).await?;
                         stored_objects.push(stored);

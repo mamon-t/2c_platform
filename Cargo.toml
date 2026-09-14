@@ -9,6 +9,7 @@ members = [
 ]
 exclude = [
     "examples/hello_plugin",
+    "examples/accounting_plugin",
 ]
 
 [workspace.package]

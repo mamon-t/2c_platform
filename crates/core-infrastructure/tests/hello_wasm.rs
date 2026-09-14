@@ -53,7 +53,7 @@ async fn host() -> (ExtismWasmHost, Surreal<Any>, PathBuf) {
     let events = Arc::new(core_infrastructure::SurrealEventStore::new(db.clone()));
     let users = Arc::new(core_infrastructure::SurrealUserRepository::new(db.clone()));
     let audit = Arc::new(core_infrastructure::SurrealAuditRepository::new(db.clone()));
-    let transactions = core_application::TransactionOrchestrator::new(objects.clone());
+    let transactions = core_application::TransactionOrchestrator::new(objects.clone(), metadata.clone());
     let script_engine = Arc::new(
         core_infrastructure::RhaiScriptEngine::new(core_infrastructure::rhai_core_api::CoreApiShared {
             store: events.clone(),

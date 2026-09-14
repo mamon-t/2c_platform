@@ -112,6 +112,11 @@ pub struct ManifestCommand {
     /// Если не указано — команда требует глобального права `module.execute`.
     #[serde(default)]
     pub required_permission: Option<String>,
+    /// Имя экспортируемой WASM-функции. Если не указано — совпадает с `code`.
+    /// Позволяет держать человекочитаемые коды с точками (`account.create`),
+    /// а WASM-экспорт называть валидным Rust-идентификатором (`account_create`).
+    #[serde(default)]
+    pub function: Option<String>,
 }
 
 /// Политика доступа модуля (становится `PermissionPolicy` по коду).
@@ -159,6 +164,10 @@ pub struct ManifestField {
     pub kind: String,
     #[serde(default)]
     pub required: bool,
+    /// Допустимые значения для полей типа `enum`; пустой список (по умолчанию)
+    /// означает, что поле хранит не enum-опции в схеме.
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 /// Ресурс модуля (печатная форма).
@@ -409,12 +418,14 @@ mod tests {
                 name: "A".to_string(),
                 description: None,
                 required_permission: None,
+                function: None,
             },
             ManifestCommand {
                 code: "greet".to_string(),
                 name: "B".to_string(),
                 description: None,
                 required_permission: None,
+                function: None,
             },
         ];
         assert!(m.validate().is_err());

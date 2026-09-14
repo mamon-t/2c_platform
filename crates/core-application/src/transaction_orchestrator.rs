@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use crate::ports::ObjectRepository;
+use crate::ports::{MetadataRepository, ObjectRepository};
 
 /// TTL активной транзакции: раньше пачки считаются «зависшими» и вычищаются GC.
 const TX_TTL: Duration = Duration::from_secs(5 * 60);
@@ -72,17 +72,23 @@ pub struct GcReport {
 pub struct TransactionOrchestrator {
     active_transactions: RwLock<HashMap<Uuid, ActiveTransaction>>,
     object_repo: Arc<dyn ObjectRepository>,
+    metadata: Arc<dyn MetadataRepository>,
 }
 
 impl TransactionOrchestrator {
     /// Создаёт оркестратор и, если вызван внутри tokio-runtime, запускает
     /// фоновую задачу сборщика протухших транзакций (60 c, TTL 5 минут).
     /// Вне runtime GC пропускается — его можно отработать вручную через
-    /// `prune_expired`.
-    pub fn new(object_repo: Arc<dyn ObjectRepository>) -> Arc<Self> {
+    /// `prune_expired`. `metadata` нужен для операции `object.create`:
+    /// раскрытия кода типа сущности в схему и валидации данных перед вставкой.
+    pub fn new(
+        object_repo: Arc<dyn ObjectRepository>,
+        metadata: Arc<dyn MetadataRepository>,
+    ) -> Arc<Self> {
         let orch = Arc::new(Self {
             active_transactions: RwLock::new(HashMap::new()),
             object_repo,
+            metadata,
         });
         if let Ok(handle) = Handle::try_current() {
             let weak = Arc::downgrade(&orch);
@@ -159,8 +165,9 @@ impl TransactionOrchestrator {
     }
 
     /// Добавляет операцию в пачку. `op_type` валидируется сразу: допустимы
-    /// `object.post`, `object.cancel` и `test.noop`; неизвестный тип отклоняется
-    /// немедленно (`DomainError::ValidationError` → `INVALID_ACTION`).
+    /// `object.post`, `object.cancel`, `object.create` и `test.noop`;
+    /// неизвестный тип отклоняется немедленно
+    /// (`DomainError::ValidationError` → `INVALID_ACTION`).
     ///
     /// # Errors
     ///
@@ -172,7 +179,10 @@ impl TransactionOrchestrator {
         op_type: &str,
         params: Value,
     ) -> Result<Uuid, DomainError> {
-        if !matches!(op_type, "object.post" | "object.cancel" | "test.noop") {
+        if !matches!(
+            op_type,
+            "object.post" | "object.cancel" | "object.create" | "test.noop"
+        ) {
             return Err(DomainError::ValidationError(format!(
                 "Неизвестная операция транзакции '{op_type}'"
             )));
@@ -248,6 +258,16 @@ impl TransactionOrchestrator {
                                 "id": obj.id,
                                 "version": obj.version + 1,
                                 "state": target,
+                            });
+                            batch.push((obj, vec![event]));
+                            result
+                        }
+                        "object.create" => {
+                            let (obj, event) = self.prepare_object_create(&tx, &params).await?;
+                            let result = json!({
+                                "id": obj.id,
+                                "version": 1,
+                                "state": obj.state,
                             });
                             batch.push((obj, vec![event]));
                             result
@@ -337,6 +357,88 @@ impl TransactionOrchestrator {
         Ok((obj, event))
     }
 
+    /// Готовит объект для операции `object.create`: раскрывает код типа
+    /// сущности в схему компании (поля и состояния), строит объект с
+    /// `version == 0` (маркер вставки, `update_batch` запишет его как v1),
+    /// валидирует `data` по декларации полей и формирует событие `object.created`.
+    ///
+    /// # Errors
+    ///
+    /// `ValidationError` при отсутствии обязательных параметров, неизвестного
+    /// типа сущности или нарушении декларации полей; ошибки репозитория
+    /// метаданных пробрасываются как есть.
+    async fn prepare_object_create(
+        &self,
+        tx: &ActiveTransaction,
+        params: &Value,
+    ) -> Result<(Object, Event), DomainError> {
+        let code = params
+            .get("entity_type")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                DomainError::ValidationError(
+                    "Операция object.create: нет обязательного поля 'entity_type'".to_string(),
+                )
+            })?;
+        let data = params.get("data").cloned().unwrap_or(Value::Null);
+        if !data.is_object() {
+            return Err(DomainError::ValidationError(format!(
+                "Операция object.create: поле 'data' должно быть объектом, получено: {data}"
+            )));
+        }
+        let entity_type = self.metadata.get_entity_type_by_code(&tx.company_id, code).await?;
+        let schema = self
+            .metadata
+            .get_schema(&entity_type.company_id, &entity_type.code)
+            .await?;
+        let actor_login = tx
+            .actor
+            .as_ref()
+            .map(|a| a.login.clone())
+            .unwrap_or_else(|| "system".to_string());
+        let now = Utc::now();
+        let mut obj = Object {
+            id: Uuid::new_v4(),
+            entity_type: entity_type.code.clone(),
+            kind: entity_type.kind,
+            company_id: tx.company_id.clone(),
+            state: String::new(),
+            data,
+            computed: json!({}),
+            number: None,
+            date: None,
+            parent_id: None,
+            version: 0,
+            created_by: actor_login.clone(),
+            updated_by: actor_login,
+            created_at: now,
+            updated_at: now,
+        };
+        obj.state = schema
+            .states
+            .iter()
+            .find(|s| s.is_initial)
+            .map(|s| s.code.clone())
+            .unwrap_or_else(|| "draft".to_string());
+        obj.validate(&schema.fields, &schema.states)?;
+
+        let event = Event {
+            id: Uuid::new_v4(),
+            stream_type: StreamType::Object,
+            stream_id: obj.id.to_string(),
+            event_type: "object.created".to_string(),
+            version: 0,
+            payload: json!(obj),
+            metadata: tx.actor.clone().unwrap_or_else(ActorSnapshot::system),
+            company_id: tx.company_id.clone(),
+            correlation_id: Uuid::new_v4().to_string(),
+            causation_id: None,
+            occurred_at: now,
+        };
+        Ok((obj, event))
+    }
+
     /// Резолвит `$ref`-ссылки вида `{"$ref": "<op_id>.<dot.path>"}` в значение
     /// из результата ранее выполненной операции. Заменяется весь узел, после
     /// чего резолвинг рекурсивно продолжается внутри подставленного значения.
@@ -409,7 +511,8 @@ impl TransactionOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::BoxFuture;
+    use crate::ports::{BoxFuture, EntitySchema};
+    use core_domain::metadata::{EntityField, EntityState, EntityType, FieldType};
     use core_domain::object::{ObjectKind, ObjectSnapshot};
 
     /// Памятный репозиторий объектов для тестов оркестратора: имитирует OCC
@@ -427,6 +530,106 @@ mod tests {
 
         async fn seed(&self, obj: Object) {
             self.objects.write().await.insert(obj.id, obj);
+        }
+
+        async fn all(&self) -> Vec<Object> {
+            self.objects.read().await.values().cloned().collect()
+        }
+    }
+
+    /// Памятный репозиторий метаданных для тестов оркестратора: хранит
+    /// схемы по коду типа сущности и покрывает только пути, реально
+    /// используемые `TransactionOrchestrator` (`get_entity_type_by_code`,
+    /// `get_schema`). Остальные методы — заглушки на `NotFound`.
+    struct MemMetadataRepo {
+        schemas: RwLock<HashMap<String, EntitySchema>>,
+    }
+
+    impl MemMetadataRepo {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                schemas: RwLock::new(HashMap::new()),
+            })
+        }
+
+        async fn seed(&self, schema: EntitySchema) {
+            let code = schema.entity_type.code.clone();
+            self.schemas.write().await.insert(code, schema);
+        }
+    }
+
+    fn mem_metadata() -> Arc<MemMetadataRepo> {
+        MemMetadataRepo::new()
+    }
+
+    impl MetadataRepository for MemMetadataRepo {
+        fn create_entity_type(
+            &self,
+            schema: &EntitySchema,
+            _events: &[Event],
+        ) -> BoxFuture<'_, Result<(), DomainError>> {
+            let code = schema.entity_type.code.clone();
+            let schema = schema.clone();
+            Box::pin(async move {
+                self.schemas.write().await.insert(code, schema);
+                Ok(())
+            })
+        }
+        fn get_entity_type(&self, _id: &Uuid) -> BoxFuture<'_, Result<EntityType, DomainError>> {
+            Box::pin(async move { Err(DomainError::NotFound("entity_type".to_string())) })
+        }
+        fn get_entity_type_by_code(
+            &self,
+            _company_id: &str,
+            code: &str,
+        ) -> BoxFuture<'_, Result<EntityType, DomainError>> {
+            let code = code.to_string();
+            Box::pin(async move {
+                let schemas = self.schemas.read().await;
+                schemas
+                    .get(&code)
+                    .map(|s| s.entity_type.clone())
+                    .ok_or_else(|| DomainError::NotFound(format!("EntityType '{code}'")))
+            })
+        }
+        fn list_entity_types(&self) -> BoxFuture<'_, Result<Vec<EntityType>, DomainError>> {
+            Box::pin(async move {
+                let mut types: Vec<EntityType> = self
+                    .schemas
+                    .read()
+                    .await
+                    .values()
+                    .map(|s| s.entity_type.clone())
+                    .collect();
+                types.sort_by(|a, b| a.code.cmp(&b.code));
+                Ok(types)
+            })
+        }
+        fn update_entity_type(
+            &self,
+            schema: &EntitySchema,
+            _events: &[Event],
+        ) -> BoxFuture<'_, Result<(), DomainError>> {
+            let code = schema.entity_type.code.clone();
+            let schema = schema.clone();
+            Box::pin(async move {
+                self.schemas.write().await.insert(code, schema);
+                Ok(())
+            })
+        }
+        fn get_schema(
+            &self,
+            _company_id: &str,
+            entity_type: &str,
+        ) -> BoxFuture<'_, Result<EntitySchema, DomainError>> {
+            let entity_type = entity_type.to_string();
+            Box::pin(async move {
+                let schemas = self.schemas.read().await;
+                schemas
+                    .get(&entity_type)
+                    .cloned()
+                    .ok_or_else(|| DomainError::NotFound(format!("Schema '{entity_type}'")))
+            })
         }
     }
 
@@ -484,23 +687,37 @@ mod tests {
             Box::pin(async move {
                 let mut guard = self.objects.write().await;
                 for (obj, _events) in &ops {
-                    let current = guard.get(&obj.id).ok_or_else(|| {
-                        DomainError::NotFound(format!("{} not found", obj.id))
-                    })?;
-                    if obj.version != current.version {
-                        return Err(DomainError::VersionConflict {
-                            expected: obj.version,
-                            actual: current.version,
-                        });
+                    match guard.get(&obj.id) {
+                        Some(current) => {
+                            if obj.version != current.version {
+                                return Err(DomainError::VersionConflict {
+                                    expected: obj.version,
+                                    actual: current.version,
+                                });
+                            }
+                        }
+                        None if obj.version == 0 => {}
+                        None => {
+                            return Err(DomainError::NotFound(format!("{} not found", obj.id)));
+                        }
                     }
                 }
                 let mut stored = Vec::new();
                 for (obj, _events) in &ops {
-                    let mut current = guard.get(&obj.id).cloned().unwrap();
-                    current.version += 1;
-                    current.state = obj.state.clone();
-                    current.updated_by = obj.updated_by.clone();
-                    current.updated_at = obj.updated_at;
+                    let current = match guard.get(&obj.id).cloned() {
+                        Some(mut cur) => {
+                            cur.version += 1;
+                            cur.state = obj.state.clone();
+                            cur.updated_by = obj.updated_by.clone();
+                            cur.updated_at = obj.updated_at;
+                            cur
+                        }
+                        None => {
+                            let mut created = obj.clone();
+                            created.version = 1;
+                            created
+                        }
+                    };
                     guard.insert(obj.id, current.clone());
                     stored.push(current);
                 }
@@ -594,7 +811,7 @@ mod tests {
         let repo = MemObjectRepo::new();
         let obj = sample_object(Uuid::new_v4(), "c1", 1, "draft");
         repo.seed(obj.clone()).await;
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
 
         let (handle, count) = orch.begin("bk-1", "c1", None).await.unwrap();
         assert_eq!(count, 0);
@@ -616,7 +833,7 @@ mod tests {
     #[tokio::test]
     async fn begin_with_same_business_key_is_idempotent() {
         let repo = MemObjectRepo::new();
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
 
         let (h1, c1) = orch.begin("bk-x", "c1", None).await.unwrap();
         let _ = orch.add_op(h1, "test.noop", json!({"a": 1})).await.unwrap();
@@ -637,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_op_type_rejected_immediately() {
         let repo = MemObjectRepo::new();
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
         let (handle, _) = orch.begin("bk-2", "c1", None).await.unwrap();
         let err = orch
             .add_op(handle, "accounting.post", json!({}))
@@ -649,7 +866,7 @@ mod tests {
     #[tokio::test]
     async fn noop_result_echoes_params_for_ref() {
         let repo = MemObjectRepo::new();
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
         let (handle, _) = orch.begin("bk-3", "c1", None).await.unwrap();
         let op1 = orch
             .add_op(handle, "test.noop", json!({"target_id": "uuid-123"}))
@@ -670,7 +887,7 @@ mod tests {
     #[tokio::test]
     async fn ref_to_unknown_operation_fails_and_keeps_handle_active() {
         let repo = MemObjectRepo::new();
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
         let (handle, _) = orch.begin("bk-5", "c1", None).await.unwrap();
         let ghost = Uuid::new_v4();
         let _ = orch
@@ -697,7 +914,7 @@ mod tests {
     #[tokio::test]
     async fn ref_resolves_nested_path_and_depth_limit() {
         let repo = MemObjectRepo::new();
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
 
         let id_a: Uuid = "00000000-0000-0000-0000-00000000000a".parse().unwrap();
         let operations = vec![op(id_a, json!({"b": {"c": 42}}))];
@@ -734,7 +951,7 @@ mod tests {
         let repo = MemObjectRepo::new();
         let obj = sample_object(Uuid::new_v4(), "other-co", 1, "draft");
         repo.seed(obj.clone()).await;
-        let orch = TransactionOrchestrator::new(repo);
+        let orch = TransactionOrchestrator::new(repo, mem_metadata());
         let (handle, _) = orch.begin("bk-6", "c1", None).await.unwrap();
         let _ = orch
             .add_op(handle, "object.post", json!({"id": obj.id}))
@@ -749,7 +966,7 @@ mod tests {
         let repo = MemObjectRepo::new();
         let obj = sample_object(Uuid::new_v4(), "c1", 1, "draft");
         repo.seed(obj.clone()).await;
-        let orch = TransactionOrchestrator::new(repo.clone());
+        let orch = TransactionOrchestrator::new(repo.clone(), mem_metadata());
 
         let (handle, _) = orch.begin("bk-7", "c1", None).await.unwrap();
         // Внешний писатель доводит объект до v2.
@@ -780,5 +997,76 @@ mod tests {
             .await
             .contains_key(&handle);
         assert!(still_active, "handle должен остаться активным после конфликта");
+    }
+
+    #[tokio::test]
+    async fn object_create_op_inserts_new_object_in_batch() {
+        let repo = MemObjectRepo::new();
+        let metadata = mem_metadata();
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        metadata
+            .seed(EntitySchema {
+                entity_type: EntityType {
+                    id,
+                    code: "account".to_string(),
+                    name: "Счёт".to_string(),
+                    kind: ObjectKind::Catalog,
+                    company_id: "c1".to_string(),
+                    metadata_version: 1,
+                    is_system: false,
+                    created_at: now,
+                    updated_at: now,
+                },
+                fields: vec![EntityField {
+                    id: Uuid::new_v4(),
+                    entity_type: "account".to_string(),
+                    code: "code".to_string(),
+                    label: "Код".to_string(),
+                    data_type: FieldType::String,
+                    required: true,
+                    is_unique: false,
+                    is_indexed: true,
+                    options: json!({}),
+                    is_system: false,
+                    order: 1,
+                }],
+                states: vec![EntityState {
+                    id: Uuid::new_v4(),
+                    entity_type: "account".to_string(),
+                    code: "active".to_string(),
+                    label: "Активен".to_string(),
+                    color: None,
+                    is_initial: true,
+                    is_final: false,
+                }],
+                transitions: vec![],
+                forms: vec![],
+                actions: vec![],
+                relations: vec![],
+            })
+            .await;
+        let orch = TransactionOrchestrator::new(repo.clone(), metadata);
+
+        let (handle, _) = orch.begin("bk-8", "c1", None).await.unwrap();
+        let _ = orch
+            .add_op(
+                handle,
+                "object.create",
+                json!({"entity_type": "account", "data": {"code": "10.01", "name": "Касса"}}),
+            )
+            .await
+            .unwrap();
+        let _ = orch.commit(handle).await.unwrap();
+
+        let stored = repo.all().await;
+        assert_eq!(stored.len(), 1, "пачка должна вставить ровно один объект");
+        let obj = &stored[0];
+        assert_eq!(obj.version, 1, "вставленный объект получает версию 1");
+        assert_eq!(obj.state, "active", "state из initial-стадии схемы");
+        assert_eq!(obj.company_id, "c1");
+        assert_eq!(obj.entity_type, "account");
+        assert_eq!(obj.data.get("code").and_then(Value::as_str), Some("10.01"));
+        assert_eq!(obj.data.get("name").and_then(Value::as_str), Some("Касса"));
     }
 }

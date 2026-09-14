@@ -172,8 +172,12 @@ impl ModuleManager {
         let code = manifest.code.clone();
         let module_capabilities = manifest.capabilities.clone();
         for command in &manifest.commands {
-            let fname = command.code.clone();
-            let name = format!("plugin.{code}.{fname}");
+            let command_code = command.code.clone();
+            let fname = command
+                .function
+                .clone()
+                .unwrap_or_else(|| command.code.clone());
+            let name = format!("plugin.{code}.{command_code}");
             let required_permission = command.required_permission.clone();
             let modules = self.modules.clone();
             let host = self.host.clone();
@@ -633,7 +637,11 @@ fn build_schema(
             required: f.required,
             is_unique: false,
             is_indexed: false,
-            options: json!({}),
+            options: if f.options.is_empty() {
+                json!({})
+            } else {
+                json!(f.options)
+            },
             is_system: true,
             order: 0,
         })

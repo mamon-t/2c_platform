@@ -96,7 +96,8 @@ async fn main() -> Result<()> {
             PathBuf::from(home).join(".cache/2c-platform/modules")
         },
     );
-    let tx_orchestrator = core_application::TransactionOrchestrator::new(objects.clone());
+    let tx_orchestrator =
+        core_application::TransactionOrchestrator::new(objects.clone(), metadata.clone());
     // Фаза 13: скриптовый движок Rhai (песочница + Core API через shared-зависимости).
     let script_engine = Arc::new(
         core_infrastructure::RhaiScriptEngine::new(
