@@ -194,6 +194,28 @@ async fn plugin_command_executes_only_for_enabled_company() {
 }
 
 #[tokio::test]
+async fn manifest_command_with_function_maps_to_wasm_export() {
+    let env = setup().await;
+    env.manager.install("hello", HELLO_WASM, "comp1").await.unwrap();
+
+    // Команда plugin.hello.echo объявлена в манифесте с function = "greet":
+    // registry-ключ формируется из code, а вызов идёт на WASM-экспорт function.
+    let out = env
+        .app
+        .commands
+        .execute(
+            "plugin.hello.echo",
+            json!({ "company_id": "comp1", "input": "мир" }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        out["output"].as_str().unwrap().contains("Привет"),
+        "ожидали результат экспорта greet, получено: {out}"
+    );
+}
+
+#[tokio::test]
 async fn enable_for_second_company_then_uninstall() {
     let env = setup().await;
     env.manager.install("hello", HELLO_WASM, "comp1").await.unwrap();

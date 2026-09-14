@@ -449,6 +449,69 @@ async fn host_8b_envelope_codes_follow_spec() {
 }
 
 #[tokio::test]
+async fn host_ges_entity_type_resolves_by_code_with_capability_gate() {
+    let (h, db, _cache) = host().await;
+    let entity_type_id = seed_greeting_schema(&db).await;
+
+    h.load_module("hello", HELLO_WASM).await.unwrap();
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["metadata.read".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+
+    // Успешный резолв `greeting` по коду → свернутый {id, code, name, kind}.
+    let out = h
+        .call_function("hello", "type_by_code_probe", b"greeting")
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(v["ok"], true, "ожидается успешный конверт, получено: {text}");
+    assert_eq!(
+        v["data"]["id"].as_str().unwrap(),
+        entity_type_id.to_string(),
+        "id типа по коду не совпал: {text}"
+    );
+    assert_eq!(v["data"]["code"].as_str().unwrap(), "greeting");
+    assert!(v["data"]["name"].is_string(), "ожидается name: {text}");
+    assert!(v["data"]["kind"].is_string(), "ожидается kind: {text}");
+
+    // Несуществующий код → NOT_FOUND.
+    let out = h
+        .call_function("hello", "type_by_code_probe", b"no_such_code")
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"NOT_FOUND\""),
+        "несуществующий код должен дать NOT_FOUND, получено: {text}"
+    );
+
+    // Без capability metadata.read → CAPABILITY_DENIED (гейт по способностям).
+    h.set_call_context(HostCallCtx {
+        module_code: "hello".to_string(),
+        company_id: "comp1".to_string(),
+        actor: None,
+        capabilities: HashSet::from(["objects.read".to_string()]),
+        settings: Value::Null,
+    })
+    .await;
+    let out = h
+        .call_function("hello", "type_by_code_probe", b"greeting")
+        .await
+        .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("\"code\":\"CAPABILITY_DENIED\""),
+        "без metadata.read должен быть CAPABILITY_DENIED, получено: {text}"
+    );
+}
+
+#[tokio::test]
 async fn host_8b_update_object_applies_occ_and_reports_conflict() {
     let (h, db, _cache) = host().await;
     let entity_type_id = seed_greeting_schema(&db).await;

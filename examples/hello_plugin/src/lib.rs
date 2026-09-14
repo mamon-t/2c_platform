@@ -8,7 +8,9 @@
 //! и `stubs_probe()` (заглушки уведомлений и подписей), а также пробу подфазы
 //! 9d `users_probe()` (`users_by_role`). Собирается отдельным
 //! крейтом с целью `wasm32-unknown-unknown` и вне workspace:
-//! `cargo build --release --target wasm32-unknown-unknown`.
+//! `cargo build --release --target wasm32-unknown-unknown`. Экспортирует также
+//! `type_by_code_probe()` (резолв типа сущности по коду) и демонстрирует
+//! поле `function` манифеста (команда `echo` выполняет экспорт `greet`).
 
 use extism_pdk::{Error, FnResult};
 
@@ -26,6 +28,7 @@ mod host {
         pub fn create_object(entity_type_id: String, data_json: String) -> String;
         pub fn get_object(id: String) -> String;
         pub fn list_objects(entity_type_id: String, limit: String) -> String;
+        pub fn get_entity_type_by_code(code: String) -> String;
         pub fn update_object(id: String, data_json: String, version: String) -> String;
         pub fn emit_event(stream_id: String, event_type: String, payload_json: String) -> String;
         pub fn run_script(source: String, ctx_json: String) -> String;
@@ -68,6 +71,11 @@ pub fn get_info() -> FnResult<String> {
         }, {
             "code": "tx_probe",
             "name": "Проба транзакций"
+        }, {
+            "code": "echo",
+            "name": "Эхо (выполняет функцию greet)",
+            "function": "greet",
+            "required_permission": "hello.greet"
         }],
         "permissions": [{
             "code": "hello.greet",
@@ -158,6 +166,14 @@ pub fn get_probe(id: String) -> FnResult<String> {
 #[extism_pdk::plugin_fn]
 pub fn list_probe(entity_type_id: String) -> FnResult<String> {
     let conv = unsafe { host::list_objects(entity_type_id, "10".to_string())? };
+    Ok(conv)
+}
+
+/// Прозрачная проба `get_entity_type_by_code`: по коду типа сущности через
+/// host-функцию (capability `metadata.read`). Возвращает конверт хоста как есть.
+#[extism_pdk::plugin_fn]
+pub fn type_by_code_probe(code: String) -> FnResult<String> {
+    let conv = unsafe { host::get_entity_type_by_code(code)? };
     Ok(conv)
 }
 
