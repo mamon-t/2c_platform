@@ -20,10 +20,14 @@ final schemasProvider = FutureProvider<List<EntityType>>((ref) async {
 });
 
 /// Схема конкретного типа (кэшируется в `MetadataService`).
+///
+/// `company_id` берётся из claims актора и передаётся в `metadata.schema.get`:
+/// без него сервер ищет схему в пустой компании (NOT_FOUND на реальном API).
 final schemaProvider =
     FutureProvider.family<EntitySchema, String>((ref, entityType) async {
   final metadata = ref.watch(metadataServiceProvider);
-  return metadata.fetchSchema(entityType);
+  final companyId = ref.watch(companyIdProvider);
+  return metadata.fetchSchema(entityType, companyId: companyId);
 });
 
 /// Список объектов типа `entityType` (перезапрашивается при invalidate).

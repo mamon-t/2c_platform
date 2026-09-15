@@ -36,7 +36,10 @@ class MetadataService {
   }
 
   /// Запрашивает полную схему типа (`metadata.schema.get`).
-  Future<EntitySchema> fetchSchema(String entityType) async {
+  ///
+  /// Схема скоупится по компании актора: `company_id` берётся из JWT и
+  /// передаётся в wire-запросе (сервер без него ищет по пустой компании).
+  Future<EntitySchema> fetchSchema(String entityType, {String? companyId}) async {
     final cached = _schemaCache[entityType];
     if (cached != null) {
       return cached;
@@ -44,7 +47,7 @@ class MetadataService {
     final payload = await _rpc.queryAny(
       module: 'core',
       action: 'metadata.schema.get',
-      payload: {'code': entityType},
+      payload: {'code': entityType, 'company_id': ?companyId},
     );
     if (payload is! Map) {
       throw const FormatException('metadata.schema.get: ожидался объект');

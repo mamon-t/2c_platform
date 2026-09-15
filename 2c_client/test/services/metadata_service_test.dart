@@ -79,4 +79,27 @@ void main() {
     service.clearCache();
     expect(service.cachedSchema('account'), isNull);
   });
+
+  test('fetchSchema передаёт company_id в wire-запросе', () async {
+    when(
+      () => rpc.queryAny(
+        module: 'core',
+        action: 'metadata.schema.get',
+        payload: const {
+          'code': 'account',
+          'company_id': 'c1',
+        },
+      ),
+    ).thenAnswer((_) async => schemaWire());
+
+    await service.fetchSchema('account', companyId: 'c1');
+
+    verify(
+      () => rpc.queryAny(
+        module: 'core',
+        action: 'metadata.schema.get',
+        payload: const {'code': 'account', 'company_id': 'c1'},
+      ),
+    ).called(1);
+  });
 }
