@@ -201,10 +201,29 @@ roles_created, policies_seeded}); идемпотентность: код-кол�
 уже существует», непустая БД → «Платформа уже инициализирована»; команда
 доступна только системному актору (`requires("system.bootstrap")`, `POST /debug/command`);
 warn при старте если компаний нет; тесты `phase_bootstrap` (6).
-Всего тестов 251.
-**Не начинать Фазы 11–12, 15+** (Flutter, оффлайн, учёт, экспорт, уведомления,
-криптоподпись, диагностика, тесты; SSE остаётся факультативным дополнением к 10c).
-Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`.
+Всего тестов 251 (бэкенд; клиентские — свои).
+**Фаза 11b (Flutter-клиент, SDUI-рендеринг, коммит `302e224`)**: `RpcMessage.payload`
+стал `Object?` (list-команды отдают массив), `queryAny`/`commandAny`;
+модели `entity_schema`/`object`/`navigation_item` (manual fromJson);
+сервисы `MetadataService` (список типов/schema с кэшем) и `ObjectService`
+(list/get/create/update, `company_id` опускается при null через null-aware elements);
+провайдеры `sdui_providers` (companyId из JWT-claims, schema/objects/navigation);
+SDUI-движок `sdui/`: `WidgetRegistry` (статический `instance`; тип-виджет по
+`data_type`, fallback — readonly), виджеты `TextInputField`-базы
+(string/text/integer/money копейки/date/datetime/boolean/enum/reference/array/json),
+`displayValue` для таблиц; экраны `CatalogScreen` (DataTable из полей схемы,
+FAB создание, RefreshIndicator) и `ObjectFormScreen` (create/view/edit,
+обязательные поля, `kind` из схемы, OCC `expected_version`, конфликт →
+AlertDialog, ошибки → SnackBar), роуты `/catalog/:entityType`,
+`/object/:entityType/{new|:id|:id/edit}`; `home_screen` — drawer/тело из
+`module.navigation` (`_NavigationSections`); фейки и роутер-харнесс в
+`test/support`; тестов клиента 92 (34 старых + 58 новых), `flutter analyze` 0,
+`flutter build linux` OK. Подфазы 11b.3–11b.5 закрыты; полировка 11b.6 (тёмная
+тема форм, лоадинги) остаётся опциональной; live-прогон против живого сервера — в журнале.
+**Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
+криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c).
+Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`,
+клиент — `doc/frontend_report.md`.
 
 ## Решения, которые не предлагать заново
 
