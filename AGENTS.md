@@ -217,9 +217,19 @@ FAB создание, RefreshIndicator) и `ObjectFormScreen` (create/view/edit,
 AlertDialog, ошибки → SnackBar), роуты `/catalog/:entityType`,
 `/object/:entityType/{new|:id|:id/edit}`; `home_screen` — drawer/тело из
 `module.navigation` (`_NavigationSections`); фейки и роутер-харнесс в
-`test/support`; тестов клиента 92 (34 старых + 58 новых), `flutter analyze` 0,
-`flutter build linux` OK. Подфазы 11b.3–11b.5 закрыты; полировка 11b.6 (тёмная
-тема форм, лоадинги) остаётся опциональной; live-прогон против живого сервера — в журнале.
+`test/support`; тестов клиента 112 (34 старых + 79 новых), `flutter analyze` 0,
+`flutter build linux` OK. Подфазы 11b.3–11b.6 закрыты (полировка 11b.6 — темы:
+`TomlDocument`-подмножество `core/toml_subset`, `ThemeStore` (каталог
+`~/.config/2cplatform/`, themes/*.toml + `config.toml` `[app] theme`, env
+`2CPLATFORM_CONFIG_DIR` для тестов), `AppTheme`/`BuiltinThemes`, переключатель
+в «Настройках», `DropdownButtonFormField` + персист; встроенные светлая/тёмная
+плюс файловые). Live-верификация Фазы 11 полностью зелёная: ручной RPC-цикл
+(схема требует `company_id` — фикс `7545835`), plus автоматический
+интеграционный прогон `integration_test/sdui_live_test.dart` (-d linux,
+login → разделы → каталог → view/edit → create → OCC-конфликт CONFLICT_ERROR
+→ смена темы) с фиксами клиента: роутер не монтирует защищённые экраны при
+`AuthRestoring`, сетевые провайдеры `sdui_providers` перезапускаются по смене
+сессии (`_authRevision`).
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`,
