@@ -21,9 +21,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (auth is AuthAuthenticated) {
         return atLogin ? '/home' : null;
       }
-      // Восстановление сессии ещё не завершено — оставляем текущий маршрут.
+      // Восстановление сессии ещё не завершено. Не монтируем защищённые
+      // экраны анонимно: иначе сетевые провайдеры успевают закэшировать
+      // PERMISSION_ERROR до реального входа. Показываем /login (спиннер).
       if (auth is AuthRestoring) {
-        return atLogin ? null : null;
+        return atLogin ? null : '/login';
       }
       return atLogin ? null : '/login';
     },

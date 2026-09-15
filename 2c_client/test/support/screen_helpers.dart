@@ -1,12 +1,64 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:twoc_client/models/entity_schema.dart';
 import 'package:twoc_client/models/object.dart';
 import 'package:twoc_client/models/server_error.dart';
+import 'package:twoc_client/providers/app_providers.dart';
 import 'package:twoc_client/providers/sdui_providers.dart';
+import 'package:twoc_client/services/auth_service.dart';
 import 'package:twoc_client/services/object_service.dart';
+import 'package:twoc_client/services/rpc_client.dart';
 
 import 'fixtures.dart';
+
+/// In-memory токен-хранилище для тестов (без libsecret на машине).
+class _MemoryStorage extends FlutterSecureStorage {
+  final Map<String, String> _data = {};
+
+  @override
+  Future<String?> read({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async =>
+      _data[key];
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (value == null) {
+      _data.remove(key);
+    } else {
+      _data[key] = value;
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    _data.remove(key);
+  }
+}
 
 /// Фейковый сервис объектов для экранных тестов (внешняя зависимость RPC
 /// не нужна — все методы возвращают предзаполненные данные).
@@ -83,6 +135,16 @@ List<Override> objectFormOverrides({
 }) {
   final s = schema ?? testSchema();
   return [
+    // Сетевые провайдеры подписаны на authControllerProvider (через
+    // _authRevision); восстанавливаю реальный контроллер, но с пустым
+    // хранилищем — сессия не восстанавливается, не нужен ни libsecret,
+    // ни appConfigProvider.
+    authServiceProvider.overrideWith(
+      (ref) => AuthService(
+        rpcClient: RpcClient(baseUrl: 'http://127.0.0.1:8080'),
+        storage: _MemoryStorage(),
+      ),
+    ),
     schemaProvider.overrideWith((ref, entityType) async => s),
     objectServiceProvider.overrideWithValue(objectService),
     companyIdProvider.overrideWithValue(companyId),
