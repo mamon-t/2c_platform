@@ -70,7 +70,7 @@ _$RpcMessageResponseImpl _$$RpcMessageResponseImplFromJson(
   Map<String, dynamic> json,
 ) => _$RpcMessageResponseImpl(
   id: json['id'] as String,
-  payload: json['payload'] as Map<String, dynamic>,
+  payload: json['payload'],
   $type: json['type'] as String?,
 );
 

@@ -60,7 +60,21 @@ void main() {
       expect(json['type'], 'response');
       final decoded = RpcMessage.fromJson(json);
       expect(decoded, isA<RpcMessageResponse>());
-      expect((decoded as RpcMessageResponse).payload['ok'], true);
+      expect(((decoded as RpcMessageResponse).payload as Map)['ok'], true);
+    });
+
+    test('response с массивным payload (list-команды)', () {
+      const original = RpcMessageResponse(
+        id: '4b',
+        payload: <Object?>[
+          {'id': 'o1'},
+        ],
+      );
+      final json = original.toJson();
+      final decoded = RpcMessage.fromJson(json);
+      expect(decoded, isA<RpcMessageResponse>());
+      final payload = (decoded as RpcMessageResponse).payload as List;
+      expect((payload.first as Map)['id'], 'o1');
     });
 
     test('error', () {

@@ -35,8 +35,45 @@ class RpcClient {
 
   static const Duration _defaultTimeout = Duration(seconds: 30);
 
-  /// Отправляет Command и возвращает `payload` ответа.
+  /// Отправляет Command и возвращает `payload` ответа (объект).
+  ///
+  /// Для ответов, где `payload` — не объект (массив, примитив), используйте
+  /// [`commandAny`]. Здесь вызывается строгий каст к `Map` — для SDUI-команд,
+  /// возвращающих списки, он бросит `TypeError`.
   Future<Map<String, dynamic>> command({
+    required String module,
+    required String action,
+    Map<String, dynamic> payload = const {},
+  }) async {
+    final raw = await commandAny(
+      module: module,
+      action: action,
+      payload: payload,
+    );
+    return raw as Map<String, dynamic>;
+  }
+
+  /// Отправляет Query и возвращает `payload` ответа (объект).
+  ///
+  /// Для ответов, где `payload` — не объект (массив, примитив), используйте
+  /// [`queryAny`].
+  Future<Map<String, dynamic>> query({
+    required String module,
+    required String action,
+    Map<String, dynamic> payload = const {},
+  }) async {
+    final raw = await queryAny(
+      module: module,
+      action: action,
+      payload: payload,
+    );
+    return raw as Map<String, dynamic>;
+  }
+
+  /// Отправляет Command и возвращает сырое значение `payload` (`Map`, `List`,
+  /// примитив — как есть в конверте). Для list-команд (`object.list`,
+  /// `metadata.entity_type.list`) `payload` — массив.
+  Future<Object?> commandAny({
     required String module,
     required String action,
     Map<String, dynamic> payload = const {},
@@ -60,8 +97,8 @@ class RpcClient {
     );
   }
 
-  /// Отправляет Query и возвращает `payload` ответа.
-  Future<Map<String, dynamic>> query({
+  /// Отправляет Query и возвращает сырое значение `payload` (см. [`commandAny`]).
+  Future<Object?> queryAny({
     required String module,
     required String action,
     Map<String, dynamic> payload = const {},

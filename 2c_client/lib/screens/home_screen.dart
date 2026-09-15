@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../models/navigation_item.dart';
 import '../providers/app_providers.dart';
+import '../providers/sdui_providers.dart';
 import '../services/ws_client.dart';
 
-/// Главный экран: индикатор соединения + Drawer (Главная/Настройки/Выход) +
-/// заглушка «Нет установленных модулей» (SDUI-слот для Фазы 11b).
+/// Главный экран: индикатор соединения, Drawer и корневой список разделов
+/// из `module.navigation` (разделы установленных модулей СДУИ).
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -21,6 +23,7 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     final connection = ref.watch(wsConnectionProvider);
+    final navigation = ref.watch(navigationProvider);
 
     final userLabel = auth is AuthAuthenticated
         ? (auth.fullName.isEmpty ? auth.login : auth.fullName)
@@ -63,6 +66,14 @@ class HomeScreen extends ConsumerWidget {
                 ],
               ),
             ),
+            ...navigation.when(
+              data: (modules) => [
+                for (final section in _NavigationSections.sectionsOf(modules))
+                  _sectionTiles(context, section),
+              ],
+              error: (_, _) => <Widget>[],
+              loading: () => <Widget>[],
+            ),
             ListTile(
               leading: const Icon(Icons.home_outlined),
               title: const Text('Главная'),
@@ -82,29 +93,133 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
       ),
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.widgets_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.outline,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Нет установленных модулей',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Здесь появятся рабочие разделы после подключения модулей',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
+      body: navigation.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text('Не удалось загрузить разделы: $e'),
+          ),
+        ),
+        data: (modules) {
+          final sections = _NavigationSections.sectionsOf(modules);
+          if (sections.isEmpty) {
+            return _EmptyModules();
+          }
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              for (final section in sections)
+                _bodySection(context, section),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _sectionTiles(BuildContext context, _NavigationSection section) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              section.title,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
             ),
+          ),
+        ),
+        for (final item in section.items)
+          ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: Text(item.label),
+            onTap: () => context.push('/catalog/${item.entityType}'),
+          ),
+      ],
+    );
+  }
+
+  Widget _bodySection(BuildContext context, _NavigationSection section) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          section.title,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [
+              for (final item in section.items)
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: Text(item.label),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => context.push('/catalog/${item.entityType}'),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+/// Сгруппированная по модулям навигация: заголовок + пункты (`entity_type`).
+class _NavigationSections {
+  static List<_NavigationSection> sectionsOf(List<ModuleNavigation> modules) {
+    return [
+      for (final module in modules)
+        _NavigationSection(
+          title: module.displayName,
+          items: [
+            for (final item in module.navigation)
+              if (item.entityType != null) item,
           ],
         ),
+    ]..removeWhere((s) => s.items.isEmpty);
+  }
+}
+
+class _NavigationSection {
+  const _NavigationSection({required this.title, required this.items});
+
+  final String title;
+  final List<NavigationItem> items;
+}
+
+class _EmptyModules extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.widgets_outlined,
+            size: 64,
+            color: Theme.of(context).colorScheme.outline,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Нет установленных модулей',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Здесь появятся рабочие разделы после подключения модулей',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+          ),
+        ],
       ),
     );
   }

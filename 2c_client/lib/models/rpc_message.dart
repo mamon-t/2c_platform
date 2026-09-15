@@ -28,7 +28,7 @@ sealed class RpcMessage with _$RpcMessage {
 
   const factory RpcMessage.response({
     required String id,
-    required Map<String, dynamic> payload,
+    required Object? payload,
   }) = RpcMessageResponse;
 
   const factory RpcMessage.error({

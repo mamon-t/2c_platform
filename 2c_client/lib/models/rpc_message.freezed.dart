@@ -65,7 +65,7 @@ mixin _$RpcMessage {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -103,7 +103,7 @@ mixin _$RpcMessage {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -141,7 +141,7 @@ mixin _$RpcMessage {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -385,7 +385,7 @@ class _$RpcMessageCommandImpl implements RpcMessageCommand {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -427,7 +427,7 @@ class _$RpcMessageCommandImpl implements RpcMessageCommand {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -469,7 +469,7 @@ class _$RpcMessageCommandImpl implements RpcMessageCommand {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -717,7 +717,7 @@ class _$RpcMessageQueryImpl implements RpcMessageQuery {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -759,7 +759,7 @@ class _$RpcMessageQueryImpl implements RpcMessageQuery {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -801,7 +801,7 @@ class _$RpcMessageQueryImpl implements RpcMessageQuery {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -1031,7 +1031,7 @@ class _$RpcMessageEventBatchImpl implements RpcMessageEventBatch {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -1073,7 +1073,7 @@ class _$RpcMessageEventBatchImpl implements RpcMessageEventBatch {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -1115,7 +1115,7 @@ class _$RpcMessageEventBatchImpl implements RpcMessageEventBatch {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -1219,7 +1219,7 @@ abstract class _$$RpcMessageResponseImplCopyWith<$Res>
   ) = __$$RpcMessageResponseImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({String id, Map<String, dynamic> payload});
+  $Res call({String id, Object? payload});
 }
 
 /// @nodoc
@@ -1235,17 +1235,14 @@ class __$$RpcMessageResponseImplCopyWithImpl<$Res>
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
-  $Res call({Object? id = null, Object? payload = null}) {
+  $Res call({Object? id = null, Object? payload = freezed}) {
     return _then(
       _$RpcMessageResponseImpl(
         id: null == id
             ? _value.id
             : id // ignore: cast_nullable_to_non_nullable
                   as String,
-        payload: null == payload
-            ? _value._payload
-            : payload // ignore: cast_nullable_to_non_nullable
-                  as Map<String, dynamic>,
+        payload: freezed == payload ? _value.payload : payload,
       ),
     );
   }
@@ -1256,23 +1253,17 @@ class __$$RpcMessageResponseImplCopyWithImpl<$Res>
 class _$RpcMessageResponseImpl implements RpcMessageResponse {
   const _$RpcMessageResponseImpl({
     required this.id,
-    required final Map<String, dynamic> payload,
+    required this.payload,
     final String? $type,
-  }) : _payload = payload,
-       $type = $type ?? 'response';
+  }) : $type = $type ?? 'response';
 
   factory _$RpcMessageResponseImpl.fromJson(Map<String, dynamic> json) =>
       _$$RpcMessageResponseImplFromJson(json);
 
   @override
   final String id;
-  final Map<String, dynamic> _payload;
   @override
-  Map<String, dynamic> get payload {
-    if (_payload is EqualUnmodifiableMapView) return _payload;
-    // ignore: implicit_dynamic_type
-    return EqualUnmodifiableMapView(_payload);
-  }
+  final Object? payload;
 
   @JsonKey(name: 'type')
   final String $type;
@@ -1288,7 +1279,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
         (other.runtimeType == runtimeType &&
             other is _$RpcMessageResponseImpl &&
             (identical(other.id, id) || other.id == id) &&
-            const DeepCollectionEquality().equals(other._payload, _payload));
+            const DeepCollectionEquality().equals(other.payload, payload));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
@@ -1296,7 +1287,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
   int get hashCode => Object.hash(
     runtimeType,
     id,
-    const DeepCollectionEquality().hash(_payload),
+    const DeepCollectionEquality().hash(payload),
   );
 
   /// Create a copy of RpcMessage
@@ -1333,7 +1324,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -1375,7 +1366,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -1417,7 +1408,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -1492,7 +1483,7 @@ class _$RpcMessageResponseImpl implements RpcMessageResponse {
 abstract class RpcMessageResponse implements RpcMessage {
   const factory RpcMessageResponse({
     required final String id,
-    required final Map<String, dynamic> payload,
+    required final Object? payload,
   }) = _$RpcMessageResponseImpl;
 
   factory RpcMessageResponse.fromJson(Map<String, dynamic> json) =
@@ -1500,7 +1491,7 @@ abstract class RpcMessageResponse implements RpcMessage {
 
   @override
   String get id;
-  Map<String, dynamic> get payload;
+  Object? get payload;
 
   /// Create a copy of RpcMessage
   /// with the given fields replaced by the non-null parameter values.
@@ -1663,7 +1654,7 @@ class _$RpcMessageErrorImpl implements RpcMessageError {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -1705,7 +1696,7 @@ class _$RpcMessageErrorImpl implements RpcMessageError {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -1747,7 +1738,7 @@ class _$RpcMessageErrorImpl implements RpcMessageError {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
@@ -1998,7 +1989,7 @@ class _$RpcMessageServerPushImpl implements RpcMessageServerPush {
       List<Map<String, dynamic>> events,
     )
     eventBatch,
-    required TResult Function(String id, Map<String, dynamic> payload) response,
+    required TResult Function(String id, Object? payload) response,
     required TResult Function(
       String id,
       String code,
@@ -2040,7 +2031,7 @@ class _$RpcMessageServerPushImpl implements RpcMessageServerPush {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult? Function(String id, Map<String, dynamic> payload)? response,
+    TResult? Function(String id, Object? payload)? response,
     TResult? Function(
       String id,
       String code,
@@ -2082,7 +2073,7 @@ class _$RpcMessageServerPushImpl implements RpcMessageServerPush {
       List<Map<String, dynamic>> events,
     )?
     eventBatch,
-    TResult Function(String id, Map<String, dynamic> payload)? response,
+    TResult Function(String id, Object? payload)? response,
     TResult Function(
       String id,
       String code,
