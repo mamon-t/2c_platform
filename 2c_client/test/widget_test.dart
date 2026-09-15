@@ -1,11 +1,15 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:twoc_client/app.dart';
+import 'package:twoc_client/core/app_theme.dart';
 import 'package:twoc_client/models/server_error.dart';
 import 'package:twoc_client/providers/app_providers.dart';
+import 'package:twoc_client/providers/theme_providers.dart';
 import 'package:twoc_client/services/auth_service.dart';
 
 class _MockAuthService extends Mock implements AuthService {}
@@ -22,11 +26,15 @@ void main() {
       () => auth.login(any(), any()),
     ).thenThrow(const ServerError(ErrorCode.validation, 'неверный логин или пароль'));
 
+    final themeBase = Directory.systemTemp.createTempSync('theme_widget_test');
+    addTearDown(() => themeBase.deleteSync(recursive: true));
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
           authServiceProvider.overrideWithValue(auth),
+          themeStoreProvider.overrideWithValue(ThemeStore(themeBase)),
         ],
         child: const TwocApp(),
       ),

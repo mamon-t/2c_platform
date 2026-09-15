@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/config.dart';
 
 import '../providers/app_providers.dart';
+import '../providers/theme_providers.dart';
 
-/// Настройки клиента: адрес сервера (правка + сохранение).
+/// Настройки клиента: тема (выбор из встроенных + файловых) и адрес сервера.
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -16,6 +17,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _serverController;
   String? _saved;
+  String? _themeError;
 
   @override
   void initState() {
@@ -40,9 +42,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
+  Future<void> _changeTheme(String? id) async {
+    if (id == null) {
+      return;
+    }
+    setState(() => _themeError = null);
+    try {
+      await ref.read(appThemeProvider.notifier).setTheme(id);
+    } catch (e) {
+      setState(() => _themeError = 'Не удалось сохранить тему: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final current = ref.watch(appConfigProvider);
+    final themeAsync = ref.watch(appThemeProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Настройки')),
       body: Padding(
@@ -52,7 +67,44 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Адрес сервера', style: Theme.of(context).textTheme.titleMedium),
+              Text('Тема', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              themeAsync.when(
+                loading: () => const SizedBox(
+                  height: 56,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+                error: (e, _) => Text(
+                  'Не удалось загрузить темы: $e',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                data: (state) => DropdownButtonFormField<String>(
+                  initialValue: state.selected.id,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.palette_outlined),
+                  ),
+                  items: [
+                    for (final t in state.themes)
+                      DropdownMenuItem<String>(
+                        value: t.id,
+                        child: Text(t.name),
+                      ),
+                  ],
+                  onChanged: _changeTheme,
+                ),
+              ),
+              if (_themeError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _themeError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 20),
+              Text(
+                'Адрес сервера',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               TextField(
                 controller: _serverController,
