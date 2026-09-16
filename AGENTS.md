@@ -230,8 +230,24 @@ login → разделы → каталог → view/edit → create → OCC-к�
 → смена темы) с фиксами клиента: роутер не монтирует защищённые экраны при
 `AuthRestoring`, сетевые провайдеры `sdui_providers` перезапускаются по смене
 сессии (`_authRevision`).
+**Расширение 1 (ТЗ v3.1_1): фазы 15pre-1/15pre-2 завершены.** 15pre-1
+(`9646899`): системные метаданные — `core-application/metadata_seed.rs`
+(`seed_system_metadata`/`system_metadata_schemas`/`system_metadata_type_count`,
+7 глобальных типов `company`/`user`/`role`/`entity_type`/`entity_field`/
+`entity_state`/`entity_transition`, `is_system=true`, `company_id=""`, события
+`metadata.seeded`), `bootstrap_platform` → generic `M: MetadataRepository`,
+`BootstrapResult.metadata_entity_types_seeded`, тесты `phase_bootstrap` расширены.
+15pre-2 (`2a837d6`): SDUI ядровых сущностей — делегация `object.create/get/list/
+update` для `company`/`user`/`role` в `commands.rs` (маппинг в универсальную
+Object-форму, события `company.*`/`user.*`/`role.*`, фильтр списков по компании
+через роли, OCC только в generic-пути), synthetic-модуль `platform` в
+`ModuleManager::get_navigation` (гейт — права `read`), global-fallback системных
+схем в `get_entity_type_by_code` (фолбэк в `company_id=""` только для
+`is_system`), юнит-тесты сервера +5, клиентские тесты `home_screen_test` (5) +
+`core_entity_catalog_test` (4), флатер 121/121.
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c).
+Следующая — 15pre-3 (редактор метаданных + `metadata.export`/`metadata.import`).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`,
 клиент — `doc/frontend_report.md`.
 
