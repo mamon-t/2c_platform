@@ -316,6 +316,21 @@ impl ModuleManager {
             .await?;
 
         let mut modules = Vec::new();
+        if permissions
+            .check(&user_id, &actor_company_id, None, None, "read")
+            .await?
+        {
+            modules.push(json!({
+                "code": "platform",
+                "display_name": "Платформа",
+                "version": "1.0.0",
+                "navigation": [
+                    { "code": "companies", "label": "Компании", "entity_type": "company" },
+                    { "code": "users", "label": "Пользователи", "entity_type": "user" },
+                    { "code": "roles", "label": "Роли", "entity_type": "role" },
+                ],
+            }));
+        }
         for record in records {
             let manifest = record.manifest;
             let mut accessible = false;

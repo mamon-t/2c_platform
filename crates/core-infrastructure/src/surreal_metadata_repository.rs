@@ -397,19 +397,42 @@ impl MetadataRepository for SurrealMetadataRepository {
         let company_id = company_id.to_string();
         let code = code.to_string();
         Box::pin(async move {
-            let mut response = db
-                .query(format!(
-                    "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
-                     WHERE code = $code AND company_id = $company_id LIMIT 1"
-                ))
-                .bind(("code", code.clone()))
-                .bind(("company_id", company_id))
-                .await
-                .map_err(|e| DomainError::Storage(format!("entity_types get by code: {e}")))?;
-            let row: Option<Value> = response
-                .take(0)
-                .map_err(|e| DomainError::Storage(format!("entity_types get by code take: {e}")))?;
-            decode_row("Тип сущности", row)
+            let find = |target: &str| {
+                let db = db.clone();
+                let code = code.clone();
+                let target = target.to_string();
+                Box::pin(async move {
+                    let mut response = db
+                        .query(format!(
+                            "SELECT {ENTITY_TYPE_FIELDS} FROM {ENTITY_TYPE_TABLE} \
+                             WHERE code = $code AND company_id = $company_id LIMIT 1"
+                        ))
+                        .bind(("code", code))
+                        .bind(("company_id", target))
+                        .await
+                        .map_err(|e| DomainError::Storage(format!("entity_types get by code: {e}")))?;
+                    let row: Option<Value> = response
+                        .take(0)
+                        .map_err(|e| DomainError::Storage(format!("entity_types get by code take: {e}")))?;
+                    decode_row::<EntityType>("Тип сущности", row)
+                })
+            };
+            match find(&company_id).await {
+                found @ Ok(_) => found,
+                // Глобальные системные типы (компания-владелец ""). Один
+                // и тот же код в разных компаниях не конфликтует, поэтому
+                // фолбэк, только когда точного совпадения нет, и только на
+                // is_system-типы: кастомный тип с company_id="" не должен
+                // «протекать» во все компании.
+                Err(DomainError::NotFound(_)) if !company_id.is_empty() => match find("").await {
+                    Ok(et) if et.is_system => Ok(et),
+                    Ok(_) => Err(DomainError::NotFound(format!(
+                        "Тип сущности {code} не найден в компании {company_id}"
+                    ))),
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            }
         })
     }
 
@@ -810,5 +833,67 @@ mod tests {
         let repo = SurrealMetadataRepository::new(db);
         repo.ensure_schema().await.unwrap();
         repo.ensure_schema().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn global_system_type_is_resolvable_for_any_company() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+
+        // Системный тип в глобальной компании "" (как при system.bootstrap).
+        let mut schema = sample_schema(1);
+        schema.entity_type.code = "company".to_string();
+        schema.entity_type.is_system = true;
+        for field in schema.fields.iter_mut() {
+            field.entity_type = "company".to_string();
+        }
+        for state in schema.states.iter_mut() {
+            state.entity_type = "company".to_string();
+        }
+        for transition in schema.transitions.iter_mut() {
+            transition.entity_type = "company".to_string();
+        }
+        for form in schema.forms.iter_mut() {
+            form.entity_type = "company".to_string();
+        }
+        for action in schema.actions.iter_mut() {
+            action.entity_type = "company".to_string();
+        }
+        for relation in schema.relations.iter_mut() {
+            relation.entity_type = "company".to_string();
+        }
+        repo.create_entity_type(
+            &schema,
+            &[system_event(schema.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+
+        // Из любой компании системный тип виден благодаря фолбэку на company_id="".
+        let other_company = Uuid::new_v4().to_string();
+        let by_code = repo
+            .get_entity_type_by_code(&other_company, "company")
+            .await
+            .unwrap();
+        assert!(by_code.is_system);
+        assert_eq!(by_code.company_id, "");
+        let assembled = repo.get_schema(&other_company, "company").await.unwrap();
+        assert_eq!(assembled.entity_type.code, "company");
+        assert_eq!(assembled.fields.len(), 1);
+
+        // Кастомный глобальный (company_id="", is_system=false) тип НЕ протекает.
+        let mut custom = sample_schema(1);
+        custom.entity_type.code = "note".to_string();
+        repo.create_entity_type(
+            &custom,
+            &[system_event(custom.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+        let err = repo.get_entity_type_by_code(&other_company, "note").await;
+        assert!(matches!(err, Err(DomainError::NotFound(_))));
     }
 }

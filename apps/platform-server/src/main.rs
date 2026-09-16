@@ -122,7 +122,15 @@ async fn main() -> Result<()> {
     let registry = app_registry.commands.clone();
     commands::register_phase2_commands(&registry, companies.clone(), users.clone(), roles.clone()).await;
     commands::register_phase3_commands(&registry, metadata.clone()).await;
-    commands::register_phase4_commands(&registry, objects, metadata.clone()).await;
+    commands::register_phase4_commands(
+        &registry,
+        objects,
+        metadata.clone(),
+        companies.clone(),
+        users.clone(),
+        roles.clone(),
+    )
+    .await;
     commands::register_phase4_audit_commands(&registry, audit.clone()).await;
     commands::register_phase5_commands(
         &registry,

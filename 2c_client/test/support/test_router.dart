@@ -1,5 +1,7 @@
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:twoc_client/screens/catalog_screen.dart';
+import 'package:twoc_client/screens/home_screen.dart';
 import 'package:twoc_client/screens/object_form_screen.dart';
 
 /// Минимальный роутер для экранных тестов (без auth-redirect).
@@ -7,6 +9,15 @@ GoRouter testRouter({String initialLocation = '/catalog/account'}) {
   return GoRouter(
     initialLocation: initialLocation,
     routes: [
+      GoRoute(
+        path: '/home',
+        builder: (context, state) => const HomeScreen(),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) =>
+            const Scaffold(body: Center(child: Text('Настройки'))),
+      ),
       GoRoute(
         path: '/catalog/:entityType',
         builder: (context, state) => CatalogScreen(

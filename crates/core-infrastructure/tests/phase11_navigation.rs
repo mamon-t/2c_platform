@@ -293,8 +293,9 @@ async fn admin_sees_all_enabled_modules_with_navigation() {
         .await
         .unwrap();
     let modules = out["modules"].as_array().unwrap();
-    assert_eq!(modules.len(), 1);
-    let accounting = &modules[0];
+    assert_eq!(modules.len(), 2);
+    assert_eq!(modules[0]["code"], "platform");
+    let accounting = &modules[1];
     assert_eq!(accounting["code"], "accounting");
     assert_eq!(
         accounting["display_name"],
@@ -332,9 +333,10 @@ async fn staff_sees_modules_with_accessible_commands() {
         .await
         .unwrap();
     let modules = out["modules"].as_array().unwrap();
-    assert_eq!(modules.len(), 1);
-    assert_eq!(modules[0]["code"], "accounting");
-    assert_eq!(modules[0]["navigation"].as_array().unwrap().len(), 3);
+    assert_eq!(modules.len(), 2);
+    assert_eq!(modules[0]["code"], "platform");
+    assert_eq!(modules[1]["code"], "accounting");
+    assert_eq!(modules[1]["navigation"].as_array().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -351,7 +353,9 @@ async fn module_without_accessible_commands_is_excluded() {
         .get_navigation(env.company_id, Some(guest_actor), &env.permissions)
         .await
         .unwrap();
-    assert_eq!(out["modules"].as_array().unwrap().len(), 0);
+    let modules = out["modules"].as_array().unwrap();
+    assert_eq!(modules.len(), 1);
+    assert_eq!(modules[0]["code"], "platform");
 }
 
 #[tokio::test]
@@ -372,7 +376,8 @@ async fn disabled_module_is_absent() {
         .get_navigation(env.company_id, Some(admin_actor), &env.permissions)
         .await
         .unwrap();
-    assert_eq!(out["modules"].as_array().unwrap().len(), 0);
+    assert_eq!(out["modules"].as_array().unwrap().len(), 1);
+    assert_eq!(out["modules"][0]["code"], "platform");
 }
 
 #[tokio::test]

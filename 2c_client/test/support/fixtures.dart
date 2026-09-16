@@ -68,17 +68,19 @@ Map<String, dynamic> objectWire({
   Map<String, dynamic>? data,
   Map<String, dynamic>? computed,
   String state = 'draft',
+  String companyId = 'c1',
+  String? number = '00001',
 }) =>
     {
       'id': id,
       'entity_type': entityType,
       'kind': 'catalog',
-      'company_id': 'c1',
+      'company_id': companyId,
       'state': state,
       'data': data,
       'computed': computed,
       'version': version,
-      'number': '00001',
+      'number': number,
     };
 
 Map<String, dynamic> navigationWire() => {

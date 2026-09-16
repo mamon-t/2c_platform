@@ -60,6 +60,9 @@ class _MemoryStorage extends FlutterSecureStorage {
   }
 }
 
+/// Новое in-memory token-хранилище для экранных тестов (без libsecret).
+FlutterSecureStorage testSecureStorage() => _MemoryStorage();
+
 /// Фейковый сервис объектов для экранных тестов (внешняя зависимость RPC
 /// не нужна — все методы возвращают предзаполненные данные).
 class FakeObjectService implements ObjectService {

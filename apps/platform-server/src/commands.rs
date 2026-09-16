@@ -38,6 +38,7 @@ use core_infrastructure::{
     SurrealScriptRepository, SurrealUserRepository,
 };
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -649,6 +650,428 @@ async fn register_metadata_commands(
         .await;
 }
 
+/// Коды ядровых сущностей, доступных через универсальные команды `object.*`
+/// (подфаза 15pre-2): компании, пользователи и роли рендерятся клиентом SDUI
+/// из системных метаданных.
+const CORE_ENTITY_TYPES: &[&str] = &["company", "user", "role"];
+
+fn is_core_entity_type(entity_type: &str) -> bool {
+    CORE_ENTITY_TYPES.contains(&entity_type)
+}
+
+/// Ядровая сущность, найденная по идентификатору для делегирования `object.*`.
+enum CoreEntity {
+    Company(Company),
+    User(User),
+    Role(Role),
+}
+
+/// Собирает универсальную JSON-форму объекта Доски для ядровой сущности:
+/// клиент SDUI рендерит компании/пользователей/роли теми же виджетами, что
+/// и обычные объекты.
+fn core_object_json(
+    id: &str,
+    entity_type: &str,
+    company_id: &str,
+    state: &str,
+    data: Value,
+) -> Value {
+    json!({
+        "id": id,
+        "entity_type": entity_type,
+        "kind": "Catalog",
+        "company_id": company_id,
+        "state": state,
+        "data": data,
+        "computed": {},
+        "version": 1,
+        "number": null,
+        "date": null,
+        "parent_id": null,
+    })
+}
+
+fn company_to_json(company: &Company) -> Value {
+    core_object_json(
+        &company.id.to_string(),
+        "company",
+        "",
+        "active",
+        json!({
+            "code": company.code,
+            "name": company.name,
+            "is_active": company.is_active,
+        }),
+    )
+}
+
+fn user_to_json(user: &User) -> Value {
+    let state = match user.status {
+        UserStatus::Active | UserStatus::Invited => "active",
+        UserStatus::Disabled | UserStatus::Locked => "blocked",
+        UserStatus::Archived => "archived",
+    };
+    core_object_json(
+        &user.id.to_string(),
+        "user",
+        "",
+        state,
+        json!({
+            "login": user.login,
+            "status": user.status,
+            "role_ids": user.role_ids,
+            "locale": user.locale,
+            "timezone": user.timezone,
+        }),
+    )
+}
+
+fn role_to_json(role: &Role) -> Value {
+    core_object_json(
+        &role.id.to_string(),
+        "role",
+        &role.company_id.to_string(),
+        "active",
+        json!({
+            "code": role.code,
+            "name": role.name,
+            "permission_policy_codes": role.permission_policy_codes,
+            "is_system": role.is_system,
+        }),
+    )
+}
+
+fn encode_core_entity(entity: &CoreEntity) -> Value {
+    match entity {
+        CoreEntity::Company(company) => company_to_json(company),
+        CoreEntity::User(user) => user_to_json(user),
+        CoreEntity::Role(role) => role_to_json(role),
+    }
+}
+
+/// Ищет ядровую сущность по id в репозиториях компаний/пользователей/ролей.
+async fn fetch_core_entity(
+    companies: &SurrealCompanyRepository,
+    users: &SurrealUserRepository,
+    roles: &SurrealRoleRepository,
+    id: &Uuid,
+) -> Result<CoreEntity, DomainError> {
+    match companies.get(id).await {
+        Ok(company) => return Ok(CoreEntity::Company(company)),
+        Err(DomainError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    match users.get(id).await {
+        Ok(user) => return Ok(CoreEntity::User(user)),
+        Err(DomainError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    match roles.get(id).await {
+        Ok(role) => return Ok(CoreEntity::Role(role)),
+        Err(DomainError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    Err(DomainError::NotFound(format!(
+        "Объект {id} не найден в ядровых типах"
+    )))
+}
+
+/// Список ядровых сущностей в универсальной форме `object.list`. Компании —
+/// глобальные, роли и пользователи фильтруются по `company_id` (пользователь
+/// принадлежит компании, если ему назначена роль этой компании).
+async fn list_core_objects(
+    companies: &SurrealCompanyRepository,
+    users: &SurrealUserRepository,
+    roles: &SurrealRoleRepository,
+    entity_type: &str,
+    company_id: &str,
+    limit: usize,
+) -> Result<Value, DomainError> {
+    match entity_type {
+        "company" => {
+            let all = companies.list().await?;
+            let rows: Vec<Value> = all.iter().take(limit).map(company_to_json).collect();
+            Ok(Value::Array(rows))
+        }
+        "user" => {
+            let all = users.list().await?;
+            let rows: Vec<Value> = match Uuid::parse_str(company_id).ok() {
+                Some(cid) => {
+                    let role_ids: HashSet<String> = roles
+                        .list()
+                        .await?
+                        .into_iter()
+                        .filter(|role| role.company_id == cid)
+                        .map(|role| role.id.to_string())
+                        .collect();
+                    all.iter()
+                        .filter(|user| user.role_ids.iter().any(|rid| role_ids.contains(rid)))
+                        .take(limit)
+                        .map(user_to_json)
+                        .collect()
+                }
+                None => all.iter().take(limit).map(user_to_json).collect(),
+            };
+            Ok(Value::Array(rows))
+        }
+        "role" => {
+            let all = roles.list().await?;
+            let cid = Uuid::parse_str(company_id).ok();
+            let rows: Vec<Value> = all
+                .iter()
+                .filter(|role| cid.is_none_or(|c| role.company_id == c))
+                .take(limit)
+                .map(role_to_json)
+                .collect();
+            Ok(Value::Array(rows))
+        }
+        _ => Err(DomainError::ValidationError(format!(
+            "неизвестный ядровой тип сущности: {entity_type}"
+        ))),
+    }
+}
+
+/// Создаёт ядровую сущность из универсальных параметров `object.create`.
+/// Для пользователя в `data` дополнительно обязателен пароль.
+async fn create_core_object(
+    companies: &SurrealCompanyRepository,
+    users: &SurrealUserRepository,
+    roles: &SurrealRoleRepository,
+    entity_type: &str,
+    company_id: &str,
+    params: &Value,
+) -> Result<Value, DomainError> {
+    let data = params.get("data").cloned().unwrap_or(json!({}));
+    let now = Utc::now();
+    match entity_type {
+        "company" => {
+            let company = Company {
+                id: Uuid::new_v4(),
+                code: require(&data, "code")?,
+                name: require(&data, "name")?,
+                is_active: optional_bool(&data, "is_active")?.unwrap_or(true),
+                created_at: now,
+                updated_at: now,
+            };
+            let payload = encode(&company)?;
+            let event = system_event(
+                StreamType::Company,
+                company.id.to_string(),
+                "company.created",
+                &company.id.to_string(),
+                payload,
+            );
+            companies.create(&company, &[event]).await?;
+            Ok(company_to_json(&company))
+        }
+        "user" => {
+            let login = require(&data, "login")?;
+            let password = require(&data, "password")?;
+            let password_hash = hash_password(&password).map_err(DomainError::ValidationError)?;
+            let last_name = optional(&data, "last_name")?.unwrap_or_default();
+            let first_name = optional(&data, "first_name")?.unwrap_or_else(|| login.clone());
+            let middle_name = optional(&data, "middle_name")?;
+            let status = parse_user_status(&data, "status")?.unwrap_or(UserStatus::Active);
+            let locale = optional(&data, "locale")?.unwrap_or_else(|| "ru-RU".to_string());
+            let timezone =
+                optional(&data, "timezone")?.unwrap_or_else(|| "Europe/Moscow".to_string());
+            let role_ids = parse_uuids(&data, "role_ids")?;
+            let display_name = format!(
+                "{last_name} {first_name}{}",
+                middle_name
+                    .as_ref()
+                    .map(|m| format!(" {m}"))
+                    .unwrap_or_default()
+            );
+            let user_id = Uuid::new_v4();
+            let user = User {
+                id: user_id,
+                login,
+                password_hash,
+                status,
+                role_ids,
+                failed_login_count: 0,
+                locked_until: None,
+                must_change_password: true,
+                locale,
+                timezone,
+                person_id: Some(user_id),
+                created_at: now,
+                updated_at: now,
+            };
+            let person = Person {
+                id: user_id,
+                user_id,
+                last_name,
+                first_name,
+                middle_name,
+                display_name,
+            };
+            let events = vec![
+                system_event(
+                    StreamType::User,
+                    user.id.to_string(),
+                    "user.created",
+                    company_id,
+                    encode(&user)?,
+                ),
+                system_event(
+                    StreamType::Person,
+                    person.id.to_string(),
+                    "person.created",
+                    company_id,
+                    encode(&person)?,
+                ),
+            ];
+            users.create(&user, &person, &events).await?;
+            Ok(user_to_json(&user))
+        }
+        "role" => {
+            let role = Role {
+                id: Uuid::new_v4(),
+                company_id: Uuid::parse_str(company_id).map_err(|_| {
+                    DomainError::ValidationError(
+                        "role: company_id обязателен и должен быть UUID".to_string(),
+                    )
+                })?,
+                code: require(&data, "code")?,
+                name: require(&data, "name")?,
+                description: optional(&data, "description")?.unwrap_or_default(),
+                permission_policy_codes: parse_uuids(&data, "permission_policy_codes")?,
+                is_system: optional_bool(&data, "is_system")?.unwrap_or(false),
+                created_at: now,
+                updated_at: now,
+            };
+            let payload = encode(&role)?;
+            let event = system_event(
+                StreamType::Role,
+                role.id.to_string(),
+                "role.created",
+                &role.company_id.to_string(),
+                payload,
+            );
+            roles.create(&role, &[event]).await?;
+            Ok(role_to_json(&role))
+        }
+        _ => Err(DomainError::ValidationError(format!(
+            "неизвестный ядровой тип сущности: {entity_type}"
+        ))),
+    }
+}
+
+/// Обновляет ядровую сущность из универсальных параметров `object.update`.
+async fn update_core_object(
+    companies: &SurrealCompanyRepository,
+    users: &SurrealUserRepository,
+    roles: &SurrealRoleRepository,
+    params: &Value,
+) -> Result<Value, DomainError> {
+    let id = parse_uuid(params, "id")?;
+    let data = params.get("data").cloned().unwrap_or(json!({}));
+    match fetch_core_entity(companies, users, roles, &id).await? {
+        CoreEntity::Company(existing) => {
+            let company = Company {
+                id,
+                code: optional(&data, "code")?.unwrap_or(existing.code),
+                name: optional(&data, "name")?.unwrap_or(existing.name),
+                is_active: optional_bool(&data, "is_active")?.unwrap_or(existing.is_active),
+                created_at: existing.created_at,
+                updated_at: Utc::now(),
+            };
+            let payload = encode(&company)?;
+            let event = system_event(
+                StreamType::Company,
+                company.id.to_string(),
+                "company.updated",
+                &company.id.to_string(),
+                payload,
+            );
+            companies.update(&company, &[event]).await?;
+            Ok(company_to_json(&company))
+        }
+        CoreEntity::User(existing) => {
+            let user = User {
+                id,
+                login: optional(&data, "login")?.unwrap_or(existing.login),
+                password_hash: existing.password_hash,
+                status: parse_user_status(&data, "status")?.unwrap_or(existing.status),
+                role_ids: match data.get("role_ids") {
+                    None => existing.role_ids,
+                    Some(_) => parse_uuids(&data, "role_ids")?,
+                },
+                failed_login_count: existing.failed_login_count,
+                locked_until: existing.locked_until,
+                must_change_password: existing.must_change_password,
+                locale: optional(&data, "locale")?.unwrap_or(existing.locale),
+                timezone: optional(&data, "timezone")?.unwrap_or(existing.timezone),
+                person_id: existing.person_id,
+                created_at: existing.created_at,
+                updated_at: Utc::now(),
+            };
+            let payload = encode(&user)?;
+            let event = system_event(
+                StreamType::User,
+                user.id.to_string(),
+                "user.updated",
+                "",
+                payload,
+            );
+            users.update(&user, &[event]).await?;
+            Ok(user_to_json(&user))
+        }
+        CoreEntity::Role(existing) => {
+            let role = Role {
+                id,
+                company_id: existing.company_id,
+                code: optional(&data, "code")?.unwrap_or(existing.code),
+                name: optional(&data, "name")?.unwrap_or(existing.name),
+                description: optional(&data, "description")?.unwrap_or(existing.description),
+                permission_policy_codes: match data.get("permission_policy_codes") {
+                    None => existing.permission_policy_codes,
+                    Some(_) => parse_uuids(&data, "permission_policy_codes")?,
+                },
+                is_system: optional_bool(&data, "is_system")?.unwrap_or(existing.is_system),
+                created_at: existing.created_at,
+                updated_at: Utc::now(),
+            };
+            let payload = encode(&role)?;
+            let event = system_event(
+                StreamType::Role,
+                role.id.to_string(),
+                "role.updated",
+                &role.company_id.to_string(),
+                payload,
+            );
+            roles.update(&role, &[event]).await?;
+            Ok(role_to_json(&role))
+        }
+    }
+}
+
+/// Разбирает статус пользователя из SDUI-формы: принимает как значения enum
+/// `UserStatus` (invited/active/disabled/locked/archived), так и псевдоним
+/// `blocked` из системной схемы типа `user`.
+fn parse_user_status(value: &Value, key: &str) -> Result<Option<UserStatus>, DomainError> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let raw = v.as_str().ok_or_else(|| {
+                DomainError::ValidationError(format!("параметр '{key}' должен быть строкой"))
+            })?;
+            match raw {
+                "active" => Ok(Some(UserStatus::Active)),
+                "invited" => Ok(Some(UserStatus::Invited)),
+                "blocked" | "disabled" => Ok(Some(UserStatus::Disabled)),
+                "locked" => Ok(Some(UserStatus::Locked)),
+                "archived" => Ok(Some(UserStatus::Archived)),
+                _ => Err(DomainError::ValidationError(format!(
+                    "некорректный статус пользователя: {raw}"
+                ))),
+            }
+        }
+    }
+}
+
 /// Регистрирует набор команд Фазы 4: универсальные объекты, CRUD с OCC,
 /// снимки версий и нумерацию документов. Команды валидируют данные против
 /// мета-модели (`Object::validate`) и добавляют события объектов в Трубу
@@ -657,17 +1080,37 @@ async fn register_object_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
     metadata: Arc<SurrealMetadataRepository>,
+    companies: Arc<SurrealCompanyRepository>,
+    users: Arc<SurrealUserRepository>,
+    roles: Arc<SurrealRoleRepository>,
 ) {
     registry
         .register_with_metadata("object.create", CommandMetadata::requires("create"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
+            let companies = companies.clone();
+            let users = users.clone();
+            let roles = roles.clone();
             move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
+                let companies = companies.clone();
+                let users = users.clone();
+                let roles = roles.clone();
                 async move {
                     let entity_type = require(&params, "entity_type")?;
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    if is_core_entity_type(&entity_type) {
+                        return create_core_object(
+                            &companies,
+                            &users,
+                            &roles,
+                            &entity_type,
+                            &company_id,
+                            &params,
+                        )
+                        .await;
+                    }
                     let schema = metadata
                         .get_schema(&company_id, &entity_type)
                         .await?;
@@ -720,12 +1163,24 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.get", CommandMetadata::requires("read"), {
             let objects = objects.clone();
+            let companies = companies.clone();
+            let users = users.clone();
+            let roles = roles.clone();
             move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
+                let companies = companies.clone();
+                let users = users.clone();
+                let roles = roles.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
-                    let object = objects.get(&id).await?;
-                    encode(&object)
+                    match fetch_core_entity(&companies, &users, &roles, &id).await {
+                        Ok(entity) => Ok(encode_core_entity(&entity)),
+                        Err(DomainError::NotFound(_)) => {
+                            let object = objects.get(&id).await?;
+                            encode(&object)
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
             }
         })
@@ -734,12 +1189,29 @@ async fn register_object_commands(
     registry
         .register_with_metadata("object.list", CommandMetadata::requires("read"), {
             let objects = objects.clone();
+            let companies = companies.clone();
+            let users = users.clone();
+            let roles = roles.clone();
             move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
+                let companies = companies.clone();
+                let users = users.clone();
+                let roles = roles.clone();
                 async move {
                     let entity_type = require(&params, "entity_type")?;
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
                     let limit = optional_u32(&params, "limit")?.unwrap_or(100) as usize;
+                    if is_core_entity_type(&entity_type) {
+                        return list_core_objects(
+                            &companies,
+                            &users,
+                            &roles,
+                            &entity_type,
+                            &company_id,
+                            limit,
+                        )
+                        .await;
+                    }
                     let list = objects
                         .list(&entity_type, &company_id, limit)
                         .await?;
@@ -754,11 +1226,22 @@ async fn register_object_commands(
         .register_with_metadata("object.update", CommandMetadata::requires("update"), {
             let objects = objects.clone();
             let metadata = metadata.clone();
+            let companies = companies.clone();
+            let users = users.clone();
+            let roles = roles.clone();
             move |params: Value, _ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
+                let companies = companies.clone();
+                let users = users.clone();
+                let roles = roles.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
+                    match fetch_core_entity(&companies, &users, &roles, &id).await {
+                        Ok(_) => return update_core_object(&companies, &users, &roles, &params).await,
+                        Err(DomainError::NotFound(_)) => {}
+                        Err(e) => return Err(e),
+                    }
                     let expected_version = parse_u64(&params, "expected_version")?;
                     let existing = objects.get(&id).await?;
                     let schema = metadata
@@ -1100,8 +1583,11 @@ pub async fn register_phase4_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
     metadata: Arc<SurrealMetadataRepository>,
+    companies: Arc<SurrealCompanyRepository>,
+    users: Arc<SurrealUserRepository>,
+    roles: Arc<SurrealRoleRepository>,
 ) {
-    register_object_commands(registry, objects, metadata).await;
+    register_object_commands(registry, objects, metadata, companies, users, roles).await;
 }
 
 /// Регистрирует набор команд Фазы 5 по ТЗ v3.1: сидинг системных ролей и
@@ -1844,4 +2330,371 @@ fn script_event(script: &Script, event_type: &str) -> Event {
         &company_id,
         serde_json::to_value(script).unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_application::metadata_seed::seed_system_metadata;
+    use core_application::ports::MetadataRepository;
+    use core_infrastructure::surreal_object_repository::SurrealObjectRepository;
+    use std::sync::Arc;
+    use surrealdb::engine::any::Any;
+    use surrealdb::Surreal;
+
+    async fn mem_db() -> Surreal<Any> {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test")
+            .use_db(Uuid::new_v4().to_string())
+            .await
+            .unwrap();
+        db
+    }
+
+    struct Env {
+        _db: Surreal<Any>,
+        objects: Arc<SurrealObjectRepository>,
+        companies: Arc<SurrealCompanyRepository>,
+        users: Arc<SurrealUserRepository>,
+        roles: Arc<SurrealRoleRepository>,
+        metadata: Arc<SurrealMetadataRepository>,
+    }
+
+    async fn setup() -> Env {
+        let db = mem_db().await;
+
+        let store = Arc::new(core_infrastructure::SurrealEventStore::new(db.clone()));
+        store.ensure_schema().await.unwrap();
+        let objects = Arc::new(SurrealObjectRepository::new(db.clone()));
+        objects.ensure_schema().await.unwrap();
+        let companies = Arc::new(SurrealCompanyRepository::new(db.clone()));
+        companies.ensure_schema().await.unwrap();
+        let users = Arc::new(SurrealUserRepository::new(db.clone()));
+        users.ensure_schema().await.unwrap();
+        let roles = Arc::new(SurrealRoleRepository::new(db.clone()));
+        roles.ensure_schema().await.unwrap();
+        let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
+        metadata.ensure_schema().await.unwrap();
+
+        seed_system_metadata(metadata.as_ref()).await.unwrap();
+
+        Env {
+            _db: db,
+            objects,
+            companies,
+            users,
+            roles,
+            metadata,
+        }
+    }
+
+    async fn registry(env: &Env) -> core_application::CommandRegistry {
+        let registry = core_application::CommandRegistry::new();
+        register_object_commands(
+            &registry,
+            env.objects.clone(),
+            env.metadata.clone(),
+            env.companies.clone(),
+            env.users.clone(),
+            env.roles.clone(),
+        )
+        .await;
+        registry
+    }
+
+    fn note_schema() -> EntitySchema {
+        let now = Utc::now();
+        EntitySchema {
+            entity_type: EntityType {
+                id: Uuid::new_v4(),
+                code: "note".to_string(),
+                name: "Заметка".to_string(),
+                kind: ObjectKind::Document,
+                company_id: String::new(),
+                metadata_version: 1,
+                is_system: false,
+                created_at: now,
+                updated_at: now,
+            },
+            fields: vec![EntityField {
+                id: Uuid::new_v4(),
+                entity_type: "note".to_string(),
+                code: "title".to_string(),
+                label: "Заголовок".to_string(),
+                data_type: FieldType::String,
+                required: true,
+                is_unique: false,
+                is_indexed: false,
+                options: Value::Null,
+                is_system: false,
+                order: 1,
+            }],
+            states: vec![EntityState {
+                id: Uuid::new_v4(),
+                entity_type: "note".to_string(),
+                code: "draft".to_string(),
+                label: "Черновик".to_string(),
+                color: None,
+                is_initial: true,
+                is_final: false,
+            }],
+            transitions: vec![],
+            forms: vec![],
+            actions: vec![],
+            relations: vec![],
+        }
+    }
+
+    async fn create_company(registry: &core_application::CommandRegistry, code: &str, name: &str) -> Value {
+        registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "company",
+                    "company_id": "",
+                    "data": { "code": code, "name": name },
+                }),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn object_crud_company_via_sdui_mapping() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let acme = create_company(&registry, "acme", "Acme Corp").await;
+        let acme_id = acme["id"].as_str().unwrap().to_string();
+        let globex = create_company(&registry, "globex", "Globex").await;
+
+        let list = registry
+            .execute(
+                "object.list",
+                json!({ "entity_type": "company", "company_id": "" }),
+            )
+            .await
+            .unwrap();
+        let arr = list.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let codes: Vec<&str> = arr
+            .iter()
+            .map(|o| o["data"]["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(codes, vec!["acme", "globex"]);
+
+        let got = registry
+            .execute("object.get", json!({ "id": acme_id }))
+            .await
+            .unwrap();
+        assert_eq!(got["entity_type"], "company");
+        assert_eq!(got["data"]["name"], "Acme Corp");
+        assert_eq!(got["data"]["is_active"], true);
+
+        let renamed = registry
+            .execute(
+                "object.update",
+                json!({ "id": acme_id, "data": { "name": "Acme 2.0" } }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renamed["data"]["name"], "Acme 2.0");
+        assert_eq!(renamed["data"]["code"], "acme");
+
+        assert_ne!(acme_id, globex["id"].as_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn object_list_filters_users_and_roles_by_company() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let c1_id = create_company(&registry, "one", "Company One").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let c2_id = create_company(&registry, "two", "Company Two").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let r1 = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "role",
+                    "company_id": c1_id,
+                    "data": { "code": "admin", "name": "Администратор" },
+                }),
+            )
+            .await
+            .unwrap();
+        let r1_id = r1["id"].as_str().unwrap().to_string();
+        let r2 = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "role",
+                    "company_id": c2_id,
+                    "data": { "code": "guest", "name": "Гость" },
+                }),
+            )
+            .await
+            .unwrap();
+        let r2_id = r2["id"].as_str().unwrap().to_string();
+
+        registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "user",
+                    "company_id": "",
+                    "data": { "login": "ivan", "password": "secret123", "role_ids": [r1_id] },
+                }),
+            )
+            .await
+            .unwrap();
+        registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "user",
+                    "company_id": "",
+                    "data": { "login": "petr", "password": "secret123", "role_ids": [r2_id] },
+                }),
+            )
+            .await
+            .unwrap();
+
+        let in_c1 = registry
+            .execute(
+                "object.list",
+                json!({ "entity_type": "user", "company_id": c1_id }),
+            )
+            .await
+            .unwrap();
+        let logins: Vec<&str> = in_c1
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["data"]["login"].as_str().unwrap())
+            .collect();
+        assert_eq!(logins, vec!["ivan"]);
+
+        let roles_in_c1 = registry
+            .execute(
+                "object.list",
+                json!({ "entity_type": "role", "company_id": c1_id }),
+            )
+            .await
+            .unwrap();
+        let role_codes: Vec<&str> = roles_in_c1
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["data"]["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(role_codes, vec!["admin"]);
+    }
+
+    #[tokio::test]
+    async fn object_get_falls_back_to_generic_objects() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let note_event = system_event(
+            StreamType::Metadata,
+            Uuid::new_v4().to_string(),
+            "metadata.registered",
+            "",
+            json!({}),
+        );
+        let schema = note_schema();
+        env.metadata
+            .create_entity_type(&schema, &[note_event])
+            .await
+            .unwrap();
+
+        let created = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "note",
+                    "company_id": "",
+                    "kind": "document",
+                    "data": { "title": "Первая заметка" },
+                }),
+            )
+            .await
+            .unwrap();
+        let note_id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["entity_type"], "note");
+        assert_eq!(created["state"], "draft");
+
+        let got = registry
+            .execute("object.get", json!({ "id": note_id }))
+            .await
+            .unwrap();
+        assert_eq!(got["data"]["title"], "Первая заметка");
+
+        let list = registry
+            .execute(
+                "object.list",
+                json!({ "entity_type": "note", "company_id": "" }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn object_crud_user_with_status_and_roles() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let created = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "user",
+                    "company_id": "",
+                    "data": { "login": "anna", "password": "secret123", "status": "invited" },
+                }),
+            )
+            .await
+            .unwrap();
+        let uid = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["data"]["login"], "anna");
+        assert_eq!(created["data"]["status"], "invited");
+        assert_eq!(created["data"]["locale"], "ru-RU");
+
+        let updated = registry
+            .execute(
+                "object.update",
+                json!({ "id": uid, "data": { "status": "active", "timezone": "Asia/Yekaterinburg" } }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated["data"]["status"], "active");
+        assert_eq!(updated["data"]["timezone"], "Asia/Yekaterinburg");
+    }
+
+    #[tokio::test]
+    async fn object_create_rejects_role_without_company() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let err = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "role",
+                    "company_id": "",
+                    "data": { "code": "admin", "name": "Администратор" },
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::ValidationError(_)));
+    }
 }
