@@ -633,6 +633,45 @@ mod tests {
                     .ok_or(not_found)
             })
         }
+
+        fn export_entity_type(
+            &self,
+            company_id: &str,
+            entity_type_code: &str,
+        ) -> BoxFuture<'_, Result<Value, DomainError>> {
+            let local = (company_id.to_string(), entity_type_code.to_string());
+            let global = (String::new(), entity_type_code.to_string());
+            let not_found = DomainError::NotFound(format!("EntityType '{entity_type_code}'"));
+            Box::pin(async move {
+                let schemas = self.schemas.read().await;
+                let schema = schemas
+                    .get(&local)
+                    .or_else(|| schemas.get(&global))
+                    .ok_or(not_found)?;
+                serde_json::to_value(schema)
+                    .map_err(|e| DomainError::Storage(format!("entity_schema encode: {e}")))
+            })
+        }
+
+        fn import_entity_type(
+            &self,
+            schema_value: &Value,
+            _events: &[Event],
+        ) -> BoxFuture<'_, Result<Value, DomainError>> {
+            let key_value = schema_value.clone();
+            Box::pin(async move {
+                let schema: EntitySchema = serde_json::from_value(key_value).map_err(|e| {
+                    DomainError::ValidationError(format!("некорректная схема импорта: {e}"))
+                })?;
+                let key = (
+                    schema.entity_type.company_id.clone(),
+                    schema.entity_type.code.clone(),
+                );
+                self.schemas.write().await.insert(key, schema.clone());
+                serde_json::to_value(&schema)
+                    .map_err(|e| DomainError::Storage(format!("entity_schema encode: {e}")))
+            })
+        }
     }
 
     impl ObjectRepository for MemObjectRepo {

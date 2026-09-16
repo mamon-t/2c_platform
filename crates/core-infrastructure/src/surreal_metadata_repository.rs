@@ -161,28 +161,12 @@ async fn upsert_child(
 }
 
 /// Проверяет, что каждая конечная точка перехода существует среди
-/// переданных или уже сохранённых состояний типа сущности.
-async fn validate_transitions(
-    txn: &Transaction<Any>,
-    schema: &EntitySchema,
-) -> Result<(), DomainError> {
-    let mut state_codes: HashSet<String> = schema.states.iter().map(|s| s.code.clone()).collect();
-    let mut response = txn
-        .query(format!(
-            "SELECT code FROM {ENTITY_STATE_TABLE} WHERE entity_type = $et"
-        ))
-        .bind(("et", schema.entity_type.code.clone()))
-        .await
-        .map_err(|e| DomainError::Storage(format!("entity_states read: {e}")))?;
-    let rows: Vec<Value> = response
-        .take(0)
-        .map_err(|e| DomainError::Storage(format!("entity_states read take: {e}")))?;
-    for row in rows {
-        if let Some(code) = row.get("code").and_then(|v| v.as_str()) {
-            state_codes.insert(code.to_string());
-        }
-    }
-
+/// переданных состояний. Опора только на переданную схему: после синхронной
+/// регистрации (см. `delete_orphans`) набор состояний в БД совпадает со
+/// схемой, поэтому переход, ссылающийся на устаревшее состояние, был бы
+/// «висячим» и обязан отклоняться.
+async fn validate_transitions(schema: &EntitySchema) -> Result<(), DomainError> {
+    let state_codes: HashSet<String> = schema.states.iter().map(|s| s.code.clone()).collect();
     for transition in &schema.transitions {
         if !state_codes.contains(&transition.from_state) || !state_codes.contains(&transition.to_state)
         {
@@ -192,6 +176,26 @@ async fn validate_transitions(
             )));
         }
     }
+    Ok(())
+}
+
+/// Удаляет дочерние ресурсы типа, которых нет в переданной схеме («сироты»).
+/// Декларативная схема авторитетна: после применения она синхронизирует набор
+/// полей/состояний/переходов/форм/действий/связей, чтобы удалённые в редакторе
+/// ресурсы не «воскресали» при следующем `get_schema`.
+async fn delete_orphans(
+    txn: &Transaction<Any>,
+    table: &str,
+    entity_type: &str,
+    codes: &HashSet<String>,
+) -> Result<(), DomainError> {
+    txn.query(format!(
+        "DELETE FROM {table} WHERE entity_type = $et AND code NOT IN $codes"
+    ))
+    .bind(("et", entity_type.to_string()))
+    .bind(("codes", codes.iter().cloned().collect::<Vec<_>>()))
+    .await
+    .map_err(|e| DomainError::Storage(format!("{table} orphan delete: {e}")))?;
     Ok(())
 }
 
@@ -262,9 +266,11 @@ async fn apply_schema(
         }
     }
 
-    validate_transitions(owned_txn, schema).await?;
+    validate_transitions(schema).await?;
 
+    let mut field_codes = HashSet::new();
     for field in &schema.fields {
+        field_codes.insert(field.code.clone());
         let value = serde_json::to_value(field)
             .map_err(|e| DomainError::Storage(format!("entity_field encode: {e}")))?;
         upsert_child(
@@ -276,7 +282,11 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(owned_txn, ENTITY_FIELD_TABLE, &schema.entity_type.code, &field_codes).await?;
+
+    let mut state_codes = HashSet::new();
     for state in &schema.states {
+        state_codes.insert(state.code.clone());
         let value = serde_json::to_value(state)
             .map_err(|e| DomainError::Storage(format!("entity_state encode: {e}")))?;
         upsert_child(
@@ -288,7 +298,11 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(owned_txn, ENTITY_STATE_TABLE, &schema.entity_type.code, &state_codes).await?;
+
+    let mut transition_codes = HashSet::new();
     for transition in &schema.transitions {
+        transition_codes.insert(transition.code.clone());
         let value = serde_json::to_value(transition)
             .map_err(|e| DomainError::Storage(format!("entity_transition encode: {e}")))?;
         upsert_child(
@@ -300,7 +314,17 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(
+        owned_txn,
+        ENTITY_TRANSITION_TABLE,
+        &schema.entity_type.code,
+        &transition_codes,
+    )
+    .await?;
+
+    let mut form_codes = HashSet::new();
     for form in &schema.forms {
+        form_codes.insert(form.code.clone());
         let value = serde_json::to_value(form)
             .map_err(|e| DomainError::Storage(format!("entity_form encode: {e}")))?;
         upsert_child(
@@ -312,7 +336,11 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(owned_txn, ENTITY_FORM_TABLE, &schema.entity_type.code, &form_codes).await?;
+
+    let mut action_codes = HashSet::new();
     for action in &schema.actions {
+        action_codes.insert(action.code.clone());
         let value = serde_json::to_value(action)
             .map_err(|e| DomainError::Storage(format!("entity_action encode: {e}")))?;
         upsert_child(
@@ -324,7 +352,11 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(owned_txn, ENTITY_ACTION_TABLE, &schema.entity_type.code, &action_codes).await?;
+
+    let mut relation_codes = HashSet::new();
     for relation in &schema.relations {
+        relation_codes.insert(relation.code.clone());
         let value = serde_json::to_value(relation)
             .map_err(|e| DomainError::Storage(format!("entity_relation encode: {e}")))?;
         upsert_child(
@@ -336,6 +368,13 @@ async fn apply_schema(
         )
         .await?;
     }
+    delete_orphans(
+        owned_txn,
+        ENTITY_RELATION_TABLE,
+        &schema.entity_type.code,
+        &relation_codes,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -576,6 +615,42 @@ impl MetadataRepository for SurrealMetadataRepository {
                 actions: decode_rows("entity_actions", actions)?,
                 relations: decode_rows("entity_relations", relations)?,
             })
+        })
+    }
+
+    fn export_entity_type(
+        &self,
+        company_id: &str,
+        entity_type_code: &str,
+    ) -> BoxFuture<'_, Result<Value, DomainError>> {
+        let db = self.db.clone();
+        let company_id = company_id.to_string();
+        let entity_type_code = entity_type_code.to_string();
+        Box::pin(async move {
+            let schema = SurrealMetadataRepository::new(db)
+                .get_schema(&company_id, &entity_type_code)
+                .await?;
+            serde_json::to_value(&schema)
+                .map_err(|e| DomainError::Storage(format!("entity_schema encode: {e}")))
+        })
+    }
+
+    fn import_entity_type(
+        &self,
+        schema_value: &Value,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<Value, DomainError>> {
+        let self_ref = self.clone();
+        let schema_value = schema_value.clone();
+        let events = events.to_vec();
+        Box::pin(async move {
+            let schema: EntitySchema = serde_json::from_value(schema_value)
+                .map_err(|e| DomainError::ValidationError(format!(
+                    "некорректная схема импорта: {e}"
+                )))?;
+            self_ref.create_entity_type(&schema, &events).await?;
+            serde_json::to_value(&schema)
+                .map_err(|e| DomainError::Storage(format!("entity_schema encode: {e}")))
         })
     }
 }
@@ -895,5 +970,188 @@ mod tests {
         .unwrap();
         let err = repo.get_entity_type_by_code(&other_company, "note").await;
         assert!(matches!(err, Err(DomainError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn export_round_trips_schema_as_json() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+
+        let schema = sample_schema(1);
+        repo.create_entity_type(
+            &schema,
+            &[system_event(schema.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+
+        let exported = repo.export_entity_type("", "invoice").await.unwrap();
+        assert_eq!(exported["entity_type"]["code"], "invoice");
+        assert_eq!(exported["fields"].as_array().unwrap().len(), 1);
+        assert_eq!(exported["states"].as_array().unwrap().len(), 2);
+        assert_eq!(exported["transitions"].as_array().unwrap().len(), 1);
+        assert_eq!(exported["relations"].as_array().unwrap().len(), 1);
+
+        // Round-trip: импорт экспортированного документа в пустую БД.
+        let db2 = mem_db().await;
+        let repo2 = SurrealMetadataRepository::new(db2.clone());
+        repo2.ensure_schema().await.unwrap();
+        let store2 = crate::SurrealEventStore::new(db2);
+        store2.ensure_schema().await.unwrap();
+
+        let imported = repo2
+            .import_entity_type(
+                &exported,
+                &[system_event(schema.entity_type.id, "metadata.entity_type.imported")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(imported["entity_type"]["code"], "invoice");
+
+        let got = repo2.get_schema("", "invoice").await.unwrap();
+        assert_eq!(got.fields.len(), 1);
+        assert_eq!(got.states.len(), 2);
+        assert_eq!(got.entity_type.metadata_version, 1);
+
+        let stream = store2
+            .read_stream(StreamType::Metadata, &schema.entity_type.id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(stream.len(), 1);
+        assert_eq!(stream[0].event_type, "metadata.entity_type.imported");
+    }
+
+    #[tokio::test]
+    async fn import_with_same_version_is_noop() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+
+        let schema = sample_schema(1);
+        repo.create_entity_type(
+            &schema,
+            &[system_event(schema.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+
+        let doc = repo.export_entity_type("", "invoice").await.unwrap();
+        let event = system_event(schema.entity_type.id, "metadata.entity_type.imported");
+        repo.import_entity_type(&doc, std::slice::from_ref(&event)).await.unwrap();
+        repo.import_entity_type(&doc, &[event]).await.unwrap();
+
+        // И тип, и Труба не дублируются: вторая импортация — no-op.
+        assert_eq!(repo.list_entity_types().await.unwrap().len(), 1);
+        let stream = store
+            .read_stream(StreamType::Metadata, &schema.entity_type.id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(stream.len(), 1);
+        assert_eq!(stream[0].event_type, "metadata.seeded");
+    }
+
+    #[tokio::test]
+    async fn import_with_older_version_keeps_newer_schema() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+
+        let mut v2 = sample_schema(2);
+        v2.fields[0].label = "Итоговая сумма".to_string();
+        repo.create_entity_type(
+            &v2,
+            &[system_event(v2.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+
+        // Экспортированная ранее схема v1 (из другой среды) не перезаписывает v2.
+        let mut v1_doc = serde_json::to_value(sample_schema(1)).unwrap();
+        v1_doc["fields"][0]["label"] = json!("Старая метка");
+        repo.import_entity_type(
+            &v1_doc,
+            &[system_event(v2.entity_type.id, "metadata.entity_type.imported")],
+        )
+        .await
+        .unwrap();
+
+        let got = repo.get_schema("", "invoice").await.unwrap();
+        assert_eq!(got.entity_type.metadata_version, 2);
+        assert_eq!(got.fields[0].label, "Итоговая сумма");
+    }
+
+    #[tokio::test]
+    async fn import_removes_deleted_child_resources() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db.clone());
+        repo.ensure_schema().await.unwrap();
+        let store = crate::SurrealEventStore::new(db);
+        store.ensure_schema().await.unwrap();
+
+        let v1 = sample_schema(1);
+        repo.create_entity_type(
+            &v1,
+            &[system_event(v1.entity_type.id, "metadata.seeded")],
+        )
+        .await
+        .unwrap();
+
+        // Вторая версия: поле sum → sum+comment, состояние posted удалено,
+        // переход post удалён (иначе ссылался бы на удалённое состояние).
+        let mut v2 = sample_schema(2);
+        v2.fields.push(EntityField {
+            id: Uuid::new_v4(),
+            entity_type: "invoice".to_string(),
+            code: "comment".to_string(),
+            label: "Комментарий".to_string(),
+            data_type: FieldType::Text,
+            required: false,
+            is_unique: false,
+            is_indexed: false,
+            options: json!({}),
+            is_system: false,
+            order: 2,
+        });
+        v2.states.retain(|s| s.code == "draft");
+        v2.transitions.clear();
+
+        repo.update_entity_type(
+            &v2,
+            &[system_event(v2.entity_type.id, "metadata.entity_type.updated")],
+        )
+        .await
+        .unwrap();
+
+        let got = repo.get_schema("", "invoice").await.unwrap();
+        let field_codes = got
+            .fields
+            .iter()
+            .map(|f| f.code.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(field_codes, HashSet::from(["sum", "comment"]));
+        assert_eq!(got.states.len(), 1);
+        assert_eq!(got.transitions.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn export_missing_type_and_bad_import_are_rejected() {
+        let db = mem_db().await;
+        let repo = SurrealMetadataRepository::new(db);
+        repo.ensure_schema().await.unwrap();
+
+        let err = repo.export_entity_type("", "ghost").await;
+        assert!(matches!(err, Err(DomainError::NotFound(_))));
+
+        let err = repo
+            .import_entity_type(&json!({"entity_type": {"code": "broken"}}), &[])
+            .await;
+        assert!(matches!(err, Err(DomainError::ValidationError(_))));
     }
 }

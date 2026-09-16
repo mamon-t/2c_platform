@@ -5,6 +5,7 @@ import '../providers/app_providers.dart';
 import '../screens/catalog_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/login_screen.dart';
+import '../screens/metadata_editor_screen.dart';
 import '../screens/object_form_screen.dart';
 import '../screens/settings_screen.dart';
 
@@ -40,6 +41,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/catalog/:entityType',
         builder: (context, state) => CatalogScreen(
           entityType: state.pathParameters['entityType']!,
+        ),
+      ),
+      GoRoute(
+        path: '/metadata/editor/:entityType?',
+        builder: (context, state) => MetadataEditorScreen(
+          entityType: state.pathParameters['entityType'],
         ),
       ),
       GoRoute(

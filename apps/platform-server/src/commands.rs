@@ -648,6 +648,34 @@ async fn register_metadata_commands(
             }
         })
         .await;
+
+    registry
+        .register_with_metadata("metadata.export", CommandMetadata::requires("metadata.read"), {
+            let metadata = metadata.clone();
+            move |params: Value, _ctx: CommandExecutionCtx| {
+                let metadata = metadata.clone();
+                async move {
+                    let company_id = optional(&params, "company_id")?.unwrap_or_default();
+                    let code = require(&params, "code")?;
+                    metadata.export_entity_type(&company_id, &code).await
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("metadata.import", CommandMetadata::requires("metadata.manage"), {
+            let metadata = metadata.clone();
+            move |params: Value, _ctx: CommandExecutionCtx| {
+                let metadata = metadata.clone();
+                async move {
+                    let schema = parse_schema(&params)?;
+                    let event = metadata_event(&schema, "metadata.entity_type.imported");
+                    metadata.import_entity_type(&params, &[event]).await
+                }
+            }
+        })
+        .await;
 }
 
 /// Коды ядровых сущностей, доступных через универсальные команды `object.*`
@@ -2336,7 +2364,7 @@ fn script_event(script: &Script, event_type: &str) -> Event {
 mod tests {
     use super::*;
     use core_application::metadata_seed::seed_system_metadata;
-    use core_application::ports::MetadataRepository;
+    use core_application::ports::{EventStore, MetadataRepository};
     use core_infrastructure::surreal_object_repository::SurrealObjectRepository;
     use std::sync::Arc;
     use surrealdb::engine::any::Any;
@@ -2390,6 +2418,7 @@ mod tests {
 
     async fn registry(env: &Env) -> core_application::CommandRegistry {
         let registry = core_application::CommandRegistry::new();
+        register_metadata_commands(&registry, env.metadata.clone()).await;
         register_object_commands(
             &registry,
             env.objects.clone(),
@@ -2696,5 +2725,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DomainError::ValidationError(_)));
+    }
+
+    #[tokio::test]
+    async fn metadata_export_returns_system_schema_json() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let exported = registry
+            .execute("metadata.export", json!({ "code": "company", "company_id": "" }))
+            .await
+            .unwrap();
+        assert_eq!(exported["entity_type"]["code"], "company");
+        assert_eq!(exported["entity_type"]["is_system"], true);
+        let codes: Vec<&str> = exported["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["code"].as_str().unwrap())
+            .collect();
+        assert!(codes.contains(&"code"));
+        assert!(codes.contains(&"name"));
+        assert!(codes.contains(&"is_active"));
+    }
+
+    #[tokio::test]
+    async fn metadata_import_registers_type_and_writes_event() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let note = note_schema();
+        let doc = serde_json::to_value(&note).unwrap();
+
+        let imported = registry
+            .execute("metadata.import", doc)
+            .await
+            .unwrap();
+        assert_eq!(imported["entity_type"]["code"], "note");
+        assert_eq!(imported["entity_type"]["kind"], "document");
+
+        let schema = env.metadata.get_schema("", "note").await.unwrap();
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(schema.states.len(), 1);
+
+        let store = core_infrastructure::SurrealEventStore::new(env._db.clone());
+        let stream = store
+            .read_stream(StreamType::Metadata, &note.entity_type.id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(stream.len(), 1);
+        assert_eq!(stream[0].event_type, "metadata.entity_type.imported");
     }
 }

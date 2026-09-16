@@ -23,6 +23,44 @@ class EntitySchema {
   final List<EntityAction> actions;
   final List<EntityRelation> relations;
 
+  /// Копия схемы с заменой выбранных секций (для редактора метаданных).
+  EntitySchema copyWith({
+    EntityType? entityType,
+    List<EntityField>? fields,
+    List<EntityState>? states,
+    List<EntityTransition>? transitions,
+    List<EntityForm>? forms,
+    List<EntityAction>? actions,
+    List<EntityRelation>? relations,
+  }) {
+    return EntitySchema(
+      entityType: entityType ?? this.entityType,
+      fields: fields ?? this.fields,
+      states: states ?? this.states,
+      transitions: transitions ?? this.transitions,
+      forms: forms ?? this.forms,
+      actions: actions ?? this.actions,
+      relations: relations ?? this.relations,
+    );
+  }
+
+  /// Wire-документ для `metadata.import`: `{entity_type, fields, states, ...}`.
+  /// `metadataVersion` принудительно повышает версию типа (по умолчанию —
+  /// текущая), чтобы ensure-семантика сервера применила изменения.
+  Map<String, dynamic> toJson({int? metadataVersion}) {
+    return {
+      'entity_type': entityType.copyWith(
+        metadataVersion: metadataVersion ?? entityType.metadataVersion,
+      ).toJson(),
+      'fields': fields.map((f) => f.toJson()).toList(),
+      'states': states.map((s) => s.toJson()).toList(),
+      'transitions': transitions.map((t) => t.toJson()).toList(),
+      'forms': forms.map((f) => f.toJson()).toList(),
+      'actions': actions.map((a) => a.toJson()).toList(),
+      'relations': relations.map((r) => r.toJson()).toList(),
+    };
+  }
+
   /// Поля в порядке отображения (сервер хранит `order`).
   List<EntityField> get orderedFields {
     final sorted = [...fields]..sort((a, b) => a.order.compareTo(b.order));
@@ -67,22 +105,61 @@ class EntityType {
     required this.kind,
     this.companyId,
     this.isSystem = false,
+    this.id,
+    this.metadataVersion = 0,
   });
 
+  final String? id;
   final String code;
   final String name;
   final String kind;
   final String? companyId;
   final bool isSystem;
+  final int metadataVersion;
+
+  EntityType copyWith({
+    String? id,
+    String? code,
+    String? name,
+    String? kind,
+    String? companyId,
+    bool? isSystem,
+    int? metadataVersion,
+  }) {
+    return EntityType(
+      id: id ?? this.id,
+      code: code ?? this.code,
+      name: name ?? this.name,
+      kind: kind ?? this.kind,
+      companyId: companyId ?? this.companyId,
+      isSystem: isSystem ?? this.isSystem,
+      metadataVersion: metadataVersion ?? this.metadataVersion,
+    );
+  }
 
   factory EntityType.fromJson(Map<String, dynamic> json) {
     return EntityType(
+      id: json['id'] as String?,
       code: _str(json['code'], 'entity_type.code'),
       name: _str(json['name'], 'entity_type.name'),
       kind: _str(json['kind'], 'entity_type.kind'),
       companyId: json['company_id'] as String?,
       isSystem: json['is_system'] as bool? ?? false,
+      metadataVersion: json['metadata_version'] as int? ?? 0,
     );
+  }
+
+  /// Wire-документ `metadata.import` (id опционален — сервер сгенерирует сам).
+  Map<String, dynamic> toJson() {
+    return {
+      if (id != null) 'id': id,
+      'code': code,
+      'name': name,
+      'kind': kind,
+      if (companyId != null) 'company_id': companyId,
+      if (isSystem) 'is_system': isSystem,
+      'metadata_version': metadataVersion,
+    };
   }
 }
 
@@ -129,6 +206,24 @@ class EntityField {
     return null;
   }
 
+  EntityField copyWith({
+    String? code,
+    String? label,
+    String? dataType,
+    bool? required,
+    int? order,
+    Object? options,
+  }) {
+    return EntityField(
+      code: code ?? this.code,
+      label: label ?? this.label,
+      dataType: dataType ?? this.dataType,
+      required: required ?? this.required,
+      order: order ?? this.order,
+      options: options ?? this.options,
+    );
+  }
+
   factory EntityField.fromJson(Map<String, dynamic> json) {
     return EntityField(
       code: _str(json['code'], 'entity_field.code'),
@@ -138,6 +233,18 @@ class EntityField {
       order: json['order'] as int? ?? 0,
       options: json['options'],
     );
+  }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {
+      'code': code,
+      'label': label,
+      'data_type': dataType,
+      'required': required,
+      'order': order,
+      if (options != null) 'options': options,
+    };
   }
 }
 
@@ -155,6 +262,20 @@ class EntityState {
   final bool isInitial;
   final bool isFinal;
 
+  EntityState copyWith({
+    String? code,
+    String? label,
+    bool? isInitial,
+    bool? isFinal,
+  }) {
+    return EntityState(
+      code: code ?? this.code,
+      label: label ?? this.label,
+      isInitial: isInitial ?? this.isInitial,
+      isFinal: isFinal ?? this.isFinal,
+    );
+  }
+
   factory EntityState.fromJson(Map<String, dynamic> json) {
     return EntityState(
       code: _str(json['code'], 'entity_state.code'),
@@ -162,6 +283,16 @@ class EntityState {
       isInitial: json['is_initial'] as bool? ?? false,
       isFinal: json['is_final'] as bool? ?? false,
     );
+  }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {
+      'code': code,
+      'label': label,
+      'is_initial': isInitial,
+      'is_final': isFinal,
+    };
   }
 }
 
@@ -179,6 +310,20 @@ class EntityTransition {
   final String fromState;
   final String toState;
 
+  EntityTransition copyWith({
+    String? code,
+    String? label,
+    String? fromState,
+    String? toState,
+  }) {
+    return EntityTransition(
+      code: code ?? this.code,
+      label: label ?? this.label,
+      fromState: fromState ?? this.fromState,
+      toState: toState ?? this.toState,
+    );
+  }
+
   factory EntityTransition.fromJson(Map<String, dynamic> json) {
     return EntityTransition(
       code: _str(json['code'], 'entity_transition.code'),
@@ -186,6 +331,16 @@ class EntityTransition {
       fromState: _str(json['from_state'], 'entity_transition.from_state'),
       toState: _str(json['to_state'], 'entity_transition.to_state'),
     );
+  }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {
+      'code': code,
+      'label': label,
+      'from_state': fromState,
+      'to_state': toState,
+    };
   }
 }
 
@@ -210,6 +365,11 @@ class EntityForm {
       layout: json['layout'],
     );
   }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {'code': code, 'label': label, if (layout != null) 'layout': layout};
+  }
 }
 
 /// Действие типа сущности (`entity_actions`).
@@ -225,6 +385,11 @@ class EntityAction {
       label: _str(json['label'], 'entity_action.label'),
     );
   }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {'code': code, 'label': label};
+  }
 }
 
 /// Связь типа сущности с другим типом (`entity_relations`).
@@ -239,6 +404,11 @@ class EntityRelation {
       code: _str(json['code'], 'entity_relation.code'),
       targetType: _str(json['target_type'], 'entity_relation.target_type'),
     );
+  }
+
+  /// Wire-документ `metadata.import`.
+  Map<String, dynamic> toJson() {
+    return {'code': code, 'target_type': targetType};
   }
 }
 

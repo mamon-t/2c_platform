@@ -14,6 +14,7 @@ use core_domain::types::{AggregateId, Version};
 use core_domain::wasm_manifest::ModuleManifest;
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use uuid::Uuid;
@@ -445,6 +446,33 @@ pub trait MetadataRepository: Send + Sync {
         company_id: &str,
         entity_type: &str,
     ) -> BoxFuture<'_, Result<EntitySchema, DomainError>>;
+
+    /// Экспортирует схему типа сущности как JSON-документ (портативный
+    /// формат для резервного копирования и переноса между средами).
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::NotFound`, если тип не существует в компании
+    /// (или не является глобальным системным типом).
+    fn export_entity_type(
+        &self,
+        company_id: &str,
+        entity_type: &str,
+    ) -> BoxFuture<'_, Result<Value, DomainError>>;
+
+    /// Импортирует экспортированную ранее схему типа сущности с
+    /// ensure-семантикой: более новая `metadata_version` применяется,
+    /// равная или более старая — игнорируется (no-op, события не пишутся).
+    ///
+    /// # Errors
+    ///
+    /// Возвращает `DomainError::ValidationError`, если документ не является
+    /// корректной схемой, `DomainError::Storage` при сбое сохранения.
+    fn import_entity_type(
+        &self,
+        schema: &Value,
+        events: &[Event],
+    ) -> BoxFuture<'_, Result<Value, DomainError>>;
 }
 
 /// Хранилище установленных WASM-модулей: каталог `modules` (глобальная запись

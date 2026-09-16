@@ -316,19 +316,31 @@ impl ModuleManager {
             .await?;
 
         let mut modules = Vec::new();
-        if permissions
+        let can_read = permissions
             .check(&user_id, &actor_company_id, None, None, "read")
-            .await?
-        {
+            .await?;
+        let can_manage_metadata = permissions
+            .check(&user_id, &actor_company_id, None, None, "metadata.manage")
+            .await?;
+        let mut navigation = Vec::new();
+        if can_read {
+            navigation.push(json!({ "code": "companies", "label": "Компании", "entity_type": "company" }));
+            navigation.push(json!({ "code": "users", "label": "Пользователи", "entity_type": "user" }));
+            navigation.push(json!({ "code": "roles", "label": "Роли", "entity_type": "role" }));
+        }
+        if can_manage_metadata {
+            navigation.push(json!({
+                "code": "metadata",
+                "label": "Метаданные",
+                "entity_type": null,
+            }));
+        }
+        if !navigation.is_empty() {
             modules.push(json!({
                 "code": "platform",
                 "display_name": "Платформа",
                 "version": "1.0.0",
-                "navigation": [
-                    { "code": "companies", "label": "Компании", "entity_type": "company" },
-                    { "code": "users", "label": "Пользователи", "entity_type": "user" },
-                    { "code": "roles", "label": "Роли", "entity_type": "role" },
-                ],
+                "navigation": navigation,
             }));
         }
         for record in records {
