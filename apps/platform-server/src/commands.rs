@@ -1215,6 +1215,7 @@ pub async fn register_bootstrap_command(
     roles: Arc<SurrealRoleRepository>,
     policies: Arc<SurrealPermissionPolicyRepository>,
     audit: Arc<SurrealAuditRepository>,
+    metadata: Arc<SurrealMetadataRepository>,
 ) {
     registry
         .register_with_metadata(
@@ -1226,12 +1227,14 @@ pub async fn register_bootstrap_command(
                 let roles = roles.clone();
                 let policies = policies.clone();
                 let audit = audit.clone();
+                let metadata = metadata.clone();
                 move |params: Value, _ctx: CommandExecutionCtx| {
                     let companies = companies.clone();
                     let users = users.clone();
                     let roles = roles.clone();
                     let policies = policies.clone();
                     let audit = audit.clone();
+                    let metadata = metadata.clone();
                     async move {
                         let params: BootstrapParams = serde_json::from_value(params).map_err(|e| {
                             DomainError::ValidationError(format!(
@@ -1245,6 +1248,7 @@ pub async fn register_bootstrap_command(
                             roles.as_ref(),
                             policies.as_ref(),
                             audit.as_ref(),
+                            metadata.as_ref(),
                         )
                         .await?;
                         encode(&result)

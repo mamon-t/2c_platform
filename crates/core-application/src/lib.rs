@@ -2,6 +2,7 @@ pub mod app_registry;
 pub mod auth;
 pub mod bootstrap;
 pub mod command_registry;
+pub mod metadata_seed;
 pub mod module_manager;
 pub mod permission_manager;
 pub mod ports;
@@ -24,4 +25,5 @@ pub use ports::{
 };
 pub use registry::CodeRegistry;
 pub use seed::seed_system_roles_and_policies;
+pub use metadata_seed::{seed_system_metadata, system_metadata_type_count};
 pub use transaction_orchestrator::TransactionOrchestrator;

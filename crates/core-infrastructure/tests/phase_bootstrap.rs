@@ -13,15 +13,17 @@ use core_application::bootstrap::{bootstrap_platform, BootstrapParams};
 use core_application::command_registry::{CommandExecutionCtx, CommandMetadata, CommandRegistry};
 use core_application::permission_manager::PermissionManager;
 use core_application::ports::{
-    AuditRepository, AuthToken, CompanyRepository, PermissionPolicyRepository, RoleRepository,
-    TokenManager, UserRepository,
+    AuditRepository, AuthToken, CompanyRepository, MetadataRepository, PermissionPolicyRepository,
+    RoleRepository, TokenManager, UserRepository,
 };
 use core_domain::audit::{AuditFilter, AuditResult};
 use core_domain::company::Company;
 use core_domain::error::DomainError;
 use core_domain::event::{ActorSnapshot, Event, StreamType};
+use core_application::metadata_seed::system_metadata_type_count;
 use core_infrastructure::surreal_audit_repository::SurrealAuditRepository;
 use core_infrastructure::surreal_company_repository::SurrealCompanyRepository;
+use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
 use core_infrastructure::surreal_permission_policy_repository::SurrealPermissionPolicyRepository;
 use core_infrastructure::surreal_role_repository::SurrealRoleRepository;
 use core_infrastructure::surreal_user_repository::SurrealUserRepository;
@@ -46,6 +48,7 @@ struct Env {
     roles: Arc<SurrealRoleRepository>,
     policies: Arc<SurrealPermissionPolicyRepository>,
     audit: Arc<SurrealAuditRepository>,
+    metadata: Arc<SurrealMetadataRepository>,
 }
 
 async fn setup() -> Env {
@@ -63,6 +66,8 @@ async fn setup() -> Env {
     policies.ensure_schema().await.unwrap();
     let audit = Arc::new(SurrealAuditRepository::new(db.clone()));
     audit.ensure_schema().await.unwrap();
+    let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
+    metadata.ensure_schema().await.unwrap();
 
     Env {
         _db: db,
@@ -71,6 +76,7 @@ async fn setup() -> Env {
         roles,
         policies,
         audit,
+        metadata,
     }
 }
 
@@ -129,6 +135,7 @@ async fn full_bootstrap_cycle_creates_company_admin_roles_and_binds() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap();
@@ -138,6 +145,7 @@ async fn full_bootstrap_cycle_creates_company_admin_roles_and_binds() {
     assert_eq!(res.admin_login, "root");
     assert_eq!(res.roles_seeded, 4);
     assert_eq!(res.policies_seeded, 6);
+    assert_eq!(res.metadata_entity_types_seeded, system_metadata_type_count());
 
     // Компания создана.
     let company = env.companies.get(&res.company_id).await.unwrap();
@@ -180,6 +188,29 @@ async fn full_bootstrap_cycle_creates_company_admin_roles_and_binds() {
     assert!(profiles[0].is_primary);
     assert_eq!(profiles[0].company_id, res.company_id);
 
+    // Системные типы метаданных засижены.
+    let types = env.metadata.list_entity_types().await.unwrap();
+    assert_eq!(types.len(), system_metadata_type_count());
+    for code in [
+        "company",
+        "user",
+        "role",
+        "entity_type",
+        "entity_field",
+        "entity_state",
+        "entity_transition",
+    ] {
+        let et = env.metadata.get_entity_type_by_code("", code).await.unwrap();
+        assert!(et.is_system, "тип {code} должен быть системным");
+    }
+
+    // Схема системного типа собрана полностью: у `user` есть состояния и переход.
+    let user_schema = env.metadata.get_schema("", "user").await.unwrap();
+    assert_eq!(user_schema.states.len(), 2);
+    assert_eq!(user_schema.transitions.len(), 1);
+    assert_eq!(user_schema.transitions[0].from_state, "active");
+    assert_eq!(user_schema.transitions[0].to_state, "blocked");
+
     // Аудит: запись system.bootstrap с деталями.
     let entries = env
         .audit
@@ -201,6 +232,10 @@ async fn full_bootstrap_cycle_creates_company_admin_roles_and_binds() {
     assert!(matches!(entry.result, AuditResult::Success));
     assert_eq!(entry.details.as_ref().unwrap()["company_code"], "acme");
     assert_eq!(entry.details.as_ref().unwrap()["admin_login"], "root");
+    assert_eq!(
+        entry.details.as_ref().unwrap()["metadata_entity_types_seeded"],
+        7
+    );
 }
 
 #[tokio::test]
@@ -214,6 +249,7 @@ async fn second_bootstrap_call_is_rejected() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap();
@@ -225,6 +261,7 @@ async fn second_bootstrap_call_is_rejected() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap_err();
@@ -256,6 +293,7 @@ async fn bootstrap_with_existing_company_code_is_rejected() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap_err();
@@ -316,6 +354,7 @@ async fn login_after_bootstrap_succeeds() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap();
@@ -341,6 +380,7 @@ async fn login_with_wrong_password_is_rejected() {
         env.roles.as_ref(),
         env.policies.as_ref(),
         env.audit.as_ref(),
+        env.metadata.as_ref(),
     )
     .await
     .unwrap();

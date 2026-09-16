@@ -140,6 +140,7 @@ async fn main() -> Result<()> {
         roles.clone(),
         policies.clone(),
         audit.clone(),
+        metadata.clone(),
     )
     .await;
 

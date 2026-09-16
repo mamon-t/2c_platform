@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::metadata_seed::seed_system_metadata;
 use crate::ports::{
-    AuditRepository, CompanyRepository, PermissionPolicyRepository, RoleRepository, UserRepository,
+    AuditRepository, CompanyRepository, MetadataRepository, PermissionPolicyRepository,
+    RoleRepository, UserRepository,
 };
 use crate::seed::{seed_system_roles_and_policies, system_policies_count, system_roles_count};
 
@@ -42,6 +44,7 @@ pub struct BootstrapResult {
     pub admin_login: String,
     pub roles_seeded: usize,
     pub policies_seeded: usize,
+    pub metadata_entity_types_seeded: usize,
 }
 
 fn system_event(
@@ -77,13 +80,14 @@ fn system_event(
 ///
 /// Возвращает `DomainError::ValidationError` при нарушениях идемпотентности и
 /// неверном пароле, `DomainError::Storage` при сбоях хранилища.
-pub async fn bootstrap_platform<C, U, R, P, A>(
+pub async fn bootstrap_platform<C, U, R, P, A, M>(
     params: BootstrapParams,
     companies: &C,
     users: &U,
     roles: &R,
     policies: &P,
     audit: &A,
+    metadata: &M,
 ) -> Result<BootstrapResult, DomainError>
 where
     C: CompanyRepository + ?Sized,
@@ -91,6 +95,7 @@ where
     R: RoleRepository + ?Sized,
     P: PermissionPolicyRepository + ?Sized,
     A: AuditRepository + ?Sized,
+    M: MetadataRepository + ?Sized,
 {
     let existing = companies.list().await?;
     if existing.iter().any(|c| c.code == params.company_code) {
@@ -193,6 +198,7 @@ where
         .await?;
 
     let summary = seed_system_roles_and_policies(&company_id, roles, policies, audit).await?;
+    let metadata_seeded = seed_system_metadata(metadata).await?;
 
     let admin_role = roles.get_by_code(&company_id, "admin").await?;
     let mut bound = user;
@@ -255,6 +261,7 @@ where
             "admin_login": params.admin_login,
             "roles_created": summary.roles_created,
             "policies_seeded": system_policies_count(),
+            "metadata_entity_types_seeded": metadata_seeded,
         })),
         ip_address: None,
         user_agent: None,
@@ -270,5 +277,6 @@ where
         admin_login: params.admin_login,
         roles_seeded: system_roles_count(),
         policies_seeded: system_policies_count(),
+        metadata_entity_types_seeded: metadata_seeded,
     })
 }
