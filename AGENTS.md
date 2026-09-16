@@ -230,7 +230,7 @@ login → разделы → каталог → view/edit → create → OCC-к�
 → смена темы) с фиксами клиента: роутер не монтирует защищённые экраны при
 `AuthRestoring`, сетевые провайдеры `sdui_providers` перезапускаются по смене
 сессии (`_authRevision`).
-**Расширение 1 (ТЗ v3.1_1): фазы 15pre-1/15pre-2 завершены.** 15pre-1
+**Расширение 1 (ТЗ v3.1_1): фазы 15pre-1/15pre-2/15pre-3 завершены.** 15pre-1
 (`9646899`): системные метаданные — `core-application/metadata_seed.rs`
 (`seed_system_metadata`/`system_metadata_schemas`/`system_metadata_type_count`,
 7 глобальных типов `company`/`user`/`role`/`entity_type`/`entity_field`/
@@ -245,9 +245,26 @@ Object-форму, события `company.*`/`user.*`/`role.*`, фильтр с
 схем в `get_entity_type_by_code` (фолбэк в `company_id=""` только для
 `is_system`), юнит-тесты сервера +5, клиентские тесты `home_screen_test` (5) +
 `core_entity_catalog_test` (4), флатер 121/121.
+15pre-3 (`5caf46f`): редактор метаданных + экспорт/импорт — `MetadataRepository::
+export_entity_type`/`import_entity_type` (surreal: экспорт схема→JSON, импорт
+`from_value::<EntitySchema>`+`create_entity_type`, событие
+`metadata.entity_type.imported`); orphan-синхронизация `delete_orphans` (после
+апсёрта дочерних ресурсов — удалённые в схеме поля/переходы уходят из БД);
+команды `metadata.export` (`metadata.read`) / `metadata.import`
+(`metadata.manage`), wire-контракт `{entity_type, fields[], states[],
+transitions[], forms[], actions[], relations[]}` с обязательным
+`metadata_version` (ensure: старшая применяется, ≤ — no-op); пункт «Метаданные»
+в `module.navigation` за гейтом `metadata.manage`; клиент: модели `toJson/
+copyWith`, `MetadataService` (create/export/import со сбросом кэша), SDUI-
+редактор `metadata_editor_screen` (секции Поля/Состояния/Переходы, диалоги,
+каскадное удаление переходов, guard последнего состояния, бамп
+`metadata_version` при сохранении, экспорт/импорт JSON, «Новый тип»), роут
+`/metadata/editor/:entityType?`; тесты: clippy 0, сервер 45 (7+12+8+6+12),
+клиент 131 (121+10).
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c).
-Следующая — 15pre-3 (редактор метаданных + `metadata.export`/`metadata.import`).
+Следующая — Фаза 11 (Flutter-клиент, SDUI): остаётся полировка и закрытие подфаз
+по мере надобности (детали фаз и фактический порядок — см. ниже).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`,
 клиент — `doc/frontend_report.md`.
 
