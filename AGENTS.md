@@ -129,9 +129,13 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 
 ## Статус фаз
 
-Реализовано: Фазы 1–10 (10a + 10b + 10c), 13 и 14, доработка перед 11б
+Реализовано: Фазы 1–10 (10a + 10b + 10c), 13, 14, доработка перед 11б
 (SDUI-навигация: `module.navigation`/`platform.modules`, `RoleRepository::update`,
-`ManifestNavItem.entity_type`) и `system.bootstrap`. Фазы 1–8:
+`ManifestNavItem.entity_type`), `system.bootstrap`, Расширение 1 (`15pre-1` —
+системные метаданные, `15pre-2` — SDUI ядровых сущностей, `15pre-3` — редактор
+метаданных + экспорт/импорт) и подфаза `15.1` (script.test + structured
+script.validate); Фаза 15 (Rhai-редактор) — в работе (15.2–15.4 впереди).
+Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
 `Фаза 3` — метаданные (entity_types, fields, states, transitions, forms, relations, actions);
