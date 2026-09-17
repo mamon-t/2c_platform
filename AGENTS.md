@@ -136,7 +136,7 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 метаданных + экспорт/импорт) и подфазы `15.1` (script.test + structured
 script.validate) и `15.2` (клиентский каталог скриптов: ScriptListScreen/
 ScriptEditorScreen, пункт «Скрипты» в навигации за script.manage);
-Фаза 15 (Rhai-редактор) — в работе (15.3–15.4 впереди).
+Фаза 15 (Rhai-редактор) — завершена.
 Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
@@ -267,7 +267,7 @@ copyWith`, `MetadataService` (create/export/import со сбросом кэша)
 `metadata_version` при сохранении, экспорт/импорт JSON, «Новый тип»), роут
 `/metadata/editor/:entityType?`; тесты: clippy 0, сервер 45 (7+12+8+6+12),
 клиент 131 (121+10).
-**Фаза 15 (Rhai-редактор, ТЗ v3.1 §15/§19) — в работе (подфазы 15.2–15.4).**
+**Фаза 15 (Rhai-редактор, ТЗ v3.1 §15/§19) — завершена (15.1–15.4).**
 15.1 завершена (`38180e4`): `script.test` (`script.manage`, test_run без
 гейтов `is_active`/`object`, `{result, execution_time_ms}`) +
 структурированный `script.validate` (`script.read`, контракт
@@ -294,8 +294,18 @@ parenBalance, комментарии, последний оператор — б
 «strict „;\"» блокирует сохранение SnackBar с координатой, панель «Клиентский
 пре-чек:»; клиентские тесты +11 = 172, analyzer 0; c прочим коммитом добавлена
 спека `doc/TZ_v3.1_1.md` (Расширение 1).
-Впереди: 15.4 (интеграция + live + документация).
-**Бэклог:** авто-хук привязанных скриптов в object-конвейер — отложен.
+15.4 завершена (`2bcf6d0`): авто-хук привязанных скриптов в object-конвейер —
+`core-application/script_hooks.rs` (`object_pre_hooks`: formula → validator →
+before_action; `object_after_hooks`: after_action; `load_active_scripts` по
+`is_active`+`entity_type`, `parse_company_id`, `build_context`); формула
+(Rhai-map `#{key: expr}`) сливается в `object.computed` до валидации схемы,
+validator `false` → `ValidationError`, before/after прерывают команду (после
+записи объект уже в БД); встроено в `object.create`/`object.update`
+(actor из `ctx.actor` с фолбэком system); серверные тесты +2 (formula+validator,
+before+after), object_-тесты 7/7; фикс регрессии 15.1 (`1316fed`):
+`engine_blocks_fs_access` под `ScriptFailure`; clippy 0, полный `cargo test
+--workspace` PASS, клиент 172/172, analyzer 0.
+**Бэклог:** — (пусто для Фазы 15; авто-хук реализован).
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c) —
 кроме подтверждённой Фазы 15 (Rhai-редактор).
