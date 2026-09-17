@@ -131,6 +131,8 @@ async fn main() -> Result<()> {
         companies.clone(),
         users.clone(),
         roles.clone(),
+        scripts.clone(),
+        script_engine.clone(),
     )
     .await;
     commands::register_phase4_audit_commands(&registry, audit.clone()).await;

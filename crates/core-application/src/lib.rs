@@ -8,6 +8,7 @@ pub mod permission_manager;
 pub mod ports;
 pub mod registry;
 pub mod script_context;
+pub mod script_hooks;
 pub mod script_runner;
 pub mod seed;
 pub mod transaction_orchestrator;

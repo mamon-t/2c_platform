@@ -13,6 +13,7 @@ use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
     RoleRepository, ScriptEngine, ScriptRepository, UserRepository,
 };
+use core_application::script_hooks::{object_after_hooks, object_pre_hooks};
 use core_application::script_runner::{execute_script, test_script, validate_script};
 use core_application::seed::seed_system_roles_and_policies;
 use core_application::CommandRegistry;
@@ -1104,6 +1105,7 @@ fn parse_user_status(value: &Value, key: &str) -> Result<Option<UserStatus>, Dom
 /// снимки версий и нумерацию документов. Команды валидируют данные против
 /// мета-модели (`Object::validate`) и добавляют события объектов в Трубу
 /// вместе с записью в Доску.
+#[allow(clippy::too_many_arguments)]
 async fn register_object_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
@@ -1111,6 +1113,8 @@ async fn register_object_commands(
     companies: Arc<SurrealCompanyRepository>,
     users: Arc<SurrealUserRepository>,
     roles: Arc<SurrealRoleRepository>,
+    scripts: Arc<SurrealScriptRepository>,
+    engine: Arc<dyn ScriptEngine>,
 ) {
     registry
         .register_with_metadata("object.create", CommandMetadata::requires("create"), {
@@ -1119,12 +1123,16 @@ async fn register_object_commands(
             let companies = companies.clone();
             let users = users.clone();
             let roles = roles.clone();
-            move |params: Value, _ctx: CommandExecutionCtx| {
+            let scripts = scripts.clone();
+            let engine = engine.clone();
+            move |params: Value, ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
                 let companies = companies.clone();
                 let users = users.clone();
                 let roles = roles.clone();
+                let scripts = scripts.clone();
+                let engine = engine.clone();
                 async move {
                     let entity_type = require(&params, "entity_type")?;
                     let company_id = optional(&params, "company_id")?.unwrap_or_default();
@@ -1170,6 +1178,22 @@ async fn register_object_commands(
                         created_at: now,
                         updated_at: now,
                     };
+                    let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
+                    let object_json = serde_json::to_value(&object)
+                        .map_err(|e| DomainError::ValidationError(format!("сериализация объекта: {e}")))?;
+                    let computed = object_pre_hooks(
+                        scripts.as_ref(),
+                        engine.as_ref(),
+                        &entity_type,
+                        &company_id,
+                        "object.create",
+                        &actor,
+                        object_json,
+                        params.get("data").cloned(),
+                    )
+                    .await?;
+                    let mut object = object;
+                    object.computed = computed;
                     object
                         .validate(&schema.fields, &schema.states)?;
                     let event = system_event(
@@ -1182,6 +1206,17 @@ async fn register_object_commands(
                     let stored = objects
                         .create(&object, &[event])
                         .await?;
+                    object_after_hooks(
+                        scripts.as_ref(),
+                        engine.as_ref(),
+                        &entity_type,
+                        &company_id,
+                        "object.create",
+                        &actor,
+                        encode(&stored)?,
+                        params.get("data").cloned(),
+                    )
+                    .await?;
                     encode(&stored)
                 }
             }
@@ -1257,12 +1292,16 @@ async fn register_object_commands(
             let companies = companies.clone();
             let users = users.clone();
             let roles = roles.clone();
-            move |params: Value, _ctx: CommandExecutionCtx| {
+            let scripts = scripts.clone();
+            let engine = engine.clone();
+            move |params: Value, ctx: CommandExecutionCtx| {
                 let objects = objects.clone();
                 let metadata = metadata.clone();
                 let companies = companies.clone();
                 let users = users.clone();
                 let roles = roles.clone();
+                let scripts = scripts.clone();
+                let engine = engine.clone();
                 async move {
                     let id = parse_uuid(&params, "id")?;
                     match fetch_core_entity(&companies, &users, &roles, &id).await {
@@ -1303,6 +1342,22 @@ async fn register_object_commands(
                         created_at: existing.created_at,
                         updated_at: Utc::now(),
                     };
+                    let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
+                    let updated_json = serde_json::to_value(&updated)
+                        .map_err(|e| DomainError::ValidationError(format!("сериализация объекта: {e}")))?;
+                    let computed = object_pre_hooks(
+                        scripts.as_ref(),
+                        engine.as_ref(),
+                        &existing.entity_type,
+                        &existing.company_id,
+                        "object.update",
+                        &actor,
+                        updated_json,
+                        params.get("data").cloned(),
+                    )
+                    .await?;
+                    let mut updated = updated;
+                    updated.computed = computed;
                     updated
                         .validate(&schema.fields, &schema.states)?;
                     let event = system_event(
@@ -1315,6 +1370,17 @@ async fn register_object_commands(
                     let stored = objects
                         .update(&updated, &[event])
                         .await?;
+                    object_after_hooks(
+                        scripts.as_ref(),
+                        engine.as_ref(),
+                        &existing.entity_type,
+                        &existing.company_id,
+                        "object.update",
+                        &actor,
+                        encode(&stored)?,
+                        params.get("data").cloned(),
+                    )
+                    .await?;
                     encode(&stored)
                 }
             }
@@ -1607,6 +1673,7 @@ pub async fn register_phase3_commands(
 }
 
 /// Регистрирует набор команд Фазы 4 в общем реестре.
+#[allow(clippy::too_many_arguments)]
 pub async fn register_phase4_commands(
     registry: &CommandRegistry,
     objects: Arc<SurrealObjectRepository>,
@@ -1614,8 +1681,10 @@ pub async fn register_phase4_commands(
     companies: Arc<SurrealCompanyRepository>,
     users: Arc<SurrealUserRepository>,
     roles: Arc<SurrealRoleRepository>,
+    scripts: Arc<SurrealScriptRepository>,
+    engine: Arc<dyn ScriptEngine>,
 ) {
-    register_object_commands(registry, objects, metadata, companies, users, roles).await;
+    register_object_commands(registry, objects, metadata, companies, users, roles, scripts, engine).await;
 }
 
 /// Регистрирует набор команд Фазы 5 по ТЗ v3.1: сидинг системных ролей и
@@ -2412,6 +2481,8 @@ mod tests {
         users: Arc<SurrealUserRepository>,
         roles: Arc<SurrealRoleRepository>,
         metadata: Arc<SurrealMetadataRepository>,
+        scripts: Arc<SurrealScriptRepository>,
+        engine: Arc<core_infrastructure::rhai_script_engine::RhaiScriptEngine>,
     }
 
     async fn setup() -> Env {
@@ -2429,8 +2500,24 @@ mod tests {
         roles.ensure_schema().await.unwrap();
         let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
         metadata.ensure_schema().await.unwrap();
+        let scripts = Arc::new(SurrealScriptRepository::new(db.clone()));
+        scripts.ensure_schema().await.unwrap();
 
         seed_system_metadata(metadata.as_ref()).await.unwrap();
+
+        let audit = core_infrastructure::SurrealAuditRepository::new(db.clone());
+        audit.ensure_schema().await.unwrap();
+        let engine = Arc::new(
+            core_infrastructure::rhai_script_engine::RhaiScriptEngine::new(
+                core_infrastructure::rhai_core_api::CoreApiShared {
+                    store,
+                    db: db.clone(),
+                    audit: Arc::new(audit),
+                    runtime: tokio::runtime::Handle::current(),
+                },
+            )
+            .unwrap(),
+        );
 
         Env {
             _db: db,
@@ -2439,6 +2526,8 @@ mod tests {
             users,
             roles,
             metadata,
+            scripts,
+            engine,
         }
     }
 
@@ -2452,6 +2541,8 @@ mod tests {
             env.companies.clone(),
             env.users.clone(),
             env.roles.clone(),
+            env.scripts.clone(),
+            env.engine.clone(),
         )
         .await;
         registry
@@ -2700,6 +2791,189 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    async fn create_bound_script(
+        env: &Env,
+        code: &str,
+        script_type: ScriptType,
+        source: &str,
+    ) {
+        let now = chrono::Utc::now();
+        let script = Script {
+            id: Uuid::new_v4(),
+            code: code.to_string(),
+            name: code.to_string(),
+            script_type,
+            source: source.to_string(),
+            company_id: None,
+            module_code: None,
+            entity_type: Some("note".to_string()),
+            is_active: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let event = system_event(
+            StreamType::Metadata,
+            script.id.to_string(),
+            "script.created",
+            "",
+            serde_json::to_value(&script).unwrap(),
+        );
+        env.scripts.create(&script, &[event]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn object_create_runs_formula_then_validator_hooks() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let note_event = system_event(
+            StreamType::Metadata,
+            Uuid::new_v4().to_string(),
+            "metadata.registered",
+            "",
+            json!({}),
+        );
+        env.metadata
+            .create_entity_type(&note_schema(), &[note_event])
+            .await
+            .unwrap();
+
+        create_bound_script(
+            &env,
+            "compute_total",
+            ScriptType::Formula,
+            "#{ total: ctx.object.data.qty * ctx.object.data.price }",
+        )
+        .await;
+        create_bound_script(
+            &env,
+            "nonneg_total",
+            ScriptType::Validator,
+            "ctx.object.computed.total >= 0",
+        )
+        .await;
+
+        let created = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "note",
+                    "company_id": "",
+                    "kind": "document",
+                    "data": { "title": "Счёт", "qty": 3, "price": 150 },
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created["computed"]["total"], 450);
+
+        let rejected = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "note",
+                    "company_id": "",
+                    "kind": "document",
+                    "data": { "title": "Брак", "qty": -1, "price": 10 },
+                }),
+            )
+            .await;
+        let err = rejected.expect_err("валидатор должен отклонить отрицательный итог");
+        assert!(err.to_string().contains("отклонил объект"));
+    }
+
+    #[tokio::test]
+    async fn object_update_runs_before_and_after_hooks() {
+        let env = setup().await;
+        let registry = registry(&env).await;
+
+        let note_event = system_event(
+            StreamType::Metadata,
+            Uuid::new_v4().to_string(),
+            "metadata.registered",
+            "",
+            json!({}),
+        );
+        env.metadata
+            .create_entity_type(&note_schema(), &[note_event])
+            .await
+            .unwrap();
+
+        let created = registry
+            .execute(
+                "object.create",
+                json!({
+                    "entity_type": "note",
+                    "company_id": "",
+                    "kind": "document",
+                    "data": { "title": "До", "qty": 1, "price": 100 },
+                }),
+            )
+            .await
+            .unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        let ver = created["version"].as_u64().unwrap();
+
+        create_bound_script(
+            &env,
+            "bump_total",
+            ScriptType::Formula,
+            "#{ total: ctx.object.data.qty * ctx.object.data.price }",
+        )
+        .await;
+        create_bound_script(
+            &env,
+            "before_guard",
+            ScriptType::BeforeAction,
+            "throw \"запрещено до записи\"",
+        )
+        .await;
+
+        let before_err = registry
+            .execute(
+                "object.update",
+                json!({ "id": id, "data": { "title": "После", "qty": 1, "price": 100 }, "expected_version": ver }),
+            )
+            .await
+            .expect_err("before_action бросает исключение");
+        assert!(before_err.to_string().contains("запрещено до записи"));
+
+        // after_action выполняется после записи: объект уже сохранён.
+        // Деактивируем before_guard, чтобы пройти предзаписные хуки.
+        let mut guard = env.scripts.get_by_code("before_guard", None).await.unwrap().unwrap();
+        guard.is_active = false;
+        let guard_event = system_event(
+            StreamType::Metadata,
+            guard.id.to_string(),
+            "script.updated",
+            "",
+            serde_json::to_value(&guard).unwrap(),
+        );
+        env.scripts.update(&guard, &[guard_event]).await.unwrap();
+        create_bound_script(
+            &env,
+            "after_log",
+            ScriptType::AfterAction,
+            "throw \"уже записано\"",
+        )
+        .await;
+        let after_err = registry
+            .execute(
+                "object.update",
+                json!({ "id": id, "data": { "title": "После", "qty": 1, "price": 100 }, "expected_version": ver }),
+            )
+            .await
+            .expect_err("after_action бросает исключение");
+        assert!(after_err.to_string().contains("уже записано"));
+
+        let got = registry
+            .execute("object.get", json!({ "id": id }))
+            .await
+            .unwrap();
+        assert_eq!(got["data"]["title"], "После");
+        assert_eq!(got["computed"]["total"], 100);
     }
 
     #[tokio::test]
