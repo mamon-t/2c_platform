@@ -261,10 +261,23 @@ copyWith`, `MetadataService` (create/export/import со сбросом кэша)
 `metadata_version` при сохранении, экспорт/импорт JSON, «Новый тип»), роут
 `/metadata/editor/:entityType?`; тесты: clippy 0, сервер 45 (7+12+8+6+12),
 клиент 131 (121+10).
+**Фаза 15 (Rhai-редактор, ТЗ v3.1 §15/§19) — в работе (подфазы 15.1–15.4).**
+15.1 завершена (`38180e4`): `script.test` (`script.manage`, test_run без
+гейтов `is_active`/`object`, `{result, execution_time_ms}`) +
+структурированный `script.validate` (`script.read`, контракт
+`{valid, errors:[{line,column,message}]}` по `source`/`code` + bind-проверка
+entity_type через metadata); `DomainError::ScriptFailure{message,line,column}`
+(VALIDATION_ERROR, 422 + error_details) и `ScriptError`; позиции из rhai
+position()/line(); Extism ValidationError|ScriptFailure → INVALID_ACTION;
+тесты phase13_scripts 13 (было 210). Впереди: 15.2 (клиентский каталог
+скриптов: ScriptListScreen/ScriptService/`/scripts`+/`/scripts/:code/edit`,
+пункт «Скрипты» за `script.manage`, тесты ~+16), 15.3 (редактор с
+flutter_highlight 0.7.0 + кастомная rhai-грамматика, пре-чек «оператор не
+завершён ';'», strictSemicolons), 15.4 (интеграция + live + документация).
+**Бэклог:** авто-хук привязанных скриптов в object-конвейер — отложен.
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
-криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c).
-Следующая — Фаза 11 (Flutter-клиент, SDUI): остаётся полировка и закрытие подфаз
-по мере надобности (детали фаз и фактический порядок — см. ниже).
+криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c) —
+кроме подтверждённой Фазы 15 (Rhai-редактор).
 Детали фазирования — `doc/TZ_v3.1.md`, фактический порядок — `doc/technical_report.md`,
 клиент — `doc/frontend_report.md`.
 
