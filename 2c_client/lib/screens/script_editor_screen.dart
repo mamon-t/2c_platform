@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/rhai_grammar.dart';
+import '../core/rhai_precheck.dart';
 import '../models/script.dart';
 import '../models/server_error.dart';
 import '../providers/sdui_providers.dart';
@@ -34,6 +37,7 @@ class _ScriptEditorScreenState extends ConsumerState<ScriptEditorScreen> {
   bool _isActive = true;
   bool _loading = true;
   bool _saving = false;
+  bool _strictSemicolons = false;
   ScriptItem? _existing;
   ScriptValidation? _validation;
   String? _testResult;
@@ -44,12 +48,16 @@ class _ScriptEditorScreenState extends ConsumerState<ScriptEditorScreen> {
   @override
   void initState() {
     super.initState();
+    registerRhaiHighlight();
     if (!_creating) {
       _load();
     } else {
       _loading = false;
     }
   }
+
+  /// Претензии из клиентского пре-чека незавершённых «;» в текущем исходнике.
+  List<RhaiIssue> get _precheckIssues => rhaiPrecheck(_source.text);
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -141,6 +149,16 @@ class _ScriptEditorScreenState extends ConsumerState<ScriptEditorScreen> {
     if (code.isEmpty || name.isEmpty || source.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(content: Text('Заполните код, название и исходник')),
+      );
+      return;
+    }
+    final precheck = _precheckIssues;
+    if (precheck.isNotEmpty && _strictSemicolons) {
+      final first = precheck.first;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Пропущен знак «;»: строка ${first.line}:${first.column}'),
+        ),
       );
       return;
     }
@@ -260,18 +278,10 @@ class _ScriptEditorScreenState extends ConsumerState<ScriptEditorScreen> {
               onChanged: (v) => setState(() => _isActive = v),
             ),
             const SizedBox(height: 8),
-            TextFormField(
-              controller: _source,
-              minLines: 8,
-              maxLines: null,
-              keyboardType: TextInputType.multiline,
-              style: const TextStyle(fontFamily: 'monospace'),
-              decoration: const InputDecoration(
-                labelText: 'Исходник Rhai',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
+            _editorLabel(),
+            const SizedBox(height: 8),
+            _sourceEditor(),
+            if (_precheckIssues.isNotEmpty) _precheckPanel(_precheckIssues),
             if (_validation != null) _validationPanel(_validation!),
             if (_testResult != null)
               Padding(
@@ -311,6 +321,125 @@ class _ScriptEditorScreenState extends ConsumerState<ScriptEditorScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _editorLabel() {
+    return Row(
+      children: [
+        const Text('Исходник Rhai', style: TextStyle(fontWeight: FontWeight.w500)),
+        const Spacer(),
+        Text('strict «;»', style: TextStyle(color: Theme.of(context).hintColor)),
+        Switch(
+          key: const ValueKey('strict-semicolons'),
+          value: _strictSemicolons,
+          onChanged: (v) => setState(() => _strictSemicolons = v),
+        ),
+      ],
+    );
+  }
+
+  /// Редактор исходника: подсветка Rhai (фоновый слой) поверх — прозрачное
+  /// редактируемое поле. Синхронизация строк обеспечивается одинаковым
+  /// моноширинным стилем и отступами.
+  Widget _sourceEditor() {
+    return Container(
+      height: 260,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: HighlightView(
+                _source.text,
+                language: 'rhai',
+                theme: _highlightTheme(context),
+                textStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+                padding: const EdgeInsets.all(14),
+              ),
+            ),
+          ),
+          TextField(
+            key: const ValueKey('source-editor'),
+            controller: _source,
+            onChanged: (_) => setState(() {}),
+            minLines: 1,
+            maxLines: null,
+            keyboardType: TextInputType.multiline,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 14,
+              height: 1.4,
+              color: Colors.transparent,
+              decoration: TextDecoration.none,
+            ),
+            cursorColor: Theme.of(context).colorScheme.primary,
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.fromLTRB(14, 14, 14, 14),
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Тема подсветки, согласованная с цветовой схемой приложения.
+  Map<String, TextStyle> _highlightTheme(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final keywordColor = cs.tertiary;
+    final stringColor = cs.primary;
+    final commentColor = cs.outline;
+    final numberColor = cs.secondary;
+    Color typeColor;
+    try {
+      typeColor = Color.lerp(cs.secondaryContainer, cs.onSecondaryContainer, 0.4)!;
+    } catch (_) {
+      typeColor = cs.tertiary;
+    }
+    return {
+      'keyword': TextStyle(color: keywordColor, fontWeight: FontWeight.w600),
+      'literal': TextStyle(color: keywordColor, fontWeight: FontWeight.w600),
+      'built_in': TextStyle(color: typeColor),
+      'string': TextStyle(color: stringColor),
+      'comment': TextStyle(color: commentColor, fontStyle: FontStyle.italic),
+      'number': TextStyle(color: numberColor),
+      'function': TextStyle(color: cs.primary, fontWeight: FontWeight.w600),
+      'type': TextStyle(color: typeColor),
+      'title': TextStyle(color: typeColor, fontWeight: FontWeight.w600),
+    };
+  }
+
+  Widget _precheckPanel(List<RhaiIssue> issues) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Клиентский пре-чек:'),
+          for (final e in issues)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('Строка ${e.line}:${e.column} — ${e.message}'),
+            ),
+        ],
       ),
     );
   }

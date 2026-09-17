@@ -47,11 +47,10 @@ void main() {
   }
 
   Future<void> scrollTo(WidgetTester tester, Finder finder) async {
-    await tester.scrollUntilVisible(
-      finder,
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
+    final scrollable = find
+        .descendant(of: find.byType(ListView), matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(finder, 200, scrollable: scrollable);
     await tester.pumpAndSettle();
   }
 
@@ -76,7 +75,7 @@ void main() {
         find.widgetWithText(TextFormField, 'Название'), 'Мой скрипт');
     await scrollTo(tester, find.text('Исходник Rhai'));
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Исходник Rhai'), '40 + 2');
+        find.byKey(const ValueKey('source-editor')), '40 + 2');
     await scrollTo(tester, find.text('Сохранить'));
     await tester.tap(find.text('Сохранить'));
     await tester.pumpAndSettle();
@@ -98,7 +97,7 @@ void main() {
         find.widgetWithText(TextFormField, 'Название'), 'Мой скрипт');
     await scrollTo(tester, find.text('Исходник Rhai'));
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Исходник Rhai'), '40 + 2');
+        find.byKey(const ValueKey('source-editor')), '40 + 2');
     await scrollTo(tester, find.text('Сохранить'));
     await tester.tap(find.text('Сохранить'));
     await tester.pumpAndSettle();
@@ -149,7 +148,7 @@ void main() {
 
     await scrollTo(tester, find.text('Исходник Rhai'));
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Исходник Rhai'), '40 + 2');
+        find.byKey(const ValueKey('source-editor')), '40 + 2');
     await scrollTo(tester, find.text('Проверить'));
     await tester.tap(find.text('Проверить'));
     await tester.pumpAndSettle();
@@ -170,7 +169,7 @@ void main() {
 
     await scrollTo(tester, find.text('Исходник Rhai'));
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Исходник Rhai'), 'let x = ;');
+        find.byKey(const ValueKey('source-editor')), 'let x = ;');
     await scrollTo(tester, find.text('Проверить'));
     await tester.tap(find.text('Проверить'));
     await tester.pumpAndSettle();
@@ -178,5 +177,64 @@ void main() {
     expect(find.text('Ошибки проверки:'), findsOneWidget);
     expect(find.text('Строка 1:8 — Ожидалось выражение'), findsOneWidget);
     expect(find.text('Найдены ошибки (1)'), findsOneWidget);
+  });
+
+  testWidgets('пре-чек: пропущенная «;» показывает панель предупреждения',
+      (tester) async {
+    await pumpEditor(tester, code: 'new', service: FakeScriptService());
+
+    await scrollTo(tester, find.text('Исходник Rhai'));
+    await tester.enterText(
+        find.byKey(const ValueKey('source-editor')), 'let a = 1\na;');
+    await tester.pumpAndSettle();
+
+    await scrollTo(tester, find.text('Клиентский пре-чек:'));
+    expect(find.text('Клиентский пре-чек:'), findsOneWidget);
+    expect(
+      find.text('Строка 1:10 — Оператор не завершён знаком «;»'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('строгий режим: пропущенная «;» блокирует сохранение',
+      (tester) async {
+    final fake = FakeScriptService();
+    await pumpEditor(tester, code: 'new', service: fake);
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Код'), 'my.script');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Название'), 'Мой скрипт');
+    await scrollTo(tester, find.text('Исходник Rhai'));
+    await tester.enterText(
+        find.byKey(const ValueKey('source-editor')), 'let a = 1\na;');
+    await tester.tap(find.byKey(const ValueKey('strict-semicolons')));
+    await tester.pumpAndSettle();
+    await scrollTo(tester, find.text('Сохранить'));
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+
+    expect(fake.created, isNull);
+    expect(find.textContaining('Пропущен знак «;»'), findsOneWidget);
+  });
+
+  testWidgets('без строгого режима предупреждение не блокирует сохранение',
+      (tester) async {
+    final fake = FakeScriptService();
+    await pumpEditor(tester, code: 'new', service: fake);
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Код'), 'my.script');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Название'), 'Мой скрипт');
+    await scrollTo(tester, find.text('Исходник Rhai'));
+    await tester.enterText(
+        find.byKey(const ValueKey('source-editor')), 'let a = 1\na;');
+    await scrollTo(tester, find.text('Сохранить'));
+    await tester.tap(find.text('Сохранить'));
+    await tester.pumpAndSettle();
+
+    expect(fake.created?.code, 'my.script');
+    expect(find.text('Сохранено'), findsOneWidget);
   });
 }
