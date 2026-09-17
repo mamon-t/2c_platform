@@ -20,6 +20,7 @@ use std::time::Duration;
 use core_application::ports::ScriptEngine;
 use core_application::script_context::ScriptContext;
 use core_domain::error::DomainError;
+use core_domain::script::ScriptError;
 use core_domain::{ActorSnapshot};
 use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, Scope, AST};
 
@@ -180,7 +181,7 @@ impl RhaiScriptEngine {
         let ast = self
             .engine()
             .compile(source)
-            .map_err(|e| DomainError::ValidationError(format!("синтаксическая ошибка скрипта: {e}")))?;
+            .map_err(parse_error_to_domain)?;
         {
             let mut cache = self.cache.write().map_err(|_| {
                 DomainError::Storage("кэш AST заблокирован (write)".to_string())
@@ -209,8 +210,18 @@ impl ScriptEngine for RhaiScriptEngine {
         Box::pin(async move { self.run(source, context).await })
     }
 
-    fn validate(&self, source: &str) -> Result<(), DomainError> {
-        self.get_ast(source).map(|_| ())
+    fn validate(&self, source: &str) -> Result<(), ScriptError> {
+        match self.get_ast(source) {
+            Ok(_) => Ok(()),
+            Err(DomainError::ScriptFailure { message, line, column }) => {
+                Err(ScriptError { message, line, column })
+            }
+            Err(e) => Err(ScriptError {
+                message: e.to_string(),
+                line: None,
+                column: None,
+            }),
+        }
     }
 }
 
@@ -290,7 +301,8 @@ fn build_configured_engine(shared: CoreApiShared) -> Engine {
     engine
 }
 
-/// Классификация ошибки выполнения: лимиты/переполнение — Storage, остальное — ValidationError.
+/// Классификация ошибки выполнения: лимиты/переполнение — Storage, остальное — ScriptFailure
+/// с позицией (line/column), если движок её сообщил.
 fn classify_runtime_error(err: EvalAltResult) -> DomainError {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
@@ -302,7 +314,21 @@ fn classify_runtime_error(err: EvalAltResult) -> DomainError {
     {
         DomainError::Storage(format!("скрипт превысил лимит ресурсов: {msg}"))
     } else {
-        DomainError::ValidationError(format!("ошибка выполнения скрипта: {msg}"))
+        DomainError::ScriptFailure {
+            message: format!("ошибка выполнения скрипта: {msg}"),
+            line: err.position().line().map(|v| v as u32),
+            column: err.position().position().map(|v| v as u32),
+        }
+    }
+}
+
+/// Маппит ошибку компиляции Rhai в `ScriptFailure` с позицией (line/column).
+fn parse_error_to_domain(e: rhai::ParseError) -> DomainError {
+    let pos = e.position();
+    DomainError::ScriptFailure {
+        message: format!("синтаксическая ошибка скрипта: {e}"),
+        line: pos.line().map(|v| v as u32),
+        column: pos.position().map(|v| v as u32),
     }
 }
 
@@ -461,7 +487,7 @@ mod tests {
         let err = engine
             .validate("let x = ;")
             .expect_err("ожидали ошибку синтаксиса");
-        assert!(matches!(err, DomainError::ValidationError(_)));
+        assert!(!err.message.is_empty());
     }
 
     #[test]

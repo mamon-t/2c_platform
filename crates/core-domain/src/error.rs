@@ -13,6 +13,14 @@ pub enum DomainError {
     #[error("Невалидные данные: {0}")]
     ValidationError(String),
 
+    /// Ошибка выполнения/компиляции скрипта с позицией в исходнике (line/column).
+    #[error("Ошибка скрипта: {message}")]
+    ScriptFailure {
+        message: String,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
+
     #[error("Недостаточно прав: {0}")]
     PermissionDenied(String),
 
@@ -27,6 +35,7 @@ impl DomainError {
             DomainError::NotFound(_) => "NOT_FOUND_ERROR",
             DomainError::VersionConflict { .. } => "CONFLICT_ERROR",
             DomainError::ValidationError(_) => "VALIDATION_ERROR",
+            DomainError::ScriptFailure { .. } => "VALIDATION_ERROR",
             DomainError::PermissionDenied(_) => "PERMISSION_ERROR",
             DomainError::Storage(_) => "STORAGE_ERROR",
         }

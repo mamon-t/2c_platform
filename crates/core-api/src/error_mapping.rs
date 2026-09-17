@@ -14,7 +14,9 @@ pub fn http_status(err: &DomainError) -> StatusCode {
     match err {
         DomainError::NotFound(_) => StatusCode::NOT_FOUND,
         DomainError::VersionConflict { .. } => StatusCode::CONFLICT,
-        DomainError::ValidationError(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        DomainError::ValidationError(_) | DomainError::ScriptFailure { .. } => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         DomainError::PermissionDenied(_) => StatusCode::FORBIDDEN,
         DomainError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -32,13 +34,24 @@ pub fn http_status_for_code(code: &str) -> StatusCode {
     }
 }
 
-/// Дополнительные детали ошибки (заполняются для конфликта версий).
+/// Дополнительные детали ошибки (заполняются для конфликта версий
+/// и ошибок скриптов с координатами).
 pub fn error_details(err: &DomainError) -> Option<Value> {
     match err {
         DomainError::VersionConflict { expected, actual } => Some(json!({
             "expected_version": expected.to_string(),
             "actual_version": actual.to_string(),
         })),
+        DomainError::ScriptFailure { line, column, .. } => Some({
+            let mut details = serde_json::Map::new();
+            if let Some(line) = line {
+                details.insert("line".to_string(), json!(line));
+            }
+            if let Some(column) = column {
+                details.insert("column".to_string(), json!(column));
+            }
+            Value::Object(details)
+        }),
         _ => None,
     }
 }

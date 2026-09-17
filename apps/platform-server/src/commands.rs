@@ -13,7 +13,7 @@ use core_application::ports::{
     AuditRepository, CompanyRepository, EntitySchema, MetadataRepository, ObjectRepository,
     RoleRepository, ScriptEngine, ScriptRepository, UserRepository,
 };
-use core_application::script_runner::execute_script;
+use core_application::script_runner::{execute_script, test_script, validate_script};
 use core_application::seed::seed_system_roles_and_policies;
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
@@ -2119,12 +2119,17 @@ pub async fn register_phase10_commands(
 
 /// Команды управления скриптами Rhai Фазы 13d.
 ///
-/// `script.create/update/delete` — право `script.manage`; `script.get/list/validate` —
+/// `script.create/update/delete/test` — право `script.manage`; `script.get/list/validate` —
 /// `script.read`; `script.execute` — `script.execute`. Права выдаются политикой
 /// `platform.scripts` (seed), deny-by-default RBAC, префиксные команды.
+///
+/// `script.validate` дополнительно проверяет существование привязанного типа
+/// сущности (`metadata`); `script.test` выполняет скрипт в тестовом режиме
+/// (`test_run = true`) без влияния на данные.
 pub async fn register_phase13_commands(
     registry: &CommandRegistry,
     scripts: Arc<SurrealScriptRepository>,
+    metadata: Arc<dyn MetadataRepository>,
     engine: Arc<dyn ScriptEngine>,
 ) {
     registry
@@ -2280,13 +2285,34 @@ pub async fn register_phase13_commands(
 
     registry
         .register_with_metadata("script.validate", CommandMetadata::requires("script.read"), {
+            let scripts = scripts.clone();
+            let metadata = metadata.clone();
             let engine = engine.clone();
-            move |params: Value, _ctx: CommandExecutionCtx| {
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let scripts = scripts.clone();
+                let metadata = metadata.clone();
                 let engine = engine.clone();
                 async move {
-                    let source = require(&params, "source")?;
-                    engine.validate(&source)?;
-                    Ok(json!({ "valid": true }))
+                    let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
+                    validate_script(&*scripts, engine.as_ref(), metadata.as_ref(), &params, &actor).await
+                }
+            }
+        })
+        .await;
+
+    registry
+        .register_with_metadata("script.test", CommandMetadata::requires("script.manage"), {
+            let scripts = scripts.clone();
+            let engine = engine.clone();
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let scripts = scripts.clone();
+                let engine = engine.clone();
+                async move {
+                    let actor = ctx
+                        .actor
+                        .clone()
+                        .unwrap_or_else(ActorSnapshot::system);
+                    test_script(&*scripts, engine.as_ref(), &params, &actor).await
                 }
             }
         })

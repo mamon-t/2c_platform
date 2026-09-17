@@ -1468,7 +1468,7 @@ fn host_err_code(e: &DomainError) -> &'static str {
     match e {
         DomainError::NotFound(_) => "NOT_FOUND",
         DomainError::VersionConflict { .. } => "CONFLICT_ERROR",
-        DomainError::ValidationError(_) => "INVALID_ACTION",
+        DomainError::ValidationError(_) | DomainError::ScriptFailure { .. } => "INVALID_ACTION",
         DomainError::PermissionDenied(_) => "CAPABILITY_DENIED",
         DomainError::Storage(_) => "DB_ERROR",
     }

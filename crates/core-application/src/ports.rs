@@ -9,7 +9,7 @@ use core_domain::module::{ModuleRecord, PluginCallContext};
 use core_domain::permission::PermissionPolicy;
 use core_domain::object::{Object, ObjectSnapshot};
 use core_domain::role::Role;
-use core_domain::script::Script;
+use core_domain::script::{Script, ScriptError};
 use core_domain::types::{AggregateId, Version};
 use core_domain::wasm_manifest::ModuleManifest;
 use core_domain::user::{Person, User, UserCertificate, UserCompanyProfile, UserContact};
@@ -661,6 +661,6 @@ pub trait ScriptEngine: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Возвращает `DomainError::ValidationError` при синтаксической ошибке.
-    fn validate(&self, source: &str) -> Result<(), DomainError>;
+    /// Возвращает `ScriptError` с позицией (line/column) при синтаксической ошибке.
+    fn validate(&self, source: &str) -> Result<(), ScriptError>;
 }

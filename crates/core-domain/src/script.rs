@@ -2,6 +2,30 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Структурированная ошибка скрипта с позицией в исходнике (1-based line/column).
+/// Используется в контракте `script.validate` (`errors: [...]`) и клиентском пре-чеке.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("{message}")]
+pub struct ScriptError {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+}
+
+impl ScriptError {
+    /// Ошибка без координат (например, нарушение привязки к типу сущности).
+    pub fn new(message: impl Into<String>) -> Self {
+        Self { message: message.into(), line: None, column: None }
+    }
+
+    /// Ошибка с позицией в исходнике.
+    pub fn at(message: impl Into<String>, line: u32, column: u32) -> Self {
+        Self { message: message.into(), line: Some(line), column: Some(column) }
+    }
+}
+
 /// Тип скрипта Rhai (ТЗ §15): определяет сценарий использования и контекст вызова.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

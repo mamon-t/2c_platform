@@ -13,7 +13,9 @@ use axum::{
 use core_application::auth::AuthService;
 use core_application::command_registry::CommandExecutionCtx;
 use core_application::permission_manager::PermissionManager;
-use core_application::ports::{CompanyRepository, EventStore, ScriptEngine, TokenManager, WasmHost};
+use core_application::ports::{
+    CompanyRepository, EventStore, MetadataRepository, ScriptEngine, TokenManager, WasmHost,
+};
 use core_application::CommandRegistry;
 use core_application::ModuleManager;
 use core_domain::error::DomainError;
@@ -179,7 +181,13 @@ async fn main() -> Result<()> {
         permissions.clone(),
     )
     .await;
-    commands::register_phase13_commands(&registry, scripts.clone(), script_engine.clone() as Arc<dyn ScriptEngine>).await;
+    commands::register_phase13_commands(
+        &registry,
+        scripts.clone(),
+        metadata.clone() as Arc<dyn MetadataRepository>,
+        script_engine.clone() as Arc<dyn ScriptEngine>,
+    )
+    .await;
 
     // Предзагрузка установленных модулей из кэша (ТЗ v3.1, preload_company_modules):
     // сбой по отдельным модулям не останавливает сервер.

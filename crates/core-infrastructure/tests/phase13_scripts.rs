@@ -19,7 +19,9 @@ use core_application::permission_manager::PermissionManager;
 use core_application::ports::{
     AuditRepository, PermissionPolicyRepository, RoleRepository, ScriptRepository, UserRepository,
 };
-use core_application::script_runner::execute_script;
+use core_application::script_runner::{
+    execute_script, test_script, validate_script,
+};
 use core_application::seed::seed_system_roles_and_policies;
 use core_domain::audit::AuditFilter;
 use core_domain::error::DomainError;
@@ -31,6 +33,7 @@ use core_infrastructure::rhai_core_api::CoreApiShared;
 use core_infrastructure::rhai_script_engine::RhaiScriptEngine;
 use core_infrastructure::surreal_audit_repository::SurrealAuditRepository;
 use core_infrastructure::surreal_event_store::SurrealEventStore;
+use core_infrastructure::surreal_metadata_repository::SurrealMetadataRepository;
 use core_infrastructure::surreal_permission_policy_repository::SurrealPermissionPolicyRepository;
 use core_infrastructure::surreal_role_repository::SurrealRoleRepository;
 use core_infrastructure::surreal_script_repository::SurrealScriptRepository;
@@ -159,6 +162,9 @@ async fn pipeline_env(
     let scripts = Arc::new(SurrealScriptRepository::new(db.clone()));
     scripts.ensure_schema().await.unwrap();
 
+    let metadata = Arc::new(SurrealMetadataRepository::new(db.clone()));
+    metadata.ensure_schema().await.unwrap();
+
     let roles = role_repo.list().await.unwrap();
     let role_ids: Vec<String> = roles
         .iter()
@@ -234,6 +240,10 @@ async fn pipeline_env(
                         Some(raw) => ScriptType::try_from(raw).map_err(DomainError::ValidationError)?,
                         None => ScriptType::Formula,
                     };
+                    let is_active = params
+                        .get("is_active")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
                     let now = chrono::Utc::now();
                     let record = Script {
                         id: Uuid::new_v4(),
@@ -244,7 +254,7 @@ async fn pipeline_env(
                         company_id,
                         module_code: None,
                         entity_type,
-                        is_active: true,
+                        is_active,
                         created_at: now,
                         updated_at: now,
                     };
@@ -295,6 +305,43 @@ async fn pipeline_env(
                 async move {
                     let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
                     execute_script(&*scripts, engine.as_ref(), &params, &actor).await
+                }
+            },
+        )
+        .await;
+
+    let scripts_v = scripts.clone();
+    let engine_v = engine.clone();
+    let metadata_v = metadata.clone();
+    registry
+        .register_with_metadata(
+            "script.validate",
+            CommandMetadata::requires("script.read"),
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let scripts = scripts_v.clone();
+                let engine = engine_v.clone();
+                let metadata = metadata_v.clone();
+                async move {
+                    let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
+                    validate_script(&*scripts, engine.as_ref(), metadata.as_ref(), &params, &actor)
+                        .await
+                }
+            },
+        )
+        .await;
+
+    let scripts_t = scripts.clone();
+    let engine_t = engine.clone();
+    registry
+        .register_with_metadata(
+            "script.test",
+            CommandMetadata::requires("script.manage"),
+            move |params: Value, ctx: CommandExecutionCtx| {
+                let scripts = scripts_t.clone();
+                let engine = engine_t.clone();
+                async move {
+                    let actor = ctx.actor.clone().unwrap_or_else(ActorSnapshot::system);
+                    test_script(&*scripts, engine.as_ref(), &params, &actor).await
                 }
             },
         )
@@ -405,7 +452,7 @@ async fn staff_denied_on_script_execute_and_manage() {
     let user_id = Uuid::new_v4();
     let env = pipeline_env(&db, company_id, user_id, &["staff"]).await;
 
-    for command in ["script.execute", "script.create"] {
+    for command in ["script.execute", "script.create", "script.test"] {
         let err = env
             .registry
             .execute_ctx(command, json!({ "code": "x" }), ctx(user_id, company_id))
@@ -418,7 +465,7 @@ async fn staff_denied_on_script_execute_and_manage() {
     }
 }
 
-/// Гость не читает скрипты; отказ фиксируется в аудите `permission.denied`.
+/// Гость не читает и не проверяет скрипты; отказы фиксируются в аудите.
 #[tokio::test]
 async fn guest_denied_on_script_read() {
     let db = mem_db().await;
@@ -426,15 +473,17 @@ async fn guest_denied_on_script_read() {
     let user_id = Uuid::new_v4();
     let env = pipeline_env(&db, company_id, user_id, &["guest"]).await;
 
-    let err = env
-        .registry
-        .execute_ctx("script.get", json!({ "code": "x" }), ctx(user_id, company_id))
-        .await
-        .unwrap_err();
-    assert!(
-        err_contains(&err, "недостаточно прав"),
-        "guest не должен читать скрипты: {err}"
-    );
+    for command in ["script.get", "script.validate"] {
+        let err = env
+            .registry
+            .execute_ctx(command, json!({ "code": "x" }), ctx(user_id, company_id))
+            .await
+            .unwrap_err();
+        assert!(
+            err_contains(&err, "недостаточно прав"),
+            "guest не должен использовать {command}: {err}"
+        );
+    }
 
     let denied_log = env
         .audit
@@ -445,7 +494,7 @@ async fn guest_denied_on_script_read() {
         })
         .await
         .unwrap();
-    assert_eq!(denied_log.len(), 1);
+    assert_eq!(denied_log.len(), 2);
 }
 
 /// Прямые валидации `execute_script`: привязка к типу требует object, отключённый
@@ -560,4 +609,273 @@ async fn execute_script_validations_and_success() {
         matches!(err, DomainError::ValidationError(_)),
         "обязательный code: {err}"
     );
+}
+
+/// Позиция синтакс-ошибки: строка/колонка приходят из ParseError и попадают
+/// в структурированный ответ script.validate.
+#[tokio::test]
+async fn script_validate_reports_syntax_error() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.validate",
+            json!({ "source": "let x = ;" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["valid"], json!(false));
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    let e0 = &errors[0];
+    assert_eq!(e0["line"].as_u64(), Some(1), "ожидали line=1: {e0}");
+    assert!(e0["column"].is_u64(), "ожидали column: {e0}");
+    assert!(!e0["message"].as_str().unwrap().is_empty());
+}
+
+/// Валидный исходник возвращает {valid:true, errors:[]}.
+#[tokio::test]
+async fn script_validate_valid_source() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.validate",
+            json!({ "source": "let a = 1; a + 1" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["valid"], json!(true));
+    assert_eq!(result["errors"], json!([]));
+}
+
+/// Привязка к несуществующему типу сущности → ошибка в errors[] (без координат).
+#[tokio::test]
+async fn script_validate_invalid_bound_entity_type() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "bound.ghost",
+                "name": "Привязанный к призраку",
+                "source": "40 + 2",
+                "company_id": company_id,
+                "entity_type": "ghost_entity",
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.validate",
+            json!({ "code": "bound.ghost" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["valid"], json!(false));
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    let e0 = &errors[0];
+    assert!(e0["line"].is_null(), "bind-ошибка без координат: {e0}");
+    assert!(e0["column"].is_null());
+    assert!(e0["message"].as_str().unwrap().contains("не найден"));
+}
+
+/// script.test: успешный прогон возвращает результат и время выполнения (ms).
+#[tokio::test]
+async fn script_test_happy_result_and_timing() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "sum42",
+                "name": "Сорок два",
+                "source": "40 + 2",
+                "company_id": company_id,
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.test",
+            json!({ "code": "sum42" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["result"], json!(42));
+    assert!(
+        result["execution_time_ms"].as_u64().is_some(),
+        "ожидали execution_time_ms: {result}"
+    );
+}
+
+/// script.test: args пробрасываются в ctx.args.
+#[tokio::test]
+async fn script_test_with_args() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "sum.args",
+                "name": "Сумма аргументов",
+                "source": "ctx.args.x + ctx.args.y",
+                "company_id": company_id,
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.test",
+            json!({ "code": "sum.args", "args": { "x": 20, "y": 22 } }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["result"], json!(42));
+}
+
+/// script.test: runtime-ошибка возвращается как ScriptFailure с координатами.
+#[tokio::test]
+async fn script_test_runtime_error_has_position() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "boom",
+                "name": "Падает",
+                "source": "let a = 1; a + missing_var;",
+                "company_id": company_id,
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let err = env
+        .registry
+        .execute_ctx(
+            "script.test",
+            json!({ "code": "boom" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, DomainError::ScriptFailure { line: Some(_), column: Some(_), .. }),
+        "ожидали ScriptFailure с координатами: {err}"
+    );
+    assert!(err_contains(&err, "ошибка выполнения скрипта"));
+}
+
+/// script.test: отключённый скрипт можно отлаживать (is_active гейта нет).
+#[tokio::test]
+async fn script_test_runs_disabled_script() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "disabled.test",
+                "name": "Отключённый",
+                "source": "42",
+                "company_id": company_id,
+                "is_active": false,
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.test",
+            json!({ "code": "disabled.test" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["result"], json!(42));
+}
+
+/// script.test: привязанный к типу скрипт можно тестировать без object.
+#[tokio::test]
+async fn script_test_bound_without_object() {
+    let db = mem_db().await;
+    let company_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let env = pipeline_env(&db, company_id, user_id, &["admin"]).await;
+
+    env.registry
+        .execute_ctx(
+            "script.create",
+            json!({
+                "code": "bound.test",
+                "name": "Привязанный",
+                "source": "40 + 2",
+                "company_id": company_id,
+                "entity_type": "invoice",
+            }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+
+    let result = env
+        .registry
+        .execute_ctx(
+            "script.test",
+            json!({ "code": "bound.test" }),
+            ctx(user_id, company_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["result"], json!(42));
 }
