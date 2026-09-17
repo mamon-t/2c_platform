@@ -335,6 +335,16 @@ impl ModuleManager {
                 "entity_type": null,
             }));
         }
+        let can_manage_scripts = permissions
+            .check(&user_id, &actor_company_id, None, None, "script.manage")
+            .await?;
+        if can_manage_scripts {
+            navigation.push(json!({
+                "code": "scripts",
+                "label": "Скрипты",
+                "entity_type": null,
+            }));
+        }
         if !navigation.is_empty() {
             modules.push(json!({
                 "code": "platform",

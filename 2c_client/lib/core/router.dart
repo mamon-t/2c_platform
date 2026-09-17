@@ -7,6 +7,8 @@ import '../screens/home_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/metadata_editor_screen.dart';
 import '../screens/object_form_screen.dart';
+import '../screens/script_editor_screen.dart';
+import '../screens/script_list_screen.dart';
 import '../screens/settings_screen.dart';
 
 /// Конфигурация навигации: `/login` → `/home` → каталоги/формы СДУИ.
@@ -47,6 +49,20 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/metadata/editor/:entityType?',
         builder: (context, state) => MetadataEditorScreen(
           entityType: state.pathParameters['entityType'],
+        ),
+      ),
+      GoRoute(
+        path: '/scripts',
+        builder: (context, state) => const ScriptListScreen(),
+      ),
+      GoRoute(
+        path: '/scripts/new',
+        builder: (context, state) => const ScriptEditorScreen(code: 'new'),
+      ),
+      GoRoute(
+        path: '/scripts/:code/edit',
+        builder: (context, state) => ScriptEditorScreen(
+          code: state.pathParameters['code']!,
         ),
       ),
       GoRoute(

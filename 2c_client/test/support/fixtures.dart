@@ -101,3 +101,29 @@ List<Map<String, dynamic>> entityTypesWire() => [
       {'code': 'account', 'name': 'Счет', 'kind': 'catalog'},
       {'code': 'period', 'name': 'Период', 'kind': 'register'},
     ];
+
+/// Wire-объект скрипта (ответ `script.list`/`script.get`, серверный
+/// `core-domain::script::Script` в snake_case).
+Map<String, dynamic> scriptWire({
+  String id = 's-1',
+  String code = 'double.amount',
+  String name = 'Удвоить сумму',
+  String scriptType = 'formula',
+  String source = 'ctx.object.amount * ctx.args.factor',
+  String? companyId = 'c1',
+  String? entityType = 'invoice',
+  bool isActive = true,
+}) =>
+    {
+      'id': id,
+      'code': code,
+      'name': name,
+      'script_type': scriptType,
+      'source': source,
+      'company_id': companyId,
+      'module_code': null,
+      'entity_type': entityType,
+      'is_active': isActive,
+      'created_at': '2026-09-17T10:00:00Z',
+      'updated_at': '2026-09-17T10:00:00Z',
+    };

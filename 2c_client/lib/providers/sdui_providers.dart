@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/entity_schema.dart';
 import '../models/navigation_item.dart';
 import '../models/object.dart';
+import '../models/script.dart';
 import '../providers/app_providers.dart';
 import '../services/metadata_service.dart';
 import '../services/object_service.dart';
+import '../services/script_service.dart';
 
 /// Компания аутентифицированного актора из JWT-claims (`null` — без профиля).
 final companyIdProvider = Provider<String?>((ref) {
@@ -49,6 +51,14 @@ final objectsProvider = FutureProvider.family<List<ObjectItem>, String>(
     return objects.list(entityType, companyId);
   },
 );
+
+/// Список скриптов компании (Фаза 15.2; перезапрашивается при invalidate).
+final scriptsProvider = FutureProvider<List<ScriptItem>>((ref) async {
+  ref.watch(_authRevision);
+  final scripts = ref.watch(scriptServiceProvider);
+  final companyId = ref.watch(companyIdProvider);
+  return scripts.list(companyId: companyId);
+});
 
 /// Навигация из манифестов установленных модулей (`module.navigation`).
 final navigationProvider = FutureProvider<List<ModuleNavigation>>((ref) async {

@@ -295,6 +295,13 @@ async fn admin_sees_all_enabled_modules_with_navigation() {
     let modules = out["modules"].as_array().unwrap();
     assert_eq!(modules.len(), 2);
     assert_eq!(modules[0]["code"], "platform");
+    let platform_nav = modules[0]["navigation"].as_array().unwrap();
+    let platform_codes: Vec<&str> = platform_nav
+        .iter()
+        .map(|n| n["code"].as_str().unwrap())
+        .collect();
+    assert!(platform_codes.contains(&"metadata"));
+    assert!(platform_codes.contains(&"scripts"));
     let accounting = &modules[1];
     assert_eq!(accounting["code"], "accounting");
     assert_eq!(
@@ -335,6 +342,12 @@ async fn staff_sees_modules_with_accessible_commands() {
     let modules = out["modules"].as_array().unwrap();
     assert_eq!(modules.len(), 2);
     assert_eq!(modules[0]["code"], "platform");
+    let platform_nav = modules[0]["navigation"].as_array().unwrap();
+    let platform_codes: Vec<&str> = platform_nav
+        .iter()
+        .map(|n| n["code"].as_str().unwrap())
+        .collect();
+    assert!(!platform_codes.contains(&"scripts"), "staff без script.manage не видит «Скрипты»");
     assert_eq!(modules[1]["code"], "accounting");
     assert_eq!(modules[1]["navigation"].as_array().unwrap().len(), 3);
 }

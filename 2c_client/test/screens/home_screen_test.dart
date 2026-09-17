@@ -5,9 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:twoc_client/models/entity_schema.dart';
 import 'package:twoc_client/models/navigation_item.dart';
 import 'package:twoc_client/models/object.dart';
+import 'package:twoc_client/models/script.dart';
 import 'package:twoc_client/providers/app_providers.dart';
 import 'package:twoc_client/providers/sdui_providers.dart';
 import 'package:twoc_client/screens/catalog_screen.dart';
+import 'package:twoc_client/screens/script_list_screen.dart';
 import 'package:twoc_client/services/auth_service.dart';
 import 'package:twoc_client/services/rpc_client.dart';
 import 'package:twoc_client/services/ws_client.dart';
@@ -140,6 +142,35 @@ void main() {
     expect(find.byType(CatalogScreen), findsOneWidget);
     expect(find.text('Компания'), findsOneWidget); // AppBar
     expect(find.text('Acme Ltd'), findsOneWidget);
+  });
+
+  testWidgets('пункт «Скрипты» рендерится и ведёт на каталог скриптов',
+      (tester) async {
+    const moduleWithScripts = ModuleNavigation(
+      code: 'platform',
+      displayName: 'Платформа',
+      version: '1.0.0',
+      navigation: [
+        NavigationItem(
+          code: 'scripts',
+          label: 'Скрипты',
+          entityType: null,
+        ),
+      ],
+    );
+    await pumpHome(tester, modules: [moduleWithScripts], extraOverrides: [
+      scriptsProvider.overrideWith((ref) async => [
+            ScriptItem.fromJson(scriptWire()),
+          ]),
+    ]);
+
+    expect(find.text('Скрипты'), findsOneWidget);
+
+    await tester.tap(find.text('Скрипты'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ScriptListScreen), findsOneWidget);
+    expect(find.text('double.amount'), findsOneWidget);
   });
 
   testWidgets('пустой список модулей — заглушка «Нет установленных модулей»',

@@ -118,10 +118,17 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  /// Роут для пункта навигации: административный «Метаданные» открывает
-  /// редактор метаданных, остальные пункты — универсальный каталог СДУИ.
-  static String _routeFor(NavigationItem item) =>
-      item.code == 'metadata' ? '/metadata/editor' : '/catalog/${item.entityType}';
+  /// Роут для пункта навигации: административные «Метаданные» и «Скрипты»
+  /// открывают свои экраны, остальные пункты — универсальный каталог СДУИ.
+  static String _routeFor(NavigationItem item) {
+    if (item.code == 'metadata') {
+      return '/metadata/editor';
+    }
+    if (item.code == 'scripts') {
+      return '/scripts';
+    }
+    return '/catalog/${item.entityType}';
+  }
 
   Widget _sectionTiles(BuildContext context, _NavigationSection section) {
     return Column(
@@ -186,9 +193,11 @@ class _NavigationSections {
           title: module.displayName,
           items: [
             for (final item in module.navigation)
-              // Административный пункт «Метаданные» не связан с сущностью,
-              // но должен попадать в навигацию; остальные — каталоги СДУИ.
-              if (item.entityType != null || item.code == 'metadata') item,
+              // Административные пункты «Метаданные»/«Скрипты» не связаны с
+              // сущностью, но должны попадать в навигацию; остальные — каталоги СДУИ.
+              if (item.entityType != null ||
+                  item.code == 'metadata' ||
+                  item.code == 'scripts') item,
           ],
         ),
     ]..removeWhere((s) => s.items.isEmpty);
