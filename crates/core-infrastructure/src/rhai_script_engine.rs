@@ -522,7 +522,7 @@ mod tests {
             &ctx,
         ));
         let err = result.expect_err("ожидали отказ доступа к ФС");
-        assert!(matches!(err, DomainError::ValidationError(_)), "{err}");
+        assert!(matches!(err, DomainError::ScriptFailure { .. }), "{err}");
     }
 
     #[test]
