@@ -284,9 +284,17 @@ position()/line(); Extism ValidationError|ScriptFailure → INVALID_ACTION;
 «Прогнать»=test с временем); пункт «Скрипты» в навигации за `script.manage`
 (server `get_navigation` → scripts, phase11_navigation 8/8: admin видит,
 staff — нет); клиентские тесты +27 + home-кейс = 159, analyzer 0, clippy 0.
-Впереди: 15.3 (редактор с flutter_highlight 0.7.0 + кастомная rhai-грамматика,
-пре-чек «оператор не завершён ';'», strictSemicolons), 15.4 (интеграция +
-live + документация).
+15.3 завершена (`e7e6c68`): Rhai-редактор — подсветка `core/rhai_grammar.dart`
+(Mode из rust.dart highlight 0.7.0: keyword/literal/built_in/строки incl raw/
+числа/комментарии/fn/const; `registerRhaiHighlight`), поверх `flutter_highlight`
+(HighlightView фоном + прозрачный `TextField` с onChanged → setState, тема из
+colorScheme); пре-чек `core/rhai_precheck.dart` (`RhaiIssue`, консервативный
+`rhaiPrecheck`: блоки/заголовки if/while/for/fn/loop/switch, continuation,
+parenBalance, комментарии, последний оператор — без «;» допустимы); Switch
+«strict „;\"» блокирует сохранение SnackBar с координатой, панель «Клиентский
+пре-чек:»; клиентские тесты +11 = 172, analyzer 0; c прочим коммитом добавлена
+спека `doc/TZ_v3.1_1.md` (Расширение 1).
+Впереди: 15.4 (интеграция + live + документация).
 **Бэклог:** авто-хук привязанных скриптов в object-конвейер — отложен.
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c) —
