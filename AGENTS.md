@@ -133,8 +133,10 @@ SurrealDB поднимается в Docker (см. `doc/surreal-docker.md`), по
 (SDUI-навигация: `module.navigation`/`platform.modules`, `RoleRepository::update`,
 `ManifestNavItem.entity_type`), `system.bootstrap`, Расширение 1 (`15pre-1` —
 системные метаданные, `15pre-2` — SDUI ядровых сущностей, `15pre-3` — редактор
-метаданных + экспорт/импорт) и подфаза `15.1` (script.test + structured
-script.validate); Фаза 15 (Rhai-редактор) — в работе (15.2–15.4 впереди).
+метаданных + экспорт/импорт) и подфазы `15.1` (script.test + structured
+script.validate) и `15.2` (клиентский каталог скриптов: ScriptListScreen/
+ScriptEditorScreen, пункт «Скрипты» в навигации за script.manage);
+Фаза 15 (Rhai-редактор) — в работе (15.3–15.4 впереди).
 Фазы 1–8:
 `Фаза 1` — каркас (слои ядра, Axum 0.8, `/health`, dotenvy, tracing, graceful shutdown);
 `Фаза 2` — компании/пользователи/роли (12 команд, «Доска+Труба»);
@@ -265,7 +267,7 @@ copyWith`, `MetadataService` (create/export/import со сбросом кэша)
 `metadata_version` при сохранении, экспорт/импорт JSON, «Новый тип»), роут
 `/metadata/editor/:entityType?`; тесты: clippy 0, сервер 45 (7+12+8+6+12),
 клиент 131 (121+10).
-**Фаза 15 (Rhai-редактор, ТЗ v3.1 §15/§19) — в работе (подфазы 15.1–15.4).**
+**Фаза 15 (Rhai-редактор, ТЗ v3.1 §15/§19) — в работе (подфазы 15.2–15.4).**
 15.1 завершена (`38180e4`): `script.test` (`script.manage`, test_run без
 гейтов `is_active`/`object`, `{result, execution_time_ms}`) +
 структурированный `script.validate` (`script.read`, контракт
@@ -273,11 +275,18 @@ copyWith`, `MetadataService` (create/export/import со сбросом кэша)
 entity_type через metadata); `DomainError::ScriptFailure{message,line,column}`
 (VALIDATION_ERROR, 422 + error_details) и `ScriptError`; позиции из rhai
 position()/line(); Extism ValidationError|ScriptFailure → INVALID_ACTION;
-тесты phase13_scripts 13 (было 210). Впереди: 15.2 (клиентский каталог
-скриптов: ScriptListScreen/ScriptService/`/scripts`+/`/scripts/:code/edit`,
-пункт «Скрипты» за `script.manage`, тесты ~+16), 15.3 (редактор с
-flutter_highlight 0.7.0 + кастомная rhai-грамматика, пре-чек «оператор не
-завершён ';'», strictSemicolons), 15.4 (интеграция + live + документация).
+тесты phase13_scripts 13 (было 210).
+15.2 завершена (`772bd07`): клиентский каталог скриптов — `ScriptItem`,
+`ScriptService` (list/get/create/update/delete/validate/testRun),
+`scriptsProvider`; `ScriptListScreen` `/scripts` (DataTable + метки типов +
+статусы, FAB, RefreshIndicator); `ScriptEditorScreen` `/scripts/new`+
+`/scripts/:code/edit` (форма, «Проверить»=validate с панелью координат,
+«Прогнать»=test с временем); пункт «Скрипты» в навигации за `script.manage`
+(server `get_navigation` → scripts, phase11_navigation 8/8: admin видит,
+staff — нет); клиентские тесты +27 + home-кейс = 159, analyzer 0, clippy 0.
+Впереди: 15.3 (редактор с flutter_highlight 0.7.0 + кастомная rhai-грамматика,
+пре-чек «оператор не завершён ';'», strictSemicolons), 15.4 (интеграция +
+live + документация).
 **Бэклог:** авто-хук привязанных скриптов в object-конвейер — отложен.
 **Не начинать** Фазу 12 (оффлайн) и Фазы 15+ (учёт, экспорт, уведомления,
 криптоподпись, диагностика; SSE остаётся факультативным дополнением к 10c) —
